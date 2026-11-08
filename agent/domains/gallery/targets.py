@@ -21,6 +21,8 @@ Digest = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 
 class Image(BaseModel):
     imageKey: Identifier
+    storage: Literal["local", "r2"] | None = None
+    storagePath: str | None = None
     imageUrl: Annotated[StrictStr, Field(min_length=1, max_length=2048)]
     displayName: Annotated[StrictStr, Field(max_length=255)] | None = None
     description: Annotated[StrictStr, Field(max_length=2000)]

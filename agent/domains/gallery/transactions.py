@@ -3,13 +3,16 @@
 import time
 
 from agent import authz
-from agent.domains.gallery import image_actions, targets
+from agent.domains.gallery import image_actions, targets, transfers
 from agent.runtime import writes
 from agent.runtime.turns import check_cancelled
 from tools import base
 from tools.result import fact, ok, tgt
 
-OPERATIONS = {"manage_gallery_images": "gallery_images", "set_article_cover": "article_cover"}
+OPERATIONS = {
+    "manage_gallery_images": "gallery_images", "set_article_cover": "article_cover",
+    "transfer_gallery_images": "gallery_transfer",
+}
 PERMISSION_OPERATIONS = frozenset(OPERATIONS)
 
 
@@ -22,7 +25,8 @@ def handles(grant):
 
 
 def arguments(name, args):
-    model = image_actions.Arguments if name == "manage_gallery_images" else targets.CoverArguments
+    model = {"manage_gallery_images": image_actions.Arguments,
+             "transfer_gallery_images": transfers.Arguments}.get(name, targets.CoverArguments)
     return model.model_validate(args).model_dump(exclude_none=True)
 
 
@@ -49,6 +53,8 @@ def validate(grant, config):
 def outcome(name, args, value):
     if name == "manage_gallery_images":
         return image_actions.outcome(value, args)
+    if name == "transfer_gallery_images":
+        return transfers.outcome(value, args)
     if (
         not isinstance(value, dict)
         or value.get("beforeVersion") != args["version"]
@@ -80,7 +86,9 @@ class Operation:
 
     def invoke(self, args, config=None):
         check_cancelled(config)
-        if self.name == "manage_gallery_images":
+        if self.name == "transfer_gallery_images":
+            method, path, payload = "POST", transfers.PATH, args
+        elif self.name == "manage_gallery_images":
             method, path, payload = "POST", image_actions.PATH, args
         else:
             method = "PUT"
@@ -98,6 +106,11 @@ class Operation:
             state = outcome(self.name, args, result)
         except (ValueError, TypeError, KeyError):
             return base.unavailable("请求已发出，但无法确认图片操作结果；请先查询，不要重复执行。")
+        if self.name == "transfer_gallery_images":
+            return ok(transfers.describe(state) + " 任务编号：" + state["id"],
+                      meta=fact(OPERATIONS[self.name], changed=True,
+                                target={"kind": "image_transfer", "id": state["id"]},
+                                confirmed_args=args, outcome=result, state=state))
         text = (_image_result(state) if self.name == "manage_gallery_images"
                 else "文章封面已设置，正文和发布状态保持不变。")
         target = (tgt("note", args["article_id"]) if self.name == "set_article_cover"

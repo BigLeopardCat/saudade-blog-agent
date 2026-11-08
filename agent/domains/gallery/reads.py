@@ -4,6 +4,7 @@ import base64
 import io
 import json
 import warnings
+from typing import Literal
 from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
 
 import httpx
@@ -31,6 +32,7 @@ def get_gallery_index(
     search: Annotated[str, Field(max_length=200)] = "",
     folder_id: Annotated[int, Field(ge=0)] | None = None,
     favorite: bool = False,
+    storage: Literal["local", "r2"] | None = None,
     before: Annotated[int, Field(gt=0)] | None = None,
     limit: Annotated[int, Field(ge=1, le=50)] = 20,
 ) -> object:
@@ -45,6 +47,8 @@ def get_gallery_index(
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权访问图库。")
     params: dict[str, str | int] = {"search": search, "limit": limit}
+    if storage is not None:
+        params["storage"] = storage
     if folder_id is not None:
         params["folderId"] = folder_id
     if favorite:
@@ -80,6 +84,7 @@ def get_gallery_index(
                 "description": row["description"][:160],
                 "description_truncated": len(row["description"]) > 160,
                 "favorite": row["isFavorite"],
+                "storage": row["storage"],
             }
             for row in rows
         ]
@@ -140,6 +145,7 @@ def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableCon
               "description": row["description"], "folder_id": row["folderId"],
               "folder_name": row["folderName"], "folder_parent_id": row["folderParentId"],
               "favorite": row["isFavorite"], "url": row["imageUrl"],
+              "storage": row["storage"], "storage_path": row["storagePath"],
               "display_markdown": _display_markdown(row)}
     return base.ok(json.dumps(result, ensure_ascii=False), data=result)
 
@@ -184,10 +190,13 @@ def _display_markdown(row):
 def _download(row, config):
     url = row["imageUrl"]
     headers = {}
-    if url.startswith("/api/protect/download/"):
+    image_id = row.get("imageKey")
+    media_path = f"/api/public/media/{image_id}" if type(image_id) is int and image_id > 0 else None
+    if url == media_path or url.startswith("/api/protect/download/"):
         if any(part in {".", ".."} for part in unquote(url).split("/")) or "\\" in url:
             raise ValueError("Invalid library path")
-        url = urljoin(base.ADMIN_BASE + "/", url)
+        path = f"{targets.PATH}/images/{image_id}/content" if url == media_path else url
+        url = urljoin(base.ADMIN_BASE + "/", path)
         cfg = config["configurable"]
         headers["Authorization"] = "Bearer " + base.host_credential(
             cfg["user_id"]
@@ -276,8 +285,10 @@ def get_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> t
 
 
 def tools():
+    from agent.domains.gallery.transfers import get_gallery_transfer
+
     return {
         item.name: item for item in (
             get_gallery_index, list_gallery_folders, get_gallery_image_metadata, get_gallery_image,
-            show_gallery_image)
+            show_gallery_image, get_gallery_transfer)
     }

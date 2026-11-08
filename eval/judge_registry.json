@@ -350,6 +350,10 @@
         0,
         0
       ],
+      "agent/domains/gallery/transfers.py": [
+        3,
+        0
+      ],
       "agent/domains/image_generation/__init__.py": [
         0,
         0
@@ -964,7 +968,7 @@
       ]
     },
     "total": [
-      311,
+      314,
       0
     ]
   },
