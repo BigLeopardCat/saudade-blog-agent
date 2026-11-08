@@ -232,7 +232,8 @@ def _confirmation_preview(pattern, result):
     ]
     if isinstance(pattern, dict):
         # The interactive review renders these fields, not the signed execution arguments.
-        return bool(pattern) and set(pattern) <= {"q", "image_review", "cover_review", "notices"} and any(
+        fields = {"q", "image_review", "cover_review", "notices"}
+        return bool(pattern) and set(pattern) <= fields and any(
             contains(preview, pattern) for preview in previews
         )
     return isinstance(pattern, str) and any(
