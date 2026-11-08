@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 
 from agent.runtime import tool_evidence
 from agent.runtime.session import ToolSession
+from eval import request_metrics
 from tools import base, http_observability
 from tools import http_channel as channel
 from utils import tool_context, trace
@@ -24,9 +25,12 @@ def recorder(monkeypatch, tmp_path):
     monkeypatch.setattr(trace, "_recorder", ContextVar("offline_trace", default=None))
     rec = trace.start_trace("offline-http", 0, "synthetic", dir=str(tmp_path), by_day=False)
     yield rec
-    path = trace.finish_trace("offline-http", "producer_done", 1.0)
+    path = (trace.finish_trace("offline-http", "producer_done", 1.0)
+            or next(tmp_path.glob("*.json")))
     with open(path) as saved:
-        assert json.load(saved)["events"] == rec.events
+        document = json.load(saved)
+    assert document["events"] == rec.events
+    assert document["observability"] == {"json_http": 1}
 
 
 def http_events(recorder):
@@ -81,6 +85,12 @@ def test_native_tool_call_records_each_real_json_attempt_without_changing_model_
     assert "PRIVATE_BODY_CANARY" not in json.dumps(events)
     assert "http_attempt" not in str(prompts) and "endpoint_key" not in str(prompts)
     assert tool_context.current() == (None, None)
+    path = trace.finish_trace(recorder.trace_id, "producer_done", 1.0)
+    group, = request_metrics.collect([path])["groups"]
+    assert group["http_observed_requests"] == 1 and group["tool_requests"] == 1
+    assert group["http_attempts"] == group["http_attempts_sum"] == len(requests) == 3
+    assert group["http_retry_attempts"] == group["http_incomplete_attempts"] == 0
+    assert group["http_response_bytes"] == 3 * len(httpx.Response(200, json=content).content)
 
 
 def test_retry_failure_and_success_each_have_one_event_with_the_same_tool_identity(
@@ -265,3 +275,4 @@ def test_callback_exception_records_only_its_type_and_not_arbitrary_attributes(r
     event, = http_events(recorder)
     assert event["error"] == "DeadlineError" and stream.closed
     assert "SECRET_CALLBACK" not in json.dumps(event)
+

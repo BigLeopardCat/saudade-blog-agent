@@ -58,6 +58,15 @@ python -m eval.release_readiness --help
 失败、超限和读取中取消保留事件，发送前停止不计尝试；不会为观测读完流或保存正文、请求体、查询原文及凭据。
 同一路径/查询指纹可定位重复读取，但分页、写后核实等仍须结合工具上下文判断，不能自动视为浪费。
 
+当前 trace 落盘包含 `observability.json_http=1`，声明共享 JSON 通道的观测覆盖；
+已有的 trace `schema_version` 同时覆盖无 HTTP 观测的旧构建，不能据它推断覆盖。
+`request_metrics.summary/collect` 分别报告 `http_attempts`、`http_retry_attempts`（单次通道调用的
+`attempt>1`）、`http_response_bytes`（decoded）、`http_incomplete_attempts` 和
+`http_observed_requests`（含已知零次的覆盖请求数）。无标记或不支持的版本保留未知，不能用零填补；
+即使旧材料包含个别事件也不推断整轮覆盖。字段缺失或非法时对应总值为 null；
+混合分组只有每个请求的相应指标都已知才给总值，`*_sum` 仅保留已观测的有效小计。
+前置拒绝或纯聊天的零仅表示该通道零次，不能证明整轮不存在其他 HTTP。
+
 区分首个可见事件、首个正文、端到端时间和人工等待。任务级聚合包含暂停、浏览器和确认接续；当前请求只计增量，摘要及收尾调用也纳入费用。
 
 完整 usage 同时报告缓存输入、未缓存输入、输出、推理及缺失字段。以服务商口径归一化；不能把十几个字的用户输入等同于实际完整模型输入。缓存命中率按 token 加权，不平均每条请求百分比；实际费用累计服务商回执。

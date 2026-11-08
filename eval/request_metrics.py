@@ -59,6 +59,42 @@ def _model_attempts(events):
     }
 
 
+_HTTP_FIELDS = ("http_attempts", "http_retry_attempts", "http_response_bytes",
+                "http_incomplete_attempts")
+
+
+def _http_observations(doc, events):
+    """Only an explicit supported marker establishes full JSON-channel coverage."""
+    version = _mapping(doc.get("observability")).get("json_http")
+    raw_events = doc.get("events")
+    covered = (type(version) is int and version == 1 and isinstance(raw_events, list)
+               and all(isinstance(event, dict) for event in raw_events))
+    attempts = [event for event in events if event.get("node") == "tools"
+                and event.get("event") == "http_attempt"]
+    retries, sizes, incomplete = [], [], []
+    for event in attempts:
+        attempt = usage.count(event.get("attempt"))
+        retries.append(int(attempt > 1) if attempt is not None and attempt > 0 else None)
+        sizes.append(usage.count(event.get("response_bytes")))
+        complete = event.get("response_complete")
+        incomplete.append(int(not complete) if type(complete) is bool else None)
+    result: dict = {"http_observed_requests": int(covered)}
+    for field, values in zip(_HTTP_FIELDS, ([1] * len(attempts), retries, sizes, incomplete)):
+        result[field + "_sum"] = sum(value for value in values if value is not None)
+        result[field] = (result[field + "_sum"]
+                         if covered and all(value is not None for value in values) else None)
+    return result
+
+
+def _http_totals(rows):
+    result: dict = {"http_observed_requests": sum(row["http_observed_requests"] for row in rows)}
+    for field in _HTTP_FIELDS:
+        result[field + "_sum"] = sum(row[field + "_sum"] for row in rows)
+        result[field] = (sum(row[field] for row in rows)
+                         if all(row[field] is not None for row in rows) else None)
+    return result
+
+
 def summary(doc):
     meta = _mapping(doc.get("input"))
     runtime = _mapping(meta.get("runtime"))
@@ -89,7 +125,7 @@ def summary(doc):
             "end_reason": _label(doc.get("end_reason")),
             "started_calls": sum(e.get("event") == "llm_start" for e in events),
             "errored_calls": sum(e.get("event") == "llm_error" for e in events),
-            **_model_attempts(events),
+            **_model_attempts(events), **_http_observations(doc, events),
             "handoff_reasons": [_label(e.get("reason")) for e in events
                                 if e.get("event") == "legacy_handoff"],
             "budget_stop_reasons": [_label(e.get("reason")) for e in events
@@ -147,7 +183,7 @@ def collect(paths):
                        "started_calls": sum(r["started_calls"] for r in rows),
                        "model_phases": latency_metrics.request_phases(rows),
                        **usage.provider_costs(totals),
-                       **discovery_totals(rows),
+                       **discovery_totals(rows), **_http_totals(rows),
                        "errored_calls": sum(r["errored_calls"] for r in rows),
                        "handoff_reasons": dict(Counter(reason for r in rows
                                                         for reason in r["handoff_reasons"])),
