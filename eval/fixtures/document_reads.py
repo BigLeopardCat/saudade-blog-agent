@@ -64,6 +64,7 @@ def article_page(
     offset: int = 0,
     max_chars: int = DEFAULT_READ_CHARS,
     revision: str = "",
+    view: str = "body",
 ) -> dict:
     _validate_range(offset, max_chars, section, revision)
     content = data.get("noteContent") or data.get("content") or ""
@@ -77,6 +78,20 @@ def article_page(
         for r in rows
         if r["level"]
     ]
+    if view not in {"body", "outline"} or view == "outline" and section:
+        raise ValueError("invalid document view")
+    if view == "outline":
+        if offset > len(available):
+            raise ValueError("offset exceeds section directory")
+        end = min(len(available), offset + 12)
+        return {
+            "view": "outline", "noteKey": article_id, "noteTitle": title, "noteContent": "",
+            "contentRevision": current, "sectionSchema": sections.PARSER_VERSION,
+            "readOffset": 0, "nextOffset": None, "totalChars": len(content),
+            "readComplete": False, "source": None, "sections": available[offset:end],
+            "sectionCount": len(available), "sectionsOffset": offset,
+            "nextSectionsOffset": end if end < len(available) else None,
+        }
     selected_id = ""
     out = {**data, "noteKey": article_id, "noteTitle": title}
     if section:
@@ -88,7 +103,9 @@ def article_page(
                 "readSection": section,
                 "sectionText": "",
                 "availableSections": [r["title"] for r in available],
-                "sections": available,
+                "view": "body", "sections": available[:12],
+                "sectionCount": len(available), "sectionsOffset": 0,
+                "nextSectionsOffset": 12 if len(available) > 12 else None,
                 "contentRevision": current,
                 "note": "小节不存在或指称不唯一，本次未读到正文；请用 sections 中的 id 消歧。",
             }
@@ -120,8 +137,8 @@ def article_page(
         nextOffset=(end if end < len(selected) else None),
         totalChars=len(selected),
         readComplete=end == len(selected),
-        sections=available[:12],
-        sectionCount=len(available),
+        view="body", sections=available[:12], sectionCount=len(available),
+        sectionsOffset=0, nextSectionsOffset=12 if len(available) > 12 else None,
     )
     out["source"] = {
         "type": "note",
@@ -169,13 +186,14 @@ def document_page(kind, identifier, title, content, params=None, metadata=None):
         int(params.get("offset", 0)),
         int(params.get("limit", 12000)),
         params.get("revision", ""),
+        params.get("view", "body"),
     )
     body = value.get("sectionText" if section else "noteContent", "")
     source = value.get("source")
     if source:
         source = {**source, "type": kind}
     return {
-        "type": kind,
+        "view": value["view"], "type": kind,
         "id": identifier,
         "title": title,
         "content": body,
@@ -187,6 +205,8 @@ def document_page(kind, identifier, title, content, params=None, metadata=None):
         "readComplete": value.get("readComplete", False),
         "sections": value.get("sections", []),
         "sectionCount": value.get("sectionCount", len(value.get("sections", []))),
+        "sectionsOffset": value["sectionsOffset"],
+        "nextSectionsOffset": value["nextSectionsOffset"],
         "readSection": value.get("readSection"),
         "source": source,
         "metadata": metadata or {},

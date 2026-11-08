@@ -54,11 +54,14 @@ class MemoryRepository:
             self.rows = {key: value for key, value in self.rows.items()
                          if key[0] in keys and key[1] == dimension}
 
-    def scores(self, snapshot, query, top_k):
+    def scores(self, snapshot, query, top_k, *, article_id=None):
         if snapshot != self.active:
             raise StaleSnapshot("test snapshot changed")
         scores = {}
         for ordinal, key in enumerate(self.keys):
+            if article_id is not None and (self.chunks[ordinal]["type"] != "note"
+                                           or self.chunks[ordinal]["id"] != article_id):
+                continue
             vector = self.rows[(key, snapshot.dimension)]["embedding"]
             score = float(np.dot(query, vector) / (np.linalg.norm(query) * np.linalg.norm(vector)))
             if score > 0:

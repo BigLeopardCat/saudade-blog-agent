@@ -207,7 +207,8 @@ class RagIndex:
 
     # ── 查询 ──────────────────────────────────────────────────────
 
-    def _lexical_ranked(self, query: str, top_k: int) -> list[dict] | None:
+    def _lexical_ranked(self, query: str, top_k: int, *,
+                        article_id: int | None = None) -> list[dict] | None:
         """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
         if self.is_stale() and time.time() - self._last_attempt > 30:
             try:
@@ -233,24 +234,27 @@ class RagIndex:
         q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
             return []
-        scores = lexical.scores(q_toks)
+        allowed = None if article_id is None else [
+            i for i, chunk in enumerate(chunks)
+            if chunk["type"] == "note" and chunk["id"] == article_id]
+        scores = lexical.scores(q_toks, allowed_indices=allowed)
         # Document score is its strongest matching chunk; retain section locations.
         ranked = rank_documents(chunks, scores, revision)
         ranked = ranked[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
-            r["sections"] = r["sections"][:2]
         return ranked
 
     # ── 编排──────────────────────────
 
-    def search(self, query: str, top_k: int = DEFAULT_TOP_K) -> list[dict] | None:
+    def search(self, query: str, top_k: int = DEFAULT_TOP_K, *,
+               article_id: int | None = None) -> list[dict] | None:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
-        lex = self._lexical_ranked(query, top_k)
+        lex = self._lexical_ranked(query, top_k, article_id=article_id)
         if lex is None:
             _record("unavailable", None)
             return None
-        vec, reason, miss = self._vector_ranked(query, top_k)
+        vec, reason, miss = self._vector_ranked(query, top_k, article_id=article_id)
         if not vec:
             # Disabled, empty and failed vector routes have distinct telemetry.
             _record(_mode_for(reason), reason, missing=miss)
@@ -258,8 +262,13 @@ class RagIndex:
         if lex and lex[0].get("corpus_revision") != vec[0].get("corpus_revision"):
             _record("degraded", "corpus_changed", missing=miss)
             return lex
+        try:
+            fused = rrf_fuse(lex, vec, _rrf_k(), top_k)
+        except ValueError:
+            _record("degraded", "corpus_changed", missing=miss)
+            return lex
         _record("hybrid", None, len(vec), miss)
-        return rrf_fuse(lex, vec, _rrf_k(), top_k) or lex
+        return fused or lex
 
     def _vector_chunks_for(self, chunks: list[dict], space) -> list[dict]:
         with self._lock:
@@ -272,7 +281,8 @@ class RagIndex:
                 self._vector_chunk_cache = (chunks, space, refined)
         return refined
 
-    def _vector_ranked(self, query: str, top_k: int) -> tuple[list[dict], str | None, int]:
+    def _vector_ranked(self, query: str, top_k: int, *,
+                       article_id: int | None = None) -> tuple[list[dict], str | None, int]:
         """Return document candidates, degradation reason and missing-vector count."""
         if not is_enabled():
             # 开关关着、或凭据没配全（`degraded_reason()` 分得清这两件事，见它自己的注）
@@ -295,7 +305,9 @@ class RagIndex:
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",
                            len(view), len(chunks))
             return [], "stale_view", len(store.missing())
-        if not chunks:
+        if not chunks or article_id is not None and not any(
+            chunk["type"] == "note" and chunk["id"] == article_id for chunk in chunks
+        ):
             return [], "no_vector_hits", 0
         qv = embed_query(query)
         if qv is None:
@@ -305,7 +317,7 @@ class RagIndex:
         from rag.postgres import StaleSnapshot
 
         try:
-            scores = view.scores(qv, max(1, top_k))
+            scores = view.scores(qv, max(1, top_k), article_id=article_id)
         except StaleSnapshot:
             return [], "corpus_changed", len(store.missing())
         except (SQLAlchemyError, ValueError):
@@ -315,7 +327,6 @@ class RagIndex:
         ranked = rank_documents(chunks, scores, revision)[:max(1, top_k)]
         for r in ranked:
             r["score"] = round(r["score"], 4)
-            r["sections"] = r["sections"][:2]
         return ranked, (None if ranked else "no_vector_hits"), len(store.missing())
 
 
@@ -344,9 +355,10 @@ def invalidate_document(article_id: int, revision: str) -> None:
     warm_async()
 
 
-def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict] | None:
+def search(query: str, top_k: int = DEFAULT_TOP_K, *,
+           article_id: int | None = None) -> list[dict] | None:
     """Return ranked article candidates with readable source locators, without full text."""
-    return get_index().search(query, top_k=top_k)
+    return get_index().search(query, top_k=top_k, article_id=article_id)
 
 
 def warm() -> bool:

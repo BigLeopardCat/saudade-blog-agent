@@ -12,7 +12,7 @@ from _rag_store import memory_store, memory_vectors  # noqa: F401
 from agent.runtime.control import AgentCancelled, RequestControl, request_scope
 from config import settings
 from rag import vector_index as vectors
-from tools.notes import _rag_hit
+from rag.reading import candidate_text
 
 
 @pytest.fixture
@@ -144,9 +144,12 @@ def test_rrf_keeps_duplicate_heading_titles_bound_to_their_own_section_ranges():
     originals = copy.deepcopy((lexical, dense))
     result = vectors.rrf_fuse([lexical], [dense], 60, 3)[0]
     assert [(loc["section"], loc["section_id"]) for loc in result["locators"]] == [
-        ("配置", "s1"), ("配置", "s2"), ("后续", "s3")]
-    assert list(zip(result["sections"], result["section_ids"])) == [("配置", "s1"), ("配置", "s2")]
+        ("配置", "s1"), ("后续", "s3"), ("配置", "s2")]
+    assert list(zip(result["sections"], result["section_ids"])) == [
+        ("配置", "s1"), ("后续", "s3"), ("配置", "s2")]
     assert [(match["section_id"], match["offset"]) for match in result["matches"]] == [
-        ("s1", 10), ("s2", 20), ("s3", 30)]
-    assert "后续 section=s2" not in _rag_hit(1, result)
+        ("s1", 10), ("s3", 30), ("s2", 20)]
+    wire = candidate_text(1, result)
+    assert "后续 section=s3" in wire and "max_chars=10" in wire
+    assert "后续 section=s2" not in wire
     assert (lexical, dense) == originals

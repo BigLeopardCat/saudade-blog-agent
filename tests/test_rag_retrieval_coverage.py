@@ -76,7 +76,7 @@ def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negati
     retrieval, monkeypatch, reason, query, kind
 ):
     index, requests = retrieval
-    monkeypatch.setattr(index, "_vector_ranked", lambda *_: ([], reason, 0))
+    monkeypatch.setattr(index, "_vector_ranked", lambda *_, **kwargs: ([], reason, 0))
     result = notes.rag_search.invoke({"query": query})
     assert result.kind == kind and result.meta["rag_reason"] == reason
     state = coverage(result)
@@ -95,16 +95,16 @@ def test_healthy_negative_is_scoped_to_the_index_and_query(
     retrieval, monkeypatch, reason, semantic
 ):
     index, requests = retrieval
-    monkeypatch.setattr(index, "_vector_ranked", lambda *_: ([], reason, 0))
+    monkeypatch.setattr(index, "_vector_ranked", lambda *_, **kwargs: ([], reason, 0))
     result = notes.rag_search.invoke({"query": "unseen-term"})
     assert result.kind == "empty" and not requests
     assert coverage(result)["semantic"] == semantic
-    assert "本次查询在当前公开文章索引中未命中" in str(result)
+    assert "本次查询在当前检索范围内未命中" in str(result)
 
 
 def test_missing_vectors_make_even_a_successful_vector_query_incomplete(retrieval, monkeypatch):
     index, _ = retrieval
-    monkeypatch.setattr(index, "_vector_ranked", lambda *_: ([], "no_vector_hits", 1))
+    monkeypatch.setattr(index, "_vector_ranked", lambda *_, **kwargs: ([], "no_vector_hits", 1))
     result = notes.rag_search.invoke({"query": "unseen-term"})
     assert result.kind == "unavailable" and coverage(result)["semantic"] == "incomplete"
 
@@ -115,7 +115,7 @@ def test_hybrid_candidates_keep_real_route_and_partial_vector_coverage(
 ):
     index, _ = retrieval
     dense = index._lexical_ranked("needle", 8)
-    monkeypatch.setattr(index, "_vector_ranked", lambda *_: (dense, None, missing))
+    monkeypatch.setattr(index, "_vector_ranked", lambda *_, **kwargs: (dense, None, missing))
     result = notes.rag_search.invoke({"query": "needle"})
     assert result.kind == "ok" and result.data[0]["id"] == 1
     assert result.data[0]["matches"] == dense[0]["matches"]
@@ -124,7 +124,7 @@ def test_hybrid_candidates_keep_real_route_and_partial_vector_coverage(
 
 def test_stale_snapshot_cannot_prove_an_empty_current_corpus(retrieval, monkeypatch):
     index, _ = retrieval
-    monkeypatch.setattr(index, "_vector_ranked", lambda *_: ([], None, 0))
+    monkeypatch.setattr(index, "_vector_ranked", lambda *_, **kwargs: ([], None, 0))
     index._dirty, index._last_attempt = True, time.time()
     result = notes.rag_search.invoke({"query": "unseen-term"})
     assert result.kind == "unavailable" and coverage(result)["snapshot_stale"]

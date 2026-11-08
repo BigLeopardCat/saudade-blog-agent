@@ -65,6 +65,8 @@ def test_database_cosine_ranks_documents_instead_of_truncating_chunks(database, 
     assert set(scores) == set(range(21))
     assert scores[0] == pytest.approx(1.0)
     assert scores[20] == pytest.approx(0.8)
+    assert view.scores([9.0, 0.0], 1, article_id=2) == {20: pytest.approx(0.8)}
+    assert view.scores([9.0, 0.0], 1, article_id=999) == {}
     # Results come from the pgvector distance operator, without reading vectors into Python.
     statements = []
     def record(conn, cursor, statement, *args):
