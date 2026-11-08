@@ -16,8 +16,9 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     messages = prompt.build_prompt([], Principal(7, "user", SOURCE_ASSERTION))
     facts = runtime_context(events)["product_facts"]
     assert facts["article_url_template"] in messages[0].content
-    caller = json.JSONDecoder().raw_decode(
-        messages[0].content.split("运行时能力（可信数据）：", 1)[1])[0]["caller"]
+    context = json.JSONDecoder().raw_decode(
+        messages[0].content.split("运行时能力（可信数据）：", 1)[1])[0]
+    caller = context["caller"]
     assert facts["conversation_style"] == caller["conversation_style"]
     assert facts["character"] in messages[0].content
     assert set(facts) == {"article_url_template", "character", "conversation_style",
@@ -32,7 +33,9 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["guestbook"]["posting_requires_login"] is True
     assert facts["article_management"]["author_ownership_is_not_permission"] is True
     assert facts["article_management"]["applies_to"] == ["agent_tools", "web_editor"]
-    assert all(token in messages[0].content for token in facts["rendering"]["stickers"])
+    assert facts["rendering"] == context["rendering"]
+    assert facts["rendering"]["sticker_format"] == {
+        "markdown_text": "image", "inline_code": "literal", "code_block": "literal"}
 
 
 def test_only_the_time_used_in_the_prompt_is_added_to_review_facts(monkeypatch):

@@ -23,7 +23,9 @@ def conversation_context(principal) -> dict:
     verified = is_verified_identity(principal)
     role = getattr(principal, "known_role", None) if verified else None
     return {
-        "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES]},
+        "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES],
+                      "sticker_format": {"markdown_text": "image", "inline_code": "literal",
+                                         "code_block": "literal"}},
         "guestbook": {"posting_requires_login": True,
                       "anonymous": "hides public display name, not the authenticated publisher",
                       "publisher_lookup_roles": sorted(ADMIN_ROLES)},
