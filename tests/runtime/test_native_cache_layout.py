@@ -161,13 +161,15 @@ def test_new_turn_page_state_preserves_the_recent_exchange_in_the_actual_request
     before, after = model.requests
     assert before["tools"] == after["tools"]
     assert before["messages"][0] == after["messages"][0]
-    assert [message["content"] for message in after["messages"][-3:-1]] == [
-        "原有问题", "原有答复。"]
+    assert after["messages"][-3]["content"] == before["messages"][-1]["content"]
+    assert after["messages"][-2]["content"] == "原有答复。"
     assert after["messages"][-1]["content"].startswith("继续\n\n")
     assert "page B" in after["messages"][-1]["content"]
-    assert "page A" not in json.dumps(after["messages"], ensure_ascii=False)
+    assert "page A" in after["messages"][-3]["content"]
+    assert "page A" not in after["messages"][-1]["content"]
+    assert "page B" not in after["messages"][0]["content"]
     saved = runtime.store.load(config()).messages
-    assert all("page B" not in str(message.content) for message in saved)
+    assert "page B" in str(saved[-2].content)
 
 
 def test_private_history_still_disappears_when_authority_changes():

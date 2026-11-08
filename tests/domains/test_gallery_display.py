@@ -5,7 +5,8 @@ import httpx
 import pytest
 from _framework_fixture import call, model_replies
 from _own_support import config
-from langchain_core.messages import HumanMessage
+from langchain.tools import ToolRuntime
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.domains.gallery.reads import show_gallery_image
 from agent.principal import SOURCE_ASSERTION, Principal
@@ -55,7 +56,9 @@ def test_actual_framework_display_does_not_depend_on_model_repeating_image_markd
 
 def test_nonadmin_show_refuses_before_reading_gallery(backend):
     cfg = config(principal=Principal(7, "user", SOURCE_ASSERTION))
-    assert show_gallery_image.invoke({"image_id": 74}, config=cfg).kind == "unavailable"
+    runtime = ToolRuntime(state={}, context=None, config=cfg, stream_writer=lambda _: None,
+                          tool_call_id="show", store=None)
+    assert show_gallery_image.func(74, runtime).kind == "unavailable"
     assert backend == []
 
 
@@ -132,3 +135,52 @@ def test_known_metadata_link_is_available_next_turn_without_another_read(backend
     assert URL in str(requests[-1])
     assert replies[-1].reply == f"![猫咪]({URL})"
     assert store.load(cfg).messages[-1].content == replies[-1].reply
+
+
+def test_explicit_show_reuses_a_verified_link_after_runtime_reload(backend):
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    from agent.products.blog.application import BlogApplication
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
+    with model_replies({"tool_calls": [call("load_admin_gallery_info_tools", "load")]},
+                       {"tool_calls": [call("get_gallery_image_metadata", "read", image_id=74)]},
+                       {"content": "名称是猫咪。"},
+                       {"tool_calls": [call("show_gallery_image", "show", image_id=74)]},
+                       {"content": "这张喵。"}) as (model, requests):
+        saver = InMemorySaver()
+
+        def runtime():
+            return AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
+                                model_factory=lambda **_: model)
+
+        list(runtime().stream_events(
+            {"messages": [HumanMessage(content="只查74的元数据。") ]}, cfg))
+        result = list(runtime().stream_events(
+            {"messages": [HumanMessage(content="展示刚才那张。") ]}, cfg))[-1]
+    assert len(requests) == 5 and len(backend) == 1
+    assert result.reply.count(f"]({URL})") == 1
+    last = requests[-1]["messages"][-1]
+    assert last["tool_call_id"] == "show" and URL in last["content"]
+    parameters = next(t["function"]["parameters"] for t in requests[-2]["tools"]
+                      if t["function"]["name"] == "show_gallery_image")
+    assert "runtime" not in str(parameters)
+
+
+@pytest.mark.parametrize("later", [
+    ToolMessage(content="Unknown write outcome", tool_call_id="write",
+                name="manage_gallery_images", status="error"),
+    ToolMessage(content="Read failed", tool_call_id="failed",
+                name="get_gallery_image_metadata", status="error"),
+])
+def test_a_later_write_or_failed_read_invalidates_a_display_snapshot(later):
+    from agent.domains.gallery.display import snapshot
+
+    read = ToolMessage(content="verified", name="get_gallery_image_metadata", tool_call_id="read",
+        artifact={"kind": "ok", "data": {"image_id": 74, "url": URL, "name": "猫咪"}})
+    assert snapshot([read], 74)["imageUrl"] == URL
+    assert snapshot([read, later], 74) is None
+    assert snapshot([read], 75) is None
+    assert snapshot([HumanMessage(content=URL), AIMessage(content=URL)], 74) is None

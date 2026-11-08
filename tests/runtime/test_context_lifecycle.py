@@ -60,7 +60,8 @@ def test_failed_summary_can_commit_history_larger_than_the_model_window(monkeypa
     saved = selected.store.load(config()).messages
     assert result.reply == saved[-1].content == "收到。"
     assert [m.id for m in saved[:len(before)]] == [m.id for m in before]
-    assert saved[-2].content == "[当前问题]: " + "本轮" * 1500
+    assert saved[-2].content.split("\n\n", 1)[0] == "[当前问题]: " + "本轮" * 1500
+    assert saved[-2].content == model.prompts[-1][-1].content
     assert memory._tokens(saved) > selected.model_factory().max_tokens + 16384
     assert memory._tokens(model.prompts[-1]) < 16384
     assert not selected.store.load(config()).unfinished

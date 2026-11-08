@@ -77,10 +77,10 @@ def test_private_observation_and_derived_reply_do_not_survive_role_or_actor_chan
     assert any("PRIVATE_CANARY" in str(m.content) for m in memory.history(saved, actor()))
 
 
-def test_observations_are_bounded_pairs_and_failures_are_not_remembered_as_facts():
+def test_observations_preserve_complete_pairs_and_failures_are_not_facts():
     call = {"name": "search_notes", "args": {"keyword": "架构"}, "id": "search"}
     pair = memory.observation(call, base.ok("x" * 20000))
-    assert len(pair[1].content) < memory.OBSERVATION_CHARS + 100
+    assert pair[1].content == "x" * 20000
     assert pair[0].tool_calls[0]["id"] == pair[1].tool_call_id
     assert pair[1].name == "search_notes"
     assert memory.observation(call, base.unavailable("读不到")) == []
@@ -90,14 +90,13 @@ def test_observations_are_bounded_pairs_and_failures_are_not_remembered_as_facts
     assert restored[1].tool_call_id == "search"
 
 
-def test_framework_tool_message_excerpt_is_not_presented_as_a_complete_result():
+def test_framework_tool_message_is_not_trimmed_again_on_commit():
     call = {"name": "get_conversation_image", "args": {}, "id": "image", "type": "tool_call"}
     result = ToolMessage(content="x" * 2000, name=call["name"], tool_call_id="image",
                          artifact={"kind": "ok"})
     pair = memory.observation(call, result)
     assert pair[1].tool_call_id == "image" and pair[0].tool_calls == [call]
-    assert "历史工具结果节选" in pair[1].content
-    assert len(pair[1].content) < memory.OBSERVATION_CHARS + 100
+    assert pair[1].content == result.content
 
 
 def test_real_native_loop_persists_source_observations_across_followup_and_reload(monkeypatch):

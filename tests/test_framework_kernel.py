@@ -9,7 +9,7 @@ from _framework_ledger import Ledger
 from _own_support import config
 from langchain.agents import create_agent
 from langchain.agents.middleware import HumanInTheLoopMiddleware, wrap_model_call
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.types import Command
 
@@ -72,7 +72,9 @@ def test_application_session_uses_the_framework_with_the_real_model_transport():
         assert len(requests) == 2 and not business["writes"]
         assert session.calls_used == session.budget.tool_calls == 1
         assert session.budget.model_calls == 2 and session.budget.tokens == 30
-        assert session.observations and requests[0]["stream"] is True
+        assert any(isinstance(message, ToolMessage)
+                   for message in session.framework_state['messages'])
+        assert requests[0]["stream"] is True
         assert all(request.get("parallel_tool_calls") is not False for request in requests)
 
 

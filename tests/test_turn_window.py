@@ -24,7 +24,7 @@ def test_turn_window():
         {"name": "search_notes", "args": {}, "id": "search"},
         base.ok("x" * 20000),
     )
-    assert observations and len(str(observations[-1].content)) <= memory.OBSERVATION_CHARS + 100
+    assert observations and observations[-1].content == "x" * 20000
     checkpoint = memory.checkpoint_messages(history, current)
     assert checkpoint and isinstance(checkpoint[0], RemoveMessage)
     assert any(getattr(message, "content", "") == "回答" for message in checkpoint)

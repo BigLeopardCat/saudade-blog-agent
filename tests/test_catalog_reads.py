@@ -266,7 +266,8 @@ def test_account_lookup_keeps_facts_and_bounds_unused_preparations(
         ["admin_account_actions"] if retains_domain else [])
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
-    fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))
+    fact = next(message for message in model.prompts[-1]
+                if isinstance(message, ToolMessage) and message.name == "list_accounts")
     assert json.loads(fact.content)["items"][0]["username"] == "account_1"
 
 

@@ -52,7 +52,7 @@ def tool_content(request, name):
     )
 
 
-def test_weather_disappears_as_explicit_unknown_without_changing_prefix_or_saved_history():
+def test_missing_weather_is_explicitly_unknown_while_its_historical_source_stays_unchanged():
     with model_replies({"content": "这是IP城市的天气。"}, {"content": "当前没有天气数据。"}) as (
         model,
         wire,
@@ -69,8 +69,9 @@ def test_weather_disappears_as_explicit_unknown_without_changing_prefix_or_saved
         assert '"status":"observed"' in str(first)
         assert '"location_kind":"ip_estimate"' in str(first)
         assert '"current_weather":{"status":"unknown"}' in str(second)
-        assert "杭州" not in str(second) and "Open-Meteo" not in str(second)
-        assert "current_weather" not in str(runtime.store.load(config()).messages)
+        assert "杭州" not in second[-1]["content"] and "Open-Meteo" not in second[-1]["content"]
+        assert second[:len(first)] == first
+        assert "杭州" in runtime.store.load(config()).messages[0].content
         assert len(wire) == 2
 
 

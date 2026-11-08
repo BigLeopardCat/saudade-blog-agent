@@ -41,7 +41,7 @@ def test_restore_uses_real_user_boundary_before_generated_feedback(kind):
     restore_session(selected, state)
     assert len(selected.receipts) == 1
     assert any(isinstance(message, ToolMessage) and message.content == "VERIFIED_SOURCE"
-               for message in selected.observations)
+               for message in selected.framework_state['messages'])
     assert selected.state["response_repairs"] == 1
 
 
@@ -127,5 +127,6 @@ def test_interruption_after_repair_or_planning_retains_reads_without_replaying_w
     messages = rebuilt.store.load(config()).messages
     assert any(isinstance(message, ToolMessage) and "RECOVERED_SOURCE_CANARY" in message.content
                for message in messages)
-    assert not any(message.additional_kwargs.get("runtime_feedback") for message in messages)
+    assert all(not memory.is_user_input(message) for message in messages
+               if message.additional_kwargs.get("runtime_feedback"))
     assert all("RECOVERED_SOURCE_CANARY" in str(prompt) for prompt in model.prompts)

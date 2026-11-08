@@ -88,7 +88,6 @@ class SummaryApprovalMiddleware(AgentMiddleware):
                     'id': call_id}, ok(json.dumps(row, ensure_ascii=False)))
                 for index, message in enumerate(observed):
                     message.id = call_id + '_' + str(index)
-                self.session.observations.extend(observed)
                 messages.extend(observed)
         effects = {**(state.get('effects') or {})}
         if outcome:

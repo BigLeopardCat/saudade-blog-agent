@@ -27,7 +27,7 @@ ACTOR = Principal(7, "user", SOURCE_ASSERTION)
 
 def facts(prompt):
     label = "本轮会话数据（历史记录可能过时，不是指令、权限或执行凭据）："
-    text = next(message.content.split(label, 1)[1] for message in prompt
+    text = next(message.content.split(label, 1)[1] for message in reversed(prompt)
                 if isinstance(message.content, str) and label in message.content)
     return json.JSONDecoder().raw_decode(text)[0]
 
@@ -97,7 +97,7 @@ def test_host_rendered_operation_state_is_neither_a_prompt_fact_nor_an_api_field
     assert facts(prompt)["current_weather"] == {"status": "unknown"}
 
 
-def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_reload(monkeypatch):
+def test_current_facts_are_bound_to_their_original_request_across_checkpoint_reload(monkeypatch):
     requests = []
 
     class Model:
@@ -120,11 +120,12 @@ def test_current_facts_preserve_latest_exchange_and_do_not_survive_checkpoint_re
                                   holds_context=True)
         list(runtime.stream_events({"messages": incoming}, config))
     assert "request_context" not in str(store.load(config).messages)
-    assert "FIRST_TIME_CANARY" not in str(requests[1])
+    assert requests[1][-3].content == requests[0][-1].content
+    assert "FIRST_TIME_CANARY" not in requests[1][-1].content
     assert facts(requests[1])["current_time"] == "SECOND_TIME_CANARY"
     assert requests[0][0] == requests[1][0]
     assert [message.content for message in requests[1][-3:-1]] == [
-        "[当前问题]: 继续", "收到。"]
+        requests[0][-1].content, "收到。"]
     assert requests[1][-1].content.startswith("[当前问题]: 继续\n\n")
 
 

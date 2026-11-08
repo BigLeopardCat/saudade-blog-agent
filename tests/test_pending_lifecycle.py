@@ -270,8 +270,7 @@ def test_preparation_and_chat_cancellation_survive_reconstruction(pending_task):
         prepared = [m for m in prompt if isinstance(m, ToolMessage)
                     and m.tool_call_id == "prepare-original"]
         assert len(prepared) == 1
-        assert json.loads(prepared[0].content)["status"] == (
-            "not_executed" if index == 0 else "awaiting_confirmation")
+        assert json.loads(prepared[0].content)["status"] == "not_executed"
         assert token not in str(prompt)
     observed = [m for m in followup.prompts[0] if isinstance(m, ToolMessage)]
     cancelled = [m for m in observed if '"status": "superseded"' in m.content]

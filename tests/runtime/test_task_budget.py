@@ -6,7 +6,7 @@ import time
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 
 from agent.runtime.budget import (
@@ -179,7 +179,7 @@ def test_legacy_tools_share_attempt_budget_and_native_tools_count_only_once():
     assert result.reply == "done" and budget.tool_calls == 1
 
 
-def test_read_progress_is_retained_in_native_result_instead_of_restarted_in_legacy():
+def test_read_progress_is_retained_in_framework_state_without_repeating_the_read():
     class Model:
         replies = iter([AIMessage(content="", tool_calls=[
             {"name": "fixture_read", "args": {}, "id": "read"}]),
@@ -193,7 +193,8 @@ def test_read_progress_is_retained_in_native_result_instead_of_restarted_in_lega
 
     session = ToolSession(Model(), {}, {"fixture_read": fixture_read}, {})
     result = session.run([HumanMessage(content="read and continue")])
-    assert result is not None and session.observations
+    assert result is not None and any(isinstance(message, ToolMessage)
+        for message in session.framework_state['messages'])
     assert session.calls_used == 1 and session.budget.model_calls == 2
 
 

@@ -21,7 +21,7 @@ class InventoryApplication:
 
     @staticmethod
     def history_access(principal, name):
-        return name == "get_stock"
+        return name in {"get_stock", "load_inventory_info_tools"}
 
     @staticmethod
     def context(principal):

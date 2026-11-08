@@ -1,27 +1,23 @@
-"""Project completed Agent output into the parent graph's conversation commit."""
+"""Commit the framework transcript and the application outcome atomically."""
 
-from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.graph.message import add_messages
 
-from agent.runtime import checkpoint_store, memory
+from agent.runtime import checkpoint_store, memory, transcript
 from agent.runtime.results import TurnResult, complete_reply, turn_phase
 from agent.runtime.turns import check_cancelled
 
 
 def prepare(session, state):
     result, _, _ = complete_reply(session.outcome, "".join(session.reply_parts))
-    previous = state.get("messages") or []
-    seen = {message.tool_call_id for message in previous if isinstance(message, ToolMessage)}
-    seen.update((session.state.get("context_update") or {}).get("covered_tool_calls", []))
-    observations = [message for message in session.observations
-                   if not (isinstance(message, ToolMessage) and message.tool_call_id in seen)
-                   and not (isinstance(message, AIMessage) and message.tool_calls
-                            and all(call["id"] in seen for call in message.tool_calls))]
     task = session.task or {}
-    incoming = [] if task.get("input_saved") else task.get("input", session.turn_input)
+    accepted = [*task.get("input", session.turn_input), *session.turn_input,
+                *session.applied_messages]
+    messages = (session.framework_state or {}).get("messages")
+    if messages is None:
+        # An admission failure can precede the first framework model node.
+        messages = add_messages(state.get("messages") or [], accepted)
     return {"reply": result.reply, "execution": result.execution,
-            "messages": memory.turn_messages([*incoming, *session.applied_messages],
-                                              observations, result.reply, session.principal),
-            "context_update": session.state["context_update"],
+            "messages": transcript.finish(messages, result.reply, session.principal, accepted),
             "tool_domains": session.state.get("tool_domains")}
 
 
@@ -30,8 +26,7 @@ def commit(state, config, *, session):
     check_cancelled(config, check_budget=False)
     checkpoint_store.require_active(session.store.saver, config["configurable"]["thread_id"])
     turn = state["turn"]
-    update = {"messages": memory.checkpoint_messages(
-        state.get("messages") or [], turn["messages"], context_update=turn["context_update"]),
+    update = {"messages": memory.checkpoint_messages([], turn["messages"]),
         "run": ({**state["run"], "input_saved": True}
                 if state.get("approval") and state.get("run") else None),
         "turn": None, "last_outcome": turn_phase(TurnResult(turn["reply"], turn["execution"])),
