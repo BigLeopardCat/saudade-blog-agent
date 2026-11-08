@@ -6,6 +6,7 @@ import json
 import warnings
 from typing import Literal
 from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
+from uuid import UUID
 
 import httpx
 from langchain.tools import ToolRuntime
@@ -191,11 +192,16 @@ def _download(row, config):
     url = row["imageUrl"]
     headers = {}
     image_id = row.get("imageKey")
-    media_path = f"/api/public/media/{image_id}" if type(image_id) is int and image_id > 0 else None
-    if url == media_path or url.startswith("/api/protect/download/"):
+    is_media = False
+    if url.startswith("/api/public/media/"):
+        value = url.removeprefix("/api/public/media/")
+        is_media = (str(UUID(value)) == value and type(image_id) is int and image_id > 0)
+        if not is_media:
+            raise ValueError("Invalid gallery media identity")
+    if is_media or url.startswith("/api/protect/download/"):
         if any(part in {".", ".."} for part in unquote(url).split("/")) or "\\" in url:
             raise ValueError("Invalid library path")
-        path = f"{targets.PATH}/images/{image_id}/content" if url == media_path else url
+        path = f"{targets.PATH}/images/{image_id}/content" if is_media else url
         url = urljoin(base.ADMIN_BASE + "/", path)
         cfg = config["configurable"]
         headers["Authorization"] = "Bearer " + base.host_credential(

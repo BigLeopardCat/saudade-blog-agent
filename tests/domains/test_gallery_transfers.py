@@ -20,7 +20,8 @@ def admin():
 
 
 def image(identifier=72):
-    return {"imageKey": identifier, "imageUrl": f"/api/public/media/{identifier}",
+    media_id = f"6b9e2bf1-56af-428c-8177-{identifier:012d}"
+    return {"imageKey": identifier, "imageUrl": f"/api/public/media/{media_id}",
             "displayName": "封面", "description": "山景", "folderId": 0,
             "storage": "local", "storagePath": "cover.png", "isFavorite": False,
             "version": "b" * 64}
