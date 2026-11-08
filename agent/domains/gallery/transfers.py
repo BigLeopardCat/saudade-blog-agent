@@ -165,7 +165,8 @@ def prepare_gallery_transfer(intent: Intent, config: RunnableConfig) -> object:
 def get_gallery_transfer(job_id: targets.Digest, config: RunnableConfig) -> object:
     """Read an approved gallery transfer's durable status by its receipt job ID.
     queued/copying is pending; published means catalogue ready but source cleanup pending;
-    complete confirms completion; failed preserves sources. Do not repeatedly poll in a
+    complete confirms completion; failed is unpublished, not proof the sources still exist.
+    Do not repeatedly poll in a
     model loop; the gallery page observes background progress without model calls.
     """
     check_cancelled(config)
