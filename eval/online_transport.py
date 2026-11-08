@@ -30,8 +30,27 @@ class EvaluationError(RuntimeError):
     """The evaluation cannot establish the evidence needed for a judgment."""
 
 
+def _safe_frame(frame):
+    """Decode credentials only inside an archived control-frame field."""
+    if not isinstance(frame, str):
+        raise ValueError("archived control frame must be text")
+    prefix, _, body = frame.partition(":")
+    if prefix not in {"__CONFIRM__", "__PENDING__"}:
+        return frame
+    payload = json.loads(body)
+    if not isinstance(payload, dict):
+        raise ValueError("archived approval control must contain an object")
+    return prefix + ":" + json.dumps(safe_result(payload), ensure_ascii=False)
+
+
+def _safe_frames(frames):
+    if not isinstance(frames, list):
+        raise ValueError("archived control frames must be a list")
+    return [_safe_frame(frame) for frame in frames]
+
+
 def safe_result(value):
-    """Keep evidence but remove bearer credentials from nested wire objects."""
+    """Redact structured credentials; ordinary string values are never decoded."""
     if isinstance(value, dict):
         result = {k: safe_result(v) for k, v in value.items()
                   if k not in {"token", "confirm_token", "confirm_tokens"}}
@@ -48,10 +67,22 @@ def safe_result(value):
         return result
     if isinstance(value, list):
         return [safe_result(v) for v in value]
-    if isinstance(value, str) and value.startswith(("__CONFIRM__:", "__PENDING__:")):
-        prefix, _, body = value.partition(":")
-        return prefix + ":" + json.dumps(safe_result(json.loads(body)), ensure_ascii=False)
     return value
+
+
+def archive_result(value):
+    """Serialize a known turn result or its rounds, including their own control frames."""
+    if not isinstance(value, dict):
+        raise ValueError("archived turn result must be an object")
+    archived = safe_result({key: item for key, item in value.items()
+                            if key not in {"frames", "rounds"}})
+    if "frames" in value:
+        archived["frames"] = _safe_frames(value["frames"])
+    if "rounds" in value:
+        if not isinstance(value["rounds"], list):
+            raise ValueError("archived result rounds must be a list")
+        archived["rounds"] = [archive_result(round_) for round_ in value["rounds"]]
+    return archived
 
 
 class OnlineTransport:
@@ -322,11 +353,12 @@ class OnlineTransport:
         return result
 
     def _save_request(self, request_id, result):
+        archived = archive_result(result)
         folder = self.report_dir / "requests"
         folder.mkdir(exist_ok=True, mode=0o700)
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
                                          prefix="." + request_id, delete=False) as saved:
-            json.dump(safe_result(result), saved, ensure_ascii=False, indent=2)
+            json.dump(archived, saved, ensure_ascii=False, indent=2)
             saved.write("\n")
             saved.flush()
             os.fsync(saved.fileno())

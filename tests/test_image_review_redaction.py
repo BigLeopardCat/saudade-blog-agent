@@ -5,7 +5,7 @@ import json
 import secrets
 from types import SimpleNamespace
 
-from eval.online_transport import OnlineTransport, safe_result
+from eval.online_transport import OnlineTransport, archive_result, safe_result
 
 
 def material():
@@ -24,11 +24,11 @@ def material():
 def test_artifact_redaction_preserves_noncredential_facts_and_original_evidence():
     raw = material()
     original = copy.deepcopy(raw)
-    safe = safe_result(raw)
+    safe = archive_result(raw)
     text = json.dumps(safe)
     assert "result-secret" not in text and "ref-secret" not in text
     assert raw["http_events"][0]["data"]["token"] not in text
-    assert raw == original and safe_result(safe) == safe
+    assert raw == original and archive_result(safe) == safe
     review = safe["http_events"][0]["data"]["image_review"]
     assert review["hasPreview"] is True and review["references"][0]["hasPreview"] is True
     assert review["references"][0]["image_id"] == 11 and review["version"] == "a" * 64
@@ -42,7 +42,7 @@ def test_request_journal_reuses_same_redaction_without_altering_raw_event(tmp_pa
     raw = material()
     OnlineTransport._save_request(SimpleNamespace(report_dir=tmp_path), "fixture", raw)
     saved = json.loads((tmp_path / "requests/fixture.json").read_text())
-    assert saved == safe_result(raw)
+    assert saved == archive_result(raw)
     assert "result-secret" in json.dumps(raw) and "result-secret" not in json.dumps(saved)
 
 

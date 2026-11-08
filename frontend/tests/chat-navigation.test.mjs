@@ -15,7 +15,7 @@ function fixture(applyAppearance) {
   const storage = new Map(), calls = [], navigations = [];
   const ctx = { state: { conv: 42, isSending: false, activeRound: { taskId: 'task' } }, ui: {} };
   const engine = { ready: new Promise(resolve => { resolveReady = resolve; }) };
-  const sandbox = { URL, setTimeout, Date, localStorage: { getItem: () => 'a.b.c' },
+  const sandbox = { URL, setTimeout, Date, performance, localStorage: { getItem: () => 'a.b.c' },
     atob: () => JSON.stringify({ sub: actor }),
     sessionStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value),
       removeItem: key => storage.delete(key) },
@@ -28,7 +28,7 @@ function fixture(applyAppearance) {
   const navigation = sandbox.__waifuBrowserActions(ctx, engine,
     async options => { calls.push(options); return true; },
     applyAppearance && (settings => applyAppearance(settings, sandbox)));
-  const command = { kind: 'navigate', task_id: 'task', command_id: 'cmd', url: '/guestbook', timeout_ms: 1000 };
+  const command = { kind: 'navigate', expires_in_ms:60_000, task_id: 'task', command_id: 'cmd', url: '/guestbook', timeout_ms: 1000 };
   const context = { convId: 42, original: '去留言板' };
   return { navigation, ctx, calls, navigations, command, context, storage, sandbox,
     ready: () => resolveReady(), actor: value => { actor = value; } };
@@ -52,7 +52,7 @@ test('appearance resumes once with observed settings, without navigation', async
     browser.__darkMode = settings.dark_mode === 'on';
     browser.__effectState = { rain: false, snow: true };
   });
-  const command = {kind:'appearance',task_id:'task',command_id:'look',timeout_ms:1000,
+  const command = {kind:'appearance',expires_in_ms:60_000,task_id:'task',command_id:'look',timeout_ms:1000,
     settings:{dark_mode:'on',rain:'off',snow:'on'}};
   assert.equal(f.navigation.receive(command, f.context), true);
   f.navigation.receive(command, f.context);
@@ -65,7 +65,7 @@ test('appearance resumes once with observed settings, without navigation', async
 
 test('partial application is reported as failed with actual state', async () => {
   const f = fixture((settings, browser) => { browser.__darkMode = true; throw new Error('not ready'); });
-  f.navigation.receive({kind:'appearance',task_id:'task',command_id:'partial',
+  f.navigation.receive({kind:'appearance',expires_in_ms:60_000,task_id:'task',command_id:'partial',
     settings:{dark_mode:'on',snow:'on'}}, f.context);
   f.ready(); await flush();
   assert.equal(f.calls[0].browserResult.status, 'failed');
@@ -76,7 +76,7 @@ test('distinct invocations apply on-off-on while each invocation is deduplicated
   const f = fixture((settings, browser) => { browser.__darkMode = settings.dark_mode === 'on'; });
   f.ready();
   for (const [mode, id] of [['on','on-first'],['off','off'],['on','on-again']]) {
-    const command = {kind:'appearance',task_id:'task',command_id:id,settings:{dark_mode:mode}};
+    const command = {kind:'appearance',expires_in_ms:60_000,task_id:'task',command_id:id,settings:{dark_mode:mode}};
     f.navigation.receive(command,f.context); await flush();
     f.navigation.receive(command,f.context); await flush();
   }
@@ -90,7 +90,7 @@ test('unknown or mismatched settings never acknowledge completion', async () => 
     const f = fixture((settings, browser) => {
       if (observed !== undefined) browser.__effectState = {snow:observed};
     });
-    f.navigation.receive({kind:'appearance',task_id:'task',command_id:'unobserved',timeout_ms:1000,
+    f.navigation.receive({kind:'appearance',expires_in_ms:60_000,task_id:'task',command_id:'unobserved',timeout_ms:1000,
       settings:{snow:'on'}}, f.context);
     f.ready(); await new Promise(resolve => setTimeout(resolve, 1100));
     assert.equal(f.calls[0].browserResult.status, 'timeout');
@@ -101,7 +101,7 @@ test('appearance rejects unknown keys and non-absolute modes before applying', (
   let applications = 0;
   const f = fixture(() => { applications++; });
   for (const settings of [{permissions:'on'},{snow:'toggle'},{}])
-    assert.equal(f.navigation.receive({kind:'appearance',task_id:'task',command_id:'bad',settings},
+    assert.equal(f.navigation.receive({kind:'appearance',expires_in_ms:60_000,task_id:'task',command_id:'bad',settings},
       f.context), false);
   assert.equal(applications, 0);
 });
@@ -131,7 +131,7 @@ test('article editor acknowledges a live working copy once, without navigating',
   const document = {editor_id:'editor-1',revision:0,outcome:'read',content:'未保存正文',description:'',
     offset:0,next_offset:null,total_chars:5};
   f.sandbox.__saudadeArticleEditor = {execute: command => {runs++; assert.equal(command.operation,'read'); return document}};
-  const command = {kind:'article_editor',operation:'read',offset:0,limit:12000,task_id:'task',command_id:'read-editor'};
+  const command = {kind:'article_editor',expires_in_ms:60_000,operation:'read',offset:0,limit:12000,task_id:'task',command_id:'read-editor'};
   assert.equal(f.navigation.receive(command,f.context),true);
   f.ready(); await waitFor(() => f.calls.length===1);
   assert.equal(runs,1);
@@ -147,7 +147,7 @@ test('publication opens the editor confirmation once and only reports readiness'
   f.sandbox.__saudadeArticleEditor={execute:command=>{
     runs++;assert.equal(command.operation,'prepare_publish');return document;
   }};
-  const command={kind:'article_editor',operation:'prepare_publish',editor_id:'e',revision:2,
+  const command={kind:'article_editor',expires_in_ms:60_000,operation:'prepare_publish',editor_id:'e',revision:2,
     task_id:'task',command_id:'publication'};
   assert.equal(f.navigation.receive(command,f.context),true);
   f.ready();await waitFor(()=>f.calls.length===1);
@@ -162,7 +162,7 @@ test('missing or stale editor returns failure and its reason without affecting n
   for (const absent of [true,false]) {
     const f=fixture();
     if (!absent) f.sandbox.__saudadeArticleEditor = {execute: () => {throw new Error('草稿已变化')}};
-    f.navigation.receive({kind:'article_editor',operation:'summary',editor_id:'e',revision:0,
+    f.navigation.receive({kind:'article_editor',expires_in_ms:60_000,operation:'summary',editor_id:'e',revision:0,
       description:'新概述',task_id:'task',command_id:'summary'},f.context);
     f.ready(); await waitFor(() => f.calls.length===1);
     assert.equal(f.calls[0].browserResult.status,'failed');
@@ -174,7 +174,7 @@ test('missing or stale editor returns failure and its reason without affecting n
 test('recovered unconsumed interrupt resends its observation without applying an edit again', async () => {
   const f=fixture(); f.ready(); let executions=0;
   f.sandbox.__saudadeArticleEditor={execute:()=>{executions++;throw new Error('must not repeat')}};
-  const command={kind:'article_editor',operation:'summary',editor_id:'editor-1',revision:0,
+  const command={kind:'article_editor',expires_in_ms:60_000,operation:'summary',editor_id:'editor-1',revision:0,
     description:'新概述',task_id:'task',command_id:'summary'};
   const observed={editor_id:'editor-1',revision:1,outcome:'updated'};
   f.storage.set('saudade-browser-action-pending',JSON.stringify({...command,document:observed,

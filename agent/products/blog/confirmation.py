@@ -47,6 +47,22 @@ def cancel(runtime, grant, config):
                 "reply": result.reply}
 
 
+def _article_ids(specs):
+    identifiers = set()
+    for spec in specs:
+        args = spec.get("args") if isinstance(spec, dict) else None
+        if not isinstance(args, dict):
+            continue
+        candidates = [args.get("article_id")]
+        if spec.get("tool") in {"delete_articles", "set_article_status_batch",
+                                "set_article_tags_batch"}:
+            items = args.get("items")
+            candidates.extend(item.get("id") for item in (items if isinstance(items, list) else [])
+                              if isinstance(item, dict))
+        identifiers.update(value for value in candidates if type(value) is int and value > 0)
+    return sorted(identifiers)
+
+
 def public_card(execution):
     """Project display fields and the original grant; never expose specs or graph state."""
     popup = execution.get("pending_confirm")
@@ -54,13 +70,16 @@ def public_card(execution):
         return None
     identifier = ((execution.get("pending_action") or {}).get("task_id")
                   or hashlib.sha256(str(popup.get("token", "")).encode()).hexdigest()[:16])
+    article_ids = _article_ids(popup.get("specs") or [])
     return {
         "id": identifier, "q": popup.get("q", ""),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
         "exp": popup.get("exp") or 0, "server_time": int(time.time()),
         **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),
         "replay_safe": popup.get("replay_safe") is True,
-        **({"image_review": popup["image_review"]} if "image_review" in popup else {})}
+        **({"article_ids_to_refresh": article_ids} if article_ids else {}),
+        **({"image_review": popup["image_review"]} if "image_review" in popup else {}),
+        **({"cover_review": popup["cover_review"]} if "cover_review" in popup else {})}
 
 
 def current_card(runtime, principal, cid, task_id):

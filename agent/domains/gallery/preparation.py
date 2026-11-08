@@ -1,7 +1,6 @@
 """Prepare image metadata and article covers from server-owned versions."""
 
 from typing import Literal
-from urllib.parse import quote
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -61,14 +60,17 @@ def _question(request, current):
 @tool(return_direct=True)
 def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig) -> object:
     """Prepare one confirmation for an atomic change to 1-100 fixed gallery images.
-    Use IDs from get_gallery_index. move needs imageIds and folderId (0=unclassified);
+    Use IDs supplied by the user or get_gallery_index; the backend validates them.
+    move needs imageIds and folderId (0=unclassified);
     favorite needs imageIds and isFavorite; delete needs imageIds and refuses referenced
     images. Deletion removes gallery records and queues storage cleanup, not immediate
     physical erasure. metadata takes items of imageId/changes: displayName, description,
     folderId, isFavorite; empty description clears it. Changes can differ per image.
     Maximum intent is 8192 UTF-8 bytes. Names preserve URLs and article references.
     This read-only preparation freezes the full selection and versions; nothing changes
-    until approval. Do not split a batch into repeated per-image calls.
+    until approval. An explicit request for a review card also accepts unchanged targets;
+    an already-satisfied state does not replace that requested preview.
+    Do not split a batch into repeated per-image calls.
     """
     check_cancelled(config)
     if not available(config):
@@ -102,12 +104,13 @@ def prepare_article_cover(
     article_id: Identifier,
     image_id: Identifier,
     config: RunnableConfig,
-    fit: Literal["contain", "cover"] = "contain",
+    fit: Literal["contain", "cover"] = "cover",
 ) -> object:
     """Prepare confirmation to use an indexed gallery image as an article's cover.
     First choose an image_id from get_gallery_index, using filename/description; call
     get_gallery_image only when visual details matter. contain shows the complete image;
-    cover fills/crops it. This changes the cover in the article and any saved editing draft,
+    cover (default) fills/crops it. The card previews the card, carousel and detail layouts.
+    This changes the cover in the article and any saved editing draft,
     preserving text, title and publication state. Published articles update immediately
     after confirmation; current unsaved browser edits remain subject to version checks.
     """
@@ -124,7 +127,7 @@ def prepare_article_cover(
     target = "文章《" + sanitize_untrusted(current["title"], 120) + "》的封面"
     name = sanitize_untrusted(image["displayName"] or image["imageUrl"].rsplit("/", 1)[-1], 120)
     shown = "完整显示" if fit == "contain" else "铺满裁切"
-    return proposal(
+    card = proposal(
         principal,
         cid,
         "article_cover",
@@ -140,14 +143,17 @@ def prepare_article_cover(
             },
         },
         executor="gallery",
-        question=(
-            f"确认将“{name}”设为{target}（{shown}）？\n\n"
-            + "![候选封面]("
-            + quote(image["imageUrl"], safe="/:%?=&")
-            + ")"
-        ),
+        question=f"确认将“{name}”设为{target}（{shown}）？",
         target=target,
     )
+    if not getattr(card, "execution", None):
+        return card
+    from agent.runtime.results import TurnResult
+
+    execution = card.execution
+    review = {"image_id": image_id, "name": name, "url": image["imageUrl"], "fit": fit}
+    return TurnResult(card.reply, {**execution, "pending_confirm": {
+        **execution["pending_confirm"], "cover_review": review}})
 
 
 def tools(read_tools):

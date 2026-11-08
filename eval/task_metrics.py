@@ -65,6 +65,14 @@ def _identity(doc, events):
     return source, uid, role, cid, ids.pop()
 
 
+def _provider_accounting(totals, history_complete):
+    return {"provider_usage_complete": bool(history_complete
+                and (usage.complete(totals) or totals["calls"] == 0
+                     and totals["unknown_attempts"] == 0)),
+            **{name: value if history_complete else None
+               for name, value in usage.provider_costs(totals).items()}}
+
+
 def _task(key, attempts):
     attempts.sort(key=lambda row: (row["start"] is None, row["start"] or 0, row["trace_id"]))
     totals = usage.empty()
@@ -85,6 +93,8 @@ def _task(key, attempts):
     clocks = {row["clock"] for row in attempts}
     durations = [row["duration"] for row in attempts if row["duration"] is not None]
     latest = attempts[-1]
+    call_history_complete = (complete and previous is not None
+                             and previous["model_calls"] == totals["calls"])
     # Cumulative reservations are a separate accounting basis, never added to
     # provider usage or labelled as provider charges.
     return {"source": key[0], "user_id": key[1], "role": key[2], "conversation_id": key[3],
@@ -101,11 +111,8 @@ def _task(key, attempts):
             "budget_history_complete": complete, "budget_snapshots": snapshots,
             "budget_spent": _spent(latest["snapshot"].get("spent")) if latest["snapshot"] else None,
             "observed_usage_complete": usage.complete(totals),
-            "provider_usage_complete": bool(complete and previous is not None
-                and previous["model_calls"] == totals["calls"]
-                and (usage.complete(totals) or previous["model_calls"] == 0
-                     and totals["unknown_attempts"] == 0)),
-            "cache_hit_rate": usage.hit_rate(totals), **totals}
+            "cache_hit_rate": usage.hit_rate(totals),
+            **_provider_accounting(totals, call_history_complete), **totals}
 
 
 def collect(paths):

@@ -5,7 +5,7 @@ import json
 from langchain_core.messages import ToolMessage, trim_messages
 from langgraph.types import Command
 
-from agent.runtime import memory, tool_evidence
+from agent.runtime import memory, tool_evidence, tool_state
 from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import estimate_tokens, text_content
@@ -52,16 +52,20 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     record("native", "tool_requested", name=name, call_id=call["id"])
     if name in session.loaders:
         domain = session.loaders[name]
+        already = domain in tool_state.loaded(session)
         record("native", "tool_discovery", domain=domain, round=round_index,
-               already_loaded=domain in session.state["loaded"])
-        if domain not in session.state["loaded"]:
-            session.tools.update(session.domains[domain])
-            session.state["loaded"].append(domain)
-            emit(session.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
-            record("native", "load_domain", domain=domain, call_id=call["id"])
-            session.refresh_menu()
-        prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
-                                  name=name, tool_call_id=call["id"]))
+               already_loaded=already)
+        reason = tool_state.activate(session, domain, prompt)
+        if reason:
+            prompt.append(ToolMessage(content=json.dumps({"status": "not_loaded",
+                "domain": domain, "reason": reason}), status="error",
+                name=name, tool_call_id=call["id"]))
+        else:
+            if not already:
+                emit(session.config, f"正在加载工具领域：{domain}", key=f"domain:{domain}")
+                record("native", "load_domain", domain=domain, call_id=call["id"])
+            prompt.append(ToolMessage(content=f"{domain} 工具已加载。",
+                                      name=name, tool_call_id=call["id"]))
         return None
     if name not in session.execution_tools:
         reason = "unknown_tool"

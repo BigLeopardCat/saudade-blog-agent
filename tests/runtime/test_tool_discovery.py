@@ -30,7 +30,7 @@ def test_authorized_tool_executes_before_discovery_without_autoactivating_its_sc
     observation = next(m for m in model.prompts[1] if isinstance(m, ToolMessage))
     assert observation.status == "success" and observation.content == "fixture fact"
     assert result.reply == "done" and reads == [True]
-    assert session.state["loaded"] == []
+    assert session.state["tool_domains"]["domains"] == []
     assert [tool["function"]["name"] for tool in session.menu] == ["load_fixture_info_tools"]
 
 

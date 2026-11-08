@@ -106,7 +106,7 @@ def names(menu):
     return [item["function"]["name"] for item in menu]
 
 
-def test_real_two_turn_followup_keeps_one_completed_read_schema_without_carrying_its_domain(
+def test_real_two_turn_followup_keeps_the_activated_domain_without_schema_replacement(
     capabilities,
 ):
     catalog, reads = capabilities
@@ -125,15 +125,15 @@ def test_real_two_turn_followup_keeps_one_completed_read_schema_without_carrying
     assert len(followup.prompts) == 2 and reads == [
         ("public", "看板娘"), *(("public", word) for word in keywords)]
     assert {"find_activity", "inspect_activity"} <= set(names(first.menus[-1]))
-    assert names(followup.menus[0]) == [*names(first.menus[0]), "find_activity"]
-    assert "inspect_activity" not in names(followup.menus[0])
+    assert followup.menus[0] == first.menus[-1]
+    assert "inspect_activity" in names(followup.menus[0])
     assert followup.menus[0] == followup.menus[-1]
     answers = [message for message in followup.prompts[-1]
                if isinstance(message, ToolMessage) and message.tool_call_id.startswith("query-")]
     assert len(answers) == 4 and all(message.status == "success" for message in answers)
 
 
-def test_unshown_cached_read_name_executes_from_current_catalog_without_a_recent_hint(capabilities):
+def test_explicit_domain_activation_survives_even_without_reading(capabilities):
     catalog, reads = capabilities
     saver = InMemorySaver()
     first = Script(responses=[
@@ -141,13 +141,13 @@ def test_unshown_cached_read_name_executes_from_current_catalog_without_a_recent
         AIMessage(content="工具已加载，尚未检索。")])
     selected = runtime(saver, first, catalog)
     run(selected, "先查看公开检索的能力")
-    assert selected.store.load(config()).recent_read is None and not reads
+    assert selected.store.load(config()).tool_domains["domains"] and not reads
     assert "find_activity" in names(first.menus[-1])
     followup = Script(responses=[
         AIMessage(content="", tool_calls=[call("find_activity", "cached", query="猫咪")]),
         AIMessage(content="已找到。")])
     assert run(runtime(saver, followup, catalog)).reply == "已找到。"
-    assert "find_activity" not in names(followup.menus[0])
+    assert "find_activity" in names(followup.menus[0])
     assert len(followup.prompts) == 2 and reads == [("public", "猫咪")]
     assert any(isinstance(message, ToolMessage) and message.tool_call_id == "cached"
                and message.status == "success" for message in followup.prompts[-1])

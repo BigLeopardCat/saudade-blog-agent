@@ -207,7 +207,7 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     assert len(backend["requests"]) == 1
 
 
-def test_account_lookup_and_history_restore_do_not_load_article_preparations(backend):
+def test_account_lookup_retains_its_domain_without_loading_article_preparations(backend):
     from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
     from langchain_core.utils.function_calling import convert_to_openai_tool
     from langgraph.checkpoint.memory import InMemorySaver
@@ -251,7 +251,10 @@ def test_account_lookup_and_history_restore_do_not_load_article_preparations(bac
     assert "prepare_account_role" not in model.used_menus[0]
     assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
     assert "list_accounts" in model.used_menus[-1]
-    assert "prepare_account_role" not in model.used_menus[-1]
+    assert model.used_menus[-1] == model.used_menus[-2]
+    assert "prepare_account_role" in model.used_menus[-1]
+    assert [item["domain"] for item in runtime.store.load(cfg).tool_domains["domains"]] == [
+        "admin_account_actions"]
     assert all(not {"list_admin_notes", "prepare_article_state", "prepare_article_tags"} & menu
                for menu in model.menus)
     fact = next(message for message in model.prompts[-1] if isinstance(message, ToolMessage))

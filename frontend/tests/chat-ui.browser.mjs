@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
-import { assertImageReview, assertWorkRecovery } from './chat-image-review.browser.mjs';
+import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -117,14 +117,14 @@ const server = createServer(async (req, res) => {
         if (mode === 'appearance') {
           res.end(frame('command', {kind:'appearance', settings:{dark_mode:'on',rain:'off'},
             task_id:body.task_id, command_id:'offline-appearance',timeout_ms:1000,
-            expires_at:Date.now()/1000+60}) + frame('done',{}));
+            expires_in_ms:60_000,expires_at:Date.now()/1000+60}) + frame('done',{}));
           return;
         }
         if (mode === 'navigate') {
           res.end(frame('progress', '正在调用工具：navigate_page') + frame('command', {
             kind: 'navigate', mode: 'direct', url: new URL('/guestbook', 'http://' + req.headers.host).href,
             path: '/guestbook', task_id: body.task_id, command_id: 'offline-navigation', timeout_ms: 1000,
-            expires_at: Date.now() / 1000 + 60,
+            expires_in_ms:60_000,expires_at: Date.now() / 1000 + 60,
           }) + frame('done', {}));
           return;
         }
@@ -164,6 +164,7 @@ const server = createServer(async (req, res) => {
             replay_safe: mode === 'confirmation-resumable',
             q: mode === 'confirmation-images' ? 'fixture-images' : next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
+            article_ids_to_refresh: mode === 'confirmation-select' ? [] : [23,54],
             exp: Math.floor(Date.now() / 1000) + 600,
             server_time: Math.floor(Date.now() / 1000),
             opts: mode === 'confirmation-select' ? [
@@ -271,7 +272,11 @@ try {
   });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
     permissions: ['clipboard-read', 'clipboard-write'], reducedMotion: 'reduce' });
-  await context.addInitScript(() => { localStorage.clear(); sessionStorage.clear(); });
+  await context.addInitScript(() => {
+    localStorage.clear(); sessionStorage.clear();
+    window.__articleInvalidations=[];
+    addEventListener('agent-turn-done', event=>window.__articleInvalidations.push(event.detail));
+  });
   const page = await context.newPage();
   page.setDefaultTimeout(8000);
   const errors = [];
@@ -660,6 +665,7 @@ try {
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
   await assertImageReview({page,origin});
+  await assertCoverReview({page});
   await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
@@ -922,6 +928,8 @@ try {
   assert.equal(page.url(), beforeLiteral);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk ?? null), null);
   assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.items.filter(i => i.type === 'agent').at(-1).text), literal);
+  assert.deepEqual(await page.evaluate(()=>window.__articleInvalidations.at(-1)),
+    {confirmationAttempted:false,articleIdsToRefresh:[]});
   passed('literal command and confirmation prefixes render as text without actions');
 
   await send('批量删除三项待办', 'confirmation-select');
@@ -990,6 +998,8 @@ try {
   assert.equal(continuation.message, '');
   assert.ok(!continuation.confirm_token, 'Continue must not resend an approval');
   assert.equal(await page.locator('#chat-ask.active').count(), 0);
+  assert.deepEqual(await page.evaluate(()=>window.__articleInvalidations.at(-1)),
+    {confirmationAttempted:true,articleIdsToRefresh:[23,54]});
   passed('continuing a stopped confirmation settles its card without another approval');
 
   await reset();

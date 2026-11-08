@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import math
 import time
 
 from langchain_core.tools import ToolException
@@ -42,11 +43,17 @@ def await_result(command, config):
     return {**result, "status": status}
 
 
+def outgoing_command(command):
+    # Server expiry is authoritative; browsers have independent wall clocks.
+    remaining_ms = math.ceil((command["expires_at"] - time.time()) * 1000)
+    return {**command, "expires_in_ms": max(0, remaining_ms)}
+
+
 def paused_result(update):
     for interruption in update.get("__interrupt__", ()):
         value = interruption.value
         if isinstance(value, dict) and value.get("kind") == "client_action":
-            return TurnResult("", {"client_action": value["command"]})
+            return TurnResult("", {"client_action": outgoing_command(value["command"])})
     return None
 
 
@@ -98,7 +105,7 @@ def resume_value(snapshot, task_id, config):
     command = pending["command"]
     if value is None:
         if time.time() <= command["expires_at"]:
-            return TurnResult("", {"client_action": command})
+            return TurnResult("", {"client_action": outgoing_command(command)})
         value = {"command_id": command["command_id"], "status": "timeout",
                  "error": "browser_ack_expired"}
     if (

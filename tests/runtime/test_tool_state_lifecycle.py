@@ -108,7 +108,7 @@ def names(request):
 
 
 @pytest.mark.parametrize("trimmed", [False, True])
-def test_new_task_keeps_one_committed_read_schema_after_history_compaction(
+def test_new_task_keeps_activation_order_after_history_compaction(
         setup, trimmed, monkeypatch):
     runtime, _, calls = setup
     first = Model(call("load_beta_info_tools"), call("load_alpha_info_tools"),
@@ -134,13 +134,13 @@ def test_new_task_keeps_one_committed_read_schema_after_history_compaction(
     after = Model(AIMessageChunk(content="Follow-up complete."))
     assert turn(runtime(after), "Continue.").reply == "Follow-up complete."
     assert names(after.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta", "read_alpha"]
     assert "read_alpha" in names(first.requests[-1]) and "read_beta" in names(first.requests[-1])
     assert calls == ["beta"]
     if trimmed:
-        source = selected.store.load(config()).recent_read["turn_id"]
+        source = selected.store.load(config()).tool_domains["domains"][0]["turn_id"]
         assert checkpoint.drop_last_user_turn(selected, 42, source)["dropped"]
-        assert selected.store.load(config()).recent_read is None
+        assert selected.store.load(config()).tool_domains["domains"] == []
 
 
 @pytest.mark.parametrize("has_explicit_state", [False, True])
@@ -156,7 +156,7 @@ def test_historical_observations_do_not_activate_domains(setup, has_explicit_sta
     model = Model(AIMessageChunk(content="No read requested."))
     turn(runtime(model), "Just chat.")
     assert "read_alpha" not in names(model.requests[0])
-    assert "read_beta" not in names(model.requests[0])
+    assert ("read_beta" in names(model.requests[0])) is has_explicit_state
     assert any(m["type"] == "tool" for m in model.requests[0]["messages"])
     assert calls == []
 
@@ -209,21 +209,22 @@ def test_catalog_removal_rechecks_loaded_domains(setup):
     assert names(model.requests[0]) == ["load_alpha_info_tools"]
 
 
-def test_large_completed_task_cannot_enlarge_the_next_task_menu(setup):
+def test_inherited_domains_exceeding_budget_stop_before_model_without_eviction(setup):
     runtime, domains, _ = setup
     domains["beta"]["read_beta"].description = "Large domain description. " * 1500
-    first = Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))
-    turn(runtime(first))
-    model = Model(AIMessageChunk(content="New task fits."))
+    selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready.")))
+    turn(selected)
+    saved = selected.store.load(config()).tool_domains
+    model = Model(AIMessageChunk(content="Must not call."))
     budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))
     with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
-    assert result.reply == "New task fits."
-    assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
-    assert budget.model_calls == 1 and budget.tokens <= budget.limits.task_tokens
+    assert result.execution["blocked"][0]["reason"] == "context_tokens"
+    assert not model.requests and budget.model_calls == 0 and budget.tokens == 0
+    assert selected.store.load(config()).tool_domains == saved
 
 
-def test_history_compaction_does_not_reactivate_completed_task_tools(setup):
+def test_history_compaction_preserves_explicit_tool_activation(setup):
     runtime, _, _ = setup
     turn(runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready."))))
     selected = runtime(Model(AIMessageChunk(content="Short answer.")))
@@ -237,25 +238,23 @@ def test_history_compaction_does_not_reactivate_completed_task_tools(setup):
     with budget_scope(budget):
         result = turn(runtime(model), "Short follow-up.")
     assert result.reply == "Current tools stay loaded."
-    assert "read_beta" not in names(model.requests[0])
+    assert "read_beta" in names(model.requests[0])
 
 
 
-def test_completed_domain_fits_one_call_but_cannot_exhaust_a_multistep_new_task(setup):
+def test_retained_schemas_count_against_the_multistep_task_budget(setup):
     runtime, domains, calls = setup
     domains["alpha"]["read_alpha"].description = "Large completed domain. " * 140
     turn(runtime(Model(call("load_alpha_info_tools"), AIMessageChunk(content="Ready."))))
     model = Model(call("load_beta_info_tools"), call("read_beta"),
-                  AIMessageChunk(content="Beta fact confirmed."))
+                  AIMessageChunk(content="Must not reach."))
     budget = TaskBudget(BudgetLimits(context_tokens=2500, task_tokens=2400))
     with budget_scope(budget):
         result = turn(runtime(model), "Read beta and answer.")
-    assert result.reply == "Beta fact confirmed." and calls == ["beta"]
-    assert len(model.requests) == 3 and budget.model_calls == 3
-    assert not any("read_alpha" in names(request) for request in model.requests)
-    assert "read_beta" in names(model.requests[1])
-    assert model.requests[1]["tools"] == model.requests[2]["tools"]
-    assert budget.tokens <= budget.limits.task_tokens
+    assert result.execution["blocked"][0]["reason"] == "task_tokens"
+    assert calls == ["beta"] and budget.tokens <= budget.limits.task_tokens
+    assert len(model.requests) == budget.model_calls == 2
+    assert all("read_alpha" in names(request) for request in model.requests)
 
 
 def test_loading_another_domain_preserves_current_task_tools_until_completion(setup):
@@ -270,37 +269,166 @@ def test_loading_another_domain_preserves_current_task_tools_until_completion(se
     following = Model(AIMessageChunk(content="Next task."))
     turn(runtime(following))
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta", "read_alpha"]
 
 
-def test_over_budget_read_hint_is_preserved_and_reappears_when_it_fits(setup):
+def test_over_budget_saved_domains_remain_available_for_a_larger_request(setup):
     runtime, domains, _ = setup
     domains["beta"]["read_beta"].description = "Large read schema. " * 1500
     selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"),
                              AIMessageChunk(content="Read complete.")))
     turn(selected)
-    hint = selected.store.load(config()).recent_read
-    model = Model(AIMessageChunk(content="Small request."))
+    saved = selected.store.load(config()).tool_domains
+    model = Model(AIMessageChunk(content="Must not call."))
     with budget_scope(TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))):
-        turn(runtime(model), "Just chat.")
-    assert "read_beta" not in names(model.requests[0])
-    assert selected.store.load(config()).recent_read == hint
+        result = turn(runtime(model), "Just chat.")
+    assert result.execution["blocked"] and not model.requests
+    assert selected.store.load(config()).tool_domains == saved
     restored = Model(AIMessageChunk(content="Larger request budget."))
     turn(runtime(restored), "Continue.")
     assert "read_beta" in names(restored.requests[0])
 
 
-def test_discarded_child_read_does_not_replace_the_last_committed_hint(setup):
+def test_discarded_child_activation_does_not_replace_the_committed_domains(setup):
     runtime, _, calls = setup
     turn(runtime(Model(call("load_alpha_info_tools"), call("read_alpha"),
                        AIMessageChunk(content="Alpha committed."))))
     selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"), AgentCancelled()))
     with pytest.raises(AgentCancelled):
         turn(selected, turn_id="discarded-child", task_id="discarded-run")
-    assert selected.store.load(config()).recent_read["tool_name"] == "read_alpha"
+    assert [item["domain"] for item in selected.store.load(config()).tool_domains["domains"]] == [
+        "alpha"]
     assert checkpoint.drop_last_user_turn(selected, 42, "discarded-child")["dropped"]
     model = Model(AIMessageChunk(content="Fresh task."))
     turn(runtime(model), "Start a fresh task.")
     assert names(model.requests[0]) == [
         "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
     assert calls == ["alpha", "beta"]
+
+
+def test_multiple_direct_reads_activate_domains_once_in_call_order_and_survive_rebuild(setup):
+    runtime, _, calls = setup
+    model = Model(AIMessageChunk(content="", tool_calls=[
+        {"name": "read_beta", "id": "b", "args": {}},
+        {"name": "read_alpha", "id": "a", "args": {}}]),
+        call("read_beta"), AIMessageChunk(content="Both read."))
+    selected = runtime(model)
+    turn(selected, turn_id="direct-batch")
+    assert calls == ["beta", "alpha", "beta"]
+    assert names(model.requests[1])[-2:] == ["read_beta", "read_alpha"]
+    assert model.requests[1]["tools"] == model.requests[2]["tools"]
+    assert selected.store.load(config()).tool_domains["domains"] == [
+        {"domain": "beta", "turn_id": "direct-batch"},
+        {"domain": "alpha", "turn_id": "direct-batch"}]
+    following = Model(AIMessageChunk(content="Follow-up."))
+    turn(runtime(following))
+    assert following.requests[0]["tools"] == model.requests[-1]["tools"]
+
+
+def test_discard_removes_only_domains_first_activated_in_the_discarded_turn(setup):
+    runtime, _, _ = setup
+    selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="First.")))
+    turn(selected, turn_id="retained")
+    turn(runtime(Model(call("load_alpha_info_tools"), call("load_beta_info_tools"),
+                       AIMessageChunk(content="Second."))), turn_id="removed")
+    assert checkpoint.drop_last_user_turn(selected, 42, "removed")["dropped"]
+    assert selected.store.load(config()).tool_domains["domains"] == [
+        {"domain": "beta", "turn_id": "retained"}]
+    following = Model(AIMessageChunk(content="Rebuilt."))
+    turn(runtime(following))
+    assert names(following.requests[0]) == [
+        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+
+
+def test_explicit_load_over_budget_has_error_receipt_and_no_partial_activation(setup):
+    import json
+
+    runtime, domains, calls = setup
+    domains["beta"]["read_beta"].description = "Oversized domain schema. " * 1500
+    model = Model(call("load_beta_info_tools"), AIMessageChunk(content="Domain could not load."))
+    selected = runtime(model)
+    budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=10000))
+    with budget_scope(budget):
+        result = turn(selected)
+    assert result.reply == "Domain could not load." and not calls
+    assert model.requests[0]["tools"] == model.requests[1]["tools"]
+    response = next(m for m in model.requests[1]["messages"] if m["type"] == "tool")
+    assert response["status"] == "error"
+    assert json.loads(response["content"]) == {
+        "status": "not_loaded", "domain": "beta", "reason": "context_tokens"}
+    assert selected.store.load(config()).tool_domains["domains"] == []
+    assert budget.reason is None and budget.model_calls == 2
+
+
+def test_direct_read_keeps_facts_when_domain_activation_is_over_budget(setup, monkeypatch):
+    from agent.runtime import tool_state
+
+    runtime, domains, calls = setup
+    events = []
+    monkeypatch.setattr(tool_state, "record", lambda *args, **kwargs: events.append((args, kwargs)))
+    domains["beta"]["read_beta"].description = "Oversized domain schema. " * 1500
+    model = Model(call("read_beta"), AIMessageChunk(content="Beta fact."))
+    selected = runtime(model)
+    with budget_scope(TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=10000))):
+        result = turn(selected)
+    assert result.reply == "Beta fact." and calls == ["beta"]
+    assert model.requests[0]["tools"] == model.requests[1]["tools"]
+    response = next(m for m in model.requests[1]["messages"] if m["type"] == "tool")
+    assert response["status"] == "success" and response["content"] == "Beta fact."
+    assert response["artifact"]["kind"] == "ok"
+    assert response["artifact"]["domain_activation"] == {
+        "domain": "beta", "status": "rejected", "reason": "context_tokens"}
+    assert selected.store.load(config()).tool_domains["domains"] == []
+    assert events == [(("native", "tool_domain_activation_rejected"),
+                       {"domain": "beta", "reason": "context_tokens"})]
+    larger = Model(call("read_beta"), AIMessageChunk(content="Read with a larger budget."))
+    turn(runtime(larger))
+    assert "read_beta" in names(larger.requests[-1])
+
+
+def test_partial_direct_batch_recovers_both_activations_without_repeating_reads(setup):
+    runtime, _, calls = setup
+    first = Model(AIMessageChunk(content="", tool_calls=[
+        {"name": "read_beta", "id": "b", "args": {}},
+        {"name": "read_alpha", "id": "a", "args": {}}]), AgentCancelled())
+    selected = runtime(first)
+    with pytest.raises(AgentCancelled):
+        turn(selected, task_id="direct-recovery", turn_id="batch-origin")
+    assert selected.store.load(config()).tool_domains is None
+    rebuilt = Model(AIMessageChunk(content="Recovered both reads."))
+    list(runtime(rebuilt).stream_events({"resume_task": "direct-recovery"}, config()))
+    assert calls == ["beta", "alpha"]
+    assert rebuilt.requests[0] == first.requests[-1]
+    assert selected.store.load(config()).tool_domains["domains"] == [
+        {"domain": "beta", "turn_id": "batch-origin"},
+        {"domain": "alpha", "turn_id": "batch-origin"}]
+
+
+def test_deleted_conversation_removes_tool_metadata_and_cannot_resume_it(setup):
+    from agent.runtime import checkpoint_store
+
+    runtime, _, _ = setup
+    selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Loaded.")))
+    turn(selected)
+    assert selected.store.load(config()).tool_domains["domains"]
+    assert checkpoint.delete_thread(selected.saver, 42)
+    assert selected.store.load(config()).tool_domains is None
+    with pytest.raises(checkpoint_store.ConversationDeleted):
+        checkpoint_store.require_active(selected.saver, "conv_42")
+
+
+@pytest.mark.parametrize("kind", ["ok", "empty", "unavailable"])
+def test_only_successful_direct_reads_activate_their_domain(setup, monkeypatch, kind):
+    from tools import result as tool_result
+
+    runtime, domains, _ = setup
+    monkeypatch.setattr(domains["beta"]["read_beta"], "func",
+                        lambda: getattr(tool_result, kind)("Synthetic source outcome."))
+    model = Model(call("read_beta"), AIMessageChunk(content="Source outcome reported."))
+    selected = runtime(model)
+    turn(selected)
+    actual = selected.store.load(config()).tool_domains["domains"]
+    assert bool(actual) is (kind in {"ok", "empty"})
+    response = next(m for m in model.requests[-1]["messages"] if m["type"] == "tool")
+    assert response["status"] == ("error" if kind == "unavailable" else "success")
+    assert response["content"] == "Synthetic source outcome."
