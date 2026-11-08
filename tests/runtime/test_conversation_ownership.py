@@ -1,6 +1,7 @@
 """Conversation ownership precedes framework state access and execution authority."""
 
 import asyncio
+import secrets
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from threading import Barrier
@@ -37,7 +38,8 @@ def test_foreign_actor_cannot_read_modify_resume_confirm_or_delete(operation):
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
     selected.update_state(config(), {"messages": [HumanMessage(content="PRIVATE_CANARY")],
-        "pending_action": {"jti": "waiting"}, "pending_confirm": {"token": "private-card"}})
+        "pending_action": {"jti": "waiting"},
+        "pending_confirm": {"token": secrets.token_urlsafe(24)}})
     before = deepcopy((saver.storage, saver.writes))
     foreign = config(FOREIGN)
     operations = {

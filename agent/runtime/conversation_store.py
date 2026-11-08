@@ -5,6 +5,7 @@ Reads without a committed checkpoint may run again; business writes remain owned
 by the independent execution ledger.
 """
 
+import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from typing import Any, Protocol, TypedDict
@@ -16,8 +17,6 @@ class ConversationAccessDenied(PermissionError):
 
 def owned_config(config):
     """Bind framework checkpoint metadata to the verified actor, never caller metadata."""
-    import re
-
     from agent.checkpoint import conversation_thread
     from agent.runtime import task_scope
 
@@ -130,7 +129,9 @@ class ConversationStore(Protocol):
         """Clear the matching card and append its optional facts in the same commit."""
         ...
 
-    def guard(self, config, *, timeout=60) -> AbstractContextManager: ...
+    def guard(self, config, *, timeout=60) -> AbstractContextManager:
+        """Yield the actor-bound config while serializing a conversation mutation."""
+        ...
 
     def is_resuming(self, config) -> bool: ...
 
