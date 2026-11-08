@@ -157,6 +157,7 @@ def prepare_article_cover(
         preparation_facts={
             "article_id": current["articleId"], "article_title": article_title,
             "image_id": image["imageKey"], "image_name": name, "fit": fit,
+            "preview_layouts": ["article_card", "home_carousel", "article_banner"],
             "preview_delivery": "confirmation_card", "preview_before_approval": True,
             "preparation_inspects_pixels": False,
         },
