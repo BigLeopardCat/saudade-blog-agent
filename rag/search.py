@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 BM25_K1 = 1.2
 BM25_B = 0.75
 
-REFRESH_TTL = 600.0  # 10 分钟懒刷新
+REFRESH_TTL = 600.0
 
 
 def candidate_limit(top_k: int) -> int:
@@ -131,12 +131,10 @@ class RagIndex:
         self._dirty = False
         self._invalidations = 0
         self._docs: list[dict] = []
-        self._chunks: list[dict] = []      # {doc_idx, type, id, title, section, text}
+        self._chunks: list[dict] = []
         self._vector_chunk_cache: tuple | None = None
         self._lexical: LexicalIndex | None = None
         self._last_build = 0.0
-
-    # ── 构建 ──────────────────────────────────────────────────────
 
     def build(self) -> bool:
         if not self._build_lock.acquire(blocking=False):
@@ -237,8 +235,6 @@ class RagIndex:
         """Report whether the snapshot is dirty, missing or past its refresh TTL."""
         return self._dirty or not self._last_build or time.time() - self._last_build > REFRESH_TTL
 
-    # ── 查询 ──────────────────────────────────────────────────────
-
     def _lexical_ranked(self, query: str, top_k: int, *,
                         article_id: int | None = None) -> list[dict] | None:
         """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
@@ -271,13 +267,10 @@ class RagIndex:
             if chunk["type"] == "note" and chunk["id"] == article_id]
         scores = lexical.scores(q_toks, allowed_indices=allowed)
         # Document score is its strongest matching chunk; retain section locations.
-        ranked = rank_documents(chunks, scores, revision)
-        ranked = ranked[:max(1, top_k)]
+        ranked = rank_documents(chunks, scores, revision, query_terms=q_toks, limit=top_k)
         for r in ranked:
             r["score"] = round(r["score"], 4)
         return ranked
-
-    # ── 编排──────────────────────────
 
     def search(self, query: str, top_k: int = DEFAULT_TOP_K, *,
                article_id: int | None = None) -> list[dict] | None:
@@ -320,7 +313,6 @@ class RagIndex:
                        article_id: int | None = None) -> tuple[list[dict], str | None, int]:
         """Return document candidates, degradation reason and missing-vector count."""
         if not is_enabled():
-            # 开关关着、或凭据没配全（`degraded_reason()` 分得清这两件事，见它自己的注）
             return [], (degraded_reason() if settings.rag_hybrid_enabled else None), 0
         with self._lock:
             chunks = self._chunks
@@ -334,7 +326,7 @@ class RagIndex:
         store.load()
         view = store.view_for(corpus_fingerprint(space, chunks))
         if view is None:
-            self._warm_vectors(chunks)    # 后台补建/补齐；本轮不阻塞、不等它
+            self._warm_vectors(chunks)
             return [], degraded_reason() or "no_vectors", len(store.missing())
         if len(view) != len(chunks):
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",
@@ -359,7 +351,8 @@ class RagIndex:
             logger.warning("PostgreSQL vector query is unavailable")
             store.record_failure()
             return [], "vector_database_unavailable", len(store.missing())
-        ranked = rank_documents(chunks, scores, revision)[:max(1, top_k)]
+        ranked = rank_documents(chunks, scores, revision, retriever="vector",
+                                query_terms=tokenize(query), limit=top_k)
         for r in ranked:
             r["score"] = round(r["score"], 4)
         return ranked, (None if ranked else "no_vector_hits"), len(store.missing())

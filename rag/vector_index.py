@@ -23,6 +23,7 @@ from rag.embedding_inputs import (
     vector_chunks,
 )
 from rag.postgres import PostgresRepository, Snapshot
+from rag.ranking import merge_match
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +96,10 @@ def _merge_locations(target, row, arm):
                     or type(end) is not int or end <= start):
                 continue
             key = (start, end)
-            location["matches"].setdefault(key, dict(match))
+            if key in location["matches"]:
+                merge_match(location["matches"][key], match)
+            else:
+                location["matches"][key] = dict(match)
             if key not in location["ranks"][arm]:
                 location["ranks"][arm].append(key)
     return ranks
@@ -151,8 +155,6 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
                     "matches": matches[:max(3, len(locations))]})
     return out
 
-
-# ── embedding 客户端（OpenAI 兼容；供应商不进代码）──────────────────────
 
 _client = None
 _client_sig: tuple | None = None
@@ -434,8 +436,6 @@ class VectorStore:
         return {**stats, "fingerprint": fingerprint, "missing": len(failed),
                 "dim": dimension, "ok": complete}
 
-
-# ── 进程级单例 + 查询侧 ───────────────────────────────────────────────
 
 _store: VectorStore | None = None
 _store_lock = threading.Lock()
