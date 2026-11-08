@@ -45,7 +45,6 @@ class FrameworkExecution:
     def __init__(self, session, prompt):
         self.session = session
         self.config = {**(session.config or {}), "max_concurrency": 2,
-                       "recursion_limit": session.budget.limits.model_calls * 6 + 12,
                        "callbacks": [*((session.config or {}).get("callbacks") or []),
                                      session.stream_guard]}
         self.config["configurable"] = {**self.config.get("configurable", {}),
@@ -62,6 +61,9 @@ class FrameworkExecution:
                         "resume": None}
         self.persistent = bool(session.store and session.store.available)
         self.child = self._agent(self.persistent)
+        # Middleware adds framework steps without spending another model call.
+        self.config["recursion_limit"] = (
+            len(self.child.get_graph().nodes) * (session.budget.limits.model_calls + 1))
         self.parent = self._parent(self.child) if self.persistent else None
         self.recovery_state = None
 
