@@ -89,13 +89,20 @@ def _reduce(session, protected):
     return released
 
 
+def _schema_tokens(session, names=None):
+    """Measure mutable schemas; the complete request budget includes the fixed catalog."""
+    fixed = session.initial_names | session.loaders.keys()
+    return count_tokens_approximately([], tools=[schema for schema in session.menu
+        if schema["function"]["name"] not in fixed
+        and (names is None or schema["function"]["name"] in names)])
+
+
 def _warm(session):
-    """Retain inherited domains only when the complete menu fits the soft target."""
-    keep, names = set(), session.initial_names | session.loaders.keys()
+    """Retain recently used domain schemas within their own soft target."""
+    keep, names = set(), set()
     for domain in reversed(loaded(session)):
         proposed = names | session.domains[domain].keys()
-        menu = [s for s in session.menu if s["function"]["name"] in proposed]
-        if count_tokens_approximately([], tools=menu) <= settings.agent_tool_schema_tokens:
+        if _schema_tokens(session, proposed) <= settings.agent_tool_schema_tokens:
             keep.add(domain)
             names = proposed
     return keep
@@ -110,7 +117,7 @@ def _rebalanced(session, released, reason):
 def _use(session, domains, prompt):
     used = list(dict.fromkeys([*session.state.get("used_tool_domains", []), *domains]))
     session.state["used_tool_domains"] = used
-    if count_tokens_approximately([], tools=session.menu) > settings.agent_tool_schema_tokens:
+    if _schema_tokens(session) > settings.agent_tool_schema_tokens:
         released = _reduce(session, set(used) | _required(session, prompt, discovery=True))
         _rebalanced(session, released, "schema_working_set")
 
@@ -201,8 +208,7 @@ class ToolCapacityMiddleware(AgentMiddleware):
         current = _prompt(session, hydrate(state["messages"], session.transient))
         changed = False
         if (session.fresh_task and session.budget.model_calls == 0
-                and count_tokens_approximately([], tools=session.menu)
-                    > settings.agent_tool_schema_tokens):
+                and _schema_tokens(session) > settings.agent_tool_schema_tokens):
             before = session.state["tool_domains"]
             released = _reduce(session, _warm(session))
             if _reason(session, current) not in {None, "context_tokens", "input_tokens"}:
