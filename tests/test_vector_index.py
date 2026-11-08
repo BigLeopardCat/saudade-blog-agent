@@ -117,3 +117,47 @@ def test_background_build_uses_owned_workers_and_shutdown_does_not_publish(store
     assert not vectors._warm_lock.locked()
     vectors.warm_async([chunk(1, "another")])
     assert store.repository.snapshot() is None
+
+
+def test_health_route_uses_last_observed_state_without_probing_database(store, monkeypatch):
+    monkeypatch.setattr(vectors, "_embed_texts", lambda texts, _: [[1, 0] for _ in texts])
+    assert store.update([chunk(1, "first")], vectors.space_from_settings())["ok"]
+    def forbidden():
+        pytest.fail("cached health diagnostics must not block on PostgreSQL")
+    monkeypatch.setattr(store.repository, "snapshot", forbidden)
+    assert vectors.route_status()["state"] == "active"
+    assert vectors.degraded_reason() is None
+
+
+def test_queued_background_cancellation_releases_the_build_permit(store, monkeypatch):
+    import asyncio
+    import threading
+
+    from agent.runtime.workers import RequestWorkers
+
+    monkeypatch.setattr(vectors, "_submit", None)
+    monkeypatch.setattr(vectors, "_warm_stop", threading.Event())
+    monkeypatch.setattr(vectors, "_warm_lock", threading.Lock())
+    workers = RequestWorkers(max_workers=1)
+    blocked, release = threading.Event(), threading.Event()
+    def blocker():
+        blocked.set()
+        assert release.wait(5)
+    workers.warm_up(blocker)
+    submitted = []
+    def submit(function):
+        future = workers.warm_up(function)
+        submitted.append(future)
+        return future
+    vectors.start_background(submit)
+    try:
+        assert blocked.wait(5)
+        vectors.warm_async([chunk(1, "first")])
+        assert vectors._warm_lock.locked()
+        assert submitted[0].cancel()
+        assert not vectors._warm_lock.locked()
+        assert store.repository.snapshot() is None
+    finally:
+        vectors.stop_background()
+        release.set()
+        asyncio.run(workers.aclose())

@@ -329,6 +329,10 @@ class VectorStore:
     def last_error(self) -> str | None:
         return self._last_error
 
+    def record_failure(self):
+        self._snapshot = None
+        self._last_error = "vector_database_unavailable"
+
     def invalidate_dimension(self):
         self._reset_dimensions = True
         self._last_error = "vector_dimension_changed"
@@ -445,7 +449,6 @@ def degraded_reason() -> str | None:
     except InputProfileError:
         return "embedding_profile_error"
     st = get_store()
-    st.load()
     if st.last_error():
         return st.last_error()
     if st.view() is None:
@@ -456,7 +459,7 @@ def degraded_reason() -> str | None:
 
 
 def route_status() -> dict:
-    """Return non-secret route facts for tool metadata and health checks.
+    """Return cached route facts without network I/O from health checks.
 
     A failed new build can coexist with an older complete active snapshot."""
     if not is_enabled():
@@ -464,7 +467,6 @@ def route_status() -> dict:
                 "state": degraded_reason() or "off", "reason": degraded_reason(),
                 "vectors": 0, "missing": 0}
     st = get_store()
-    st.load()
     view = st.view()
     reason = degraded_reason()
     if not _settings.rag_hybrid_enabled:
@@ -552,8 +554,8 @@ def close():
 
 def warm_async(chunks: list[dict]) -> None:
     """Submit at most one build to the application-owned worker pool."""
-    submit = _submit
-    if not is_enabled() or submit is None or not _warm_lock.acquire(blocking=False):
+    submit, lock = _submit, _warm_lock
+    if not is_enabled() or submit is None or not lock.acquire(blocking=False):
         return
     stop = _warm_stop
 
@@ -569,9 +571,13 @@ def warm_async(chunks: list[dict]) -> None:
         except Exception:  # noqa: BLE001
             logger.warning("Vector background update failed", exc_info=True)
         finally:
-            _warm_lock.release()
+            lock.release()
+
+    def release_cancelled(future):
+        if future.cancelled():
+            lock.release()
 
     try:
-        submit(_run)
+        submit(_run).add_done_callback(release_cancelled)
     except RuntimeError:
-        _warm_lock.release()
+        lock.release()

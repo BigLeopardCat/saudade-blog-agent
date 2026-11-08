@@ -304,8 +304,11 @@ class RagIndex:
 
         try:
             scores = view.scores(qv, max(1, top_k))
-        except (SQLAlchemyError, StaleSnapshot, ValueError):
+        except StaleSnapshot:
+            return [], "corpus_changed", len(store.missing())
+        except (SQLAlchemyError, ValueError):
             logger.warning("PostgreSQL vector query is unavailable")
+            store.record_failure()
             return [], "vector_database_unavailable", len(store.missing())
         ranked = rank_documents(chunks, scores, revision)[:max(1, top_k)]
         for r in ranked:
