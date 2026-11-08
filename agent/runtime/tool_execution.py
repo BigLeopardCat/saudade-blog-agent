@@ -77,6 +77,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                reason=reason, round=round_index)
         return None
     session.calls_used += 1
+    tool_state.use(session, name, prompt)
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
     with native_tool(session.budget), tool_evidence.scope(call, round_index):
         output = handler(request.override(tool=framework_tool(session.execution_tools[name])))

@@ -103,6 +103,8 @@ class Settings(BaseSettings):
     agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
     agent_output_tokens: int = Field(default=4096, ge=128)
     agent_tool_result_tokens: int = Field(default=12000, ge=128)
+    # Soft target: reclaim idle domains, never reject tools needed by the active task.
+    agent_tool_schema_tokens: int = Field(default=4096, ge=128)
     agent_summary_output_tokens: int = Field(default=4096, ge=128)
     agent_compaction_trigger: float = Field(default=0.8, gt=0, lt=1)
     agent_compaction_target: float = Field(default=0.4, gt=0, lt=1)
@@ -169,17 +171,15 @@ class Settings(BaseSettings):
     embedding_api_key: str = ""            # EMBEDDING_API_KEY
     embedding_base_url: str = ""           # EMBEDDING_BASE_URL（留空 = SDK 默认端点）
     embedding_model: str = ""
-    # 0 = **不向 API 传 `dimensions`**，以返回向量的长度为准（不同供应商支持度不一，
-    # 传了可能 400）。想要固定维度才填，填了则校验返回长度必须一致。
-    embedding_dim: int = 0                 # EMBEDDING_DIM
-    embedding_batch_size: int = 10         # EMBEDDING_BATCH_SIZE（聚合平台单请求上限）
-    embedding_timeout: float = 15.0        # EMBEDDING_TIMEOUT（查询向量在热路径上，别设大）
-    embedding_profile: str = ""            # EMBEDDING_PROFILE（可选、固定 tokenizer 的 JSON 路径）
-    # 查询向量的内存 LRU。**只进内存不落盘**：查询串是访客可控的无界输入，落盘会长成
-    # 一个没人清理的文件。语料侧的缓存是另一回事（内容寻址、落 data/rag_vectors/）。
-    embedding_query_cache: int = 256       # EMBEDDING_QUERY_CACHE
-    rrf_k: int = 60                        # RRF_K（标准常量；k 越大对低排名越宽容）
-    rag_vector_dir: str = "data/rag_vectors"   # RAG_VECTOR_DIR
+    # Zero omits dimensions; a positive value validates every returned vector length.
+    embedding_dim: int = 0
+    embedding_batch_size: int = 10
+    embedding_timeout: float = 15.0
+    embedding_profile: str = ""
+    # Visitor query vectors have a bounded memory cache, separate from corpus storage.
+    embedding_query_cache: int = 256
+    rrf_k: int = 60
+    rag_vector_dir: str = "data/rag_vectors"
 
     # ── Logging ─────────────────────────────────────────────────────
     log_level: str = "INFO"

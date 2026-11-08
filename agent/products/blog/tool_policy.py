@@ -59,9 +59,11 @@ class BlogToolMiddleware(AgentMiddleware):
                         messages = [message if isinstance(item, ToolMessage)
                                     and item.tool_call_id == call["id"] else item
                                     for item in messages]
+                        activated = capture(self.session)
                         update = {**(result.update if isinstance(result, Command) else {}),
                                   "messages": messages,
-                                  "tool_domains": capture(self.session)["tool_domains"]}
+                                  "tool_domains": activated["tool_domains"],
+                                  "used_tool_domains": activated["used_tool_domains"]}
                         result = (replace(result, update=update) if isinstance(result, Command)
                                   else Command(update=update))
         return result
