@@ -201,3 +201,13 @@ def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, 
         assert "contradicts" in row["reason"]
     elif prelist:
         assert "4 > 3" in row["reason"]
+
+
+def test_metadata_fixture_uses_the_body_free_host_envelope():
+    from tools.notes import get_article_detail
+
+    with contracts.article_backend() as state:
+        result = get_article_detail.invoke({"article_id": contracts.ARTICLE_ID, "view": "metadata"})
+    assert result.kind == "ok" and result.data["description"] == "已保存的摘要。"
+    assert not {"noteContent", "totalChars", "sectionCount"}.intersection(result.data)
+    assert state["body_reads"] == [0] and len(state["requests"]) == 1

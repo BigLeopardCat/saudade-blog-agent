@@ -76,6 +76,17 @@ def _outline_page(article_id, title, content, revision, available, offset):
     }
 
 
+def _directory_view(view, article_id, title, content, current, available, offset, section):
+    if view == "metadata":
+        if section or offset:
+            raise ValueError("metadata does not select body ranges")
+        return {"view": "metadata", "noteKey": article_id, "noteTitle": title,
+                "contentRevision": current, "readComplete": False, "source": None}
+    if view == "outline" and not section:
+        return _outline_page(article_id, title, content, current, available, offset)
+    raise ValueError("invalid directory view")
+
+
 def article_page(
     data: dict,
     article_id: int,
@@ -93,17 +104,9 @@ def article_page(
         raise RevisionChanged("读取版本不一致，请从头重新读取以获取当前目录")
     rows = outline(content, title)
     available = _directory(rows)
-    if view not in {"body", "outline", "metadata"} or view == "outline" and section:
-        raise ValueError("invalid document view")
-    if view == "metadata":
-        if section or offset:
-            raise ValueError("metadata does not select body ranges")
-        return {"view": "metadata", "noteKey": article_id, "noteTitle": title,
-                "contentRevision": current, "sections": [], "sectionCount": 0,
-                "sectionsOffset": 0, "nextSectionsOffset": None,
-                "readComplete": False, "source": None}
-    if view == "outline":
-        return _outline_page(article_id, title, content, current, available, offset)
+    if view != "body":
+        return _directory_view(
+            view, article_id, title, content, current, available, offset, section)
     selected_id = ""
     out = {**data, "noteKey": article_id, "noteTitle": title}
     if section:

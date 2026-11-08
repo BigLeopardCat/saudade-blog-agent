@@ -85,7 +85,7 @@ def article_backend():
             data = document_page("note", ARTICLE_ID, doc["title"], body, request.url.params,
                                  {"authorName": "合成作者", "description": "已保存的摘要。",
                                   "authorNameTruncated": False, "descriptionTruncated": False})
-            state["body_reads"].append(len(data["content"]))
+            state["body_reads"].append(len(data.get("content", "")))
         else:
             state["unsupported_reads"].append(request.url.path)
             return httpx.Response(404)

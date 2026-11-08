@@ -54,4 +54,6 @@ def test_summary_is_inside_the_existing_result_size_boundary(backend):
 
 def test_account_catalog_does_not_gain_an_unrelated_article_summary(backend):
     result = json.loads(str(accounts(limit=5)))
-    assert "returned_summary" not in result
+    assert "status_counts" not in result["returned_summary"]
+    assert result["returned_summary"]["scope"] == "returned_items"
+    assert result["returned_summary"]["role_counts"] == [{"role": "user", "count": 5}]

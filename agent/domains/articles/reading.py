@@ -140,6 +140,37 @@ class Page(BaseModel):
         return self
 
 
+def _article_metadata(metadata):
+    data = {}
+    data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
+    try:
+        references = tag_references(metadata.get("tags"))
+    except ValueError:
+        references = None
+    # Metadata is descriptive; the body and source coordinates remain independently verified.
+    data.update(
+        {
+            key: metadata[key]
+            for key in (
+                "status",
+                "isPublic",
+                "isTop",
+                "categoryId",
+                "categoryName",
+                "createdAt",
+                "updatedAt",
+                "tags",
+                "tagsTruncated",
+            )
+            if key in metadata
+        }
+    )
+    data["tags"] = references
+    if references is None:
+        data.pop("tagsTruncated", None)
+    return data
+
+
 def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):
     page = (MetadataPage if view == "metadata" else Page).model_validate(value)
     if (
@@ -167,33 +198,7 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     if kind == "note" and view == "outline":
         data.update(noteId=page.id, noteTitle=page.title)
     elif kind == "note":
-        metadata = page.metadata
-        data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
-        try:
-            references = tag_references(metadata.get("tags"))
-        except ValueError:
-            references = None
-        # Metadata is descriptive; the body and source coordinates remain independently verified.
-        data.update(
-            {
-                key: metadata[key]
-                for key in (
-                    "status",
-                    "isPublic",
-                    "isTop",
-                    "categoryId",
-                    "categoryName",
-                    "createdAt",
-                    "updatedAt",
-                    "tags",
-                    "tagsTruncated",
-                )
-                if key in metadata
-            }
-        )
-        data["tags"] = references
-        if references is None:
-            data.pop("tagsTruncated", None)
+        data.update(_article_metadata(page.metadata))
         data.update(
             noteId=page.id,
             noteTitle=page.title,
