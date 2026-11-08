@@ -9,7 +9,7 @@ from langgraph.types import Command
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
-from rag.reading import render_article_result
+from rag.reading import render_article_result, render_search_result
 from tools.base import SITE_BASE
 from utils.trace import record
 
@@ -72,14 +72,30 @@ class ArticleMiddleware(AgentMiddleware):
         return attach(result)
 
     def render_result(self, call, value, limit):
-        if call["name"] == "get_article_detail":
-            artifact = value.artifact if isinstance(value.artifact, dict) else {}
+        artifact = value.artifact if isinstance(value.artifact, dict) else {}
+        if value.status == "error":
+            artifact = {**artifact, "kind": "error"}
+            value = value.model_copy(update={"artifact": artifact})
+        success = artifact.get("kind", "ok") == "ok" and value.status != "error"
+        if success and call["name"] == "get_article_detail":
             data = artifact.get("data")
             if isinstance(data, dict):
                 limit = result_limit(value.model_copy(update={"content": str(data)}))
             body, visible = render_article_result(data, value.content, limit)
+            failed = isinstance(data, dict) and visible is None
             value = value.model_copy(update={"content": body,
-                "artifact": {**artifact, "data": visible}})
+                "status": "error" if failed else value.status,
+                "artifact": {**artifact, "data": visible,
+                             **({"kind": "unavailable", "meta": {
+                                 **(artifact.get("meta") or {}), "reason": "presentation_budget"}}
+                                if failed else {})}})
+        elif success and call["name"] == "rag_search" and isinstance(artifact.get("data"), list):
+            presented = render_search_result(artifact["data"], value.content,
+                                             artifact.get("meta") or {}, limit)
+            value = value.model_copy(update={"content": presented.text,
+                "status": "error" if presented.kind != "ok" else value.status,
+                "artifact": {**artifact, "kind": presented.kind, "data": presented.data,
+                             "meta": presented.meta}})
         else:
             value = self.render_default(call, value, limit)
         self.evidence.observe(call["name"], call["args"], value)

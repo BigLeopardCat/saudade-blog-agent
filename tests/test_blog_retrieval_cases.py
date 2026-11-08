@@ -137,7 +137,7 @@ def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpu
         "offset": 0, "end": len(selected["sectionText"])}
     assert len(calls) == 1 and len(model.prompts) == 2
     assert dict(calls[0].url.params) == {
-        "section": expected["section_id"], "offset": "0", "limit": "1024",
+        "view": "body", "section": expected["section_id"], "offset": "0", "limit": "1024",
         "revision": canonical, "section_schema": PARSER_VERSION}
     sibling = data["queries"]["duplicate_heading" if qid == "long_tail" else "long_tail"]
     assert sibling["evidence_spans"][0]["quote"] not in selected["sectionText"]

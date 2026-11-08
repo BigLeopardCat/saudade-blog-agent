@@ -278,11 +278,36 @@ def _prepared_or_noop(wanted, result, events):
     )
 
 
+def _body_chars(events):
+    """Measure verified body ranges; repeated evidence snapshots are not extra reads."""
+    totals = []
+    for event in events:
+        if event.get("event") != "article_evidence":
+            continue
+        try:
+            spans = [(r["start"], r["end"], r["visible_chars"])
+                     for doc in event["provenance"]["body_reads"] for r in doc["ranges"]]
+        except (KeyError, TypeError):
+            return None
+        if any(type(value) is not int for span in spans for value in span):
+            return None
+        if any(start < 0 or end < start or end - start != size for start, end, size in spans):
+            return None
+        totals.append(sum(size for _, _, size in spans))
+    return max(totals, default=None)
+
+
 def _outcome_failures(gold, result, events):
     limit = gold.get("max_model_calls")
     attempts = sum(event.get("event") == "llm_start" for event in events)
     budget = ([f"模型调用超过场景验收上限：{attempts} > {limit}"]
               if limit is not None and attempts > limit else [])
+    if (body_limit := gold.get("max_article_body_chars")) is not None:
+        size = _body_chars(events)
+        if size is None:
+            budget.append("[未评估] 缺少可核对的正文读取范围，不能验证读量上限")
+        elif size > body_limit:
+            budget.append(f"正文读量超过场景验收上限：{size} > {body_limit}")
     for name, maximum in gold.get("max_tool_calls", {}).items():
         requested = sum(event.get("event") == "tool_requested" and event.get("name") == name
                         for event in events)
@@ -402,7 +427,7 @@ def _conversation_failures(gold, result, events, calls):
 
 def check(gold, result):
     keys = {
-        "max_model_calls", "max_tool_calls",
+        "max_model_calls", "max_tool_calls", "max_article_body_chars",
         "require_observations",
         "require_observations_any",
         "require_todo_schedule",

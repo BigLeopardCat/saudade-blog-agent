@@ -97,7 +97,10 @@ def append_result(session, request, handler, prompt, round_index, attachments):
             if message.status != "error" else "error")
     original = message
     message = session.render_result(call, message, result_limit(message))
-    if kind in {"invalid_args", "unavailable", "not_found"}:
+    rendered_kind = (message.artifact or {}).get("kind")
+    if kind == "ok" and rendered_kind in {"invalid_args", "unavailable", "not_found", "error"}:
+        kind = rendered_kind
+    if kind in {"invalid_args", "unavailable", "not_found", "error"}:
         message = message.model_copy(update={"status": "error"})
     message = message.model_copy(update={"artifact": {**(message.artifact or {}), "kind": kind}})
     session.observations.extend(memory.observation(call, message))

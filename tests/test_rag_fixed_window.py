@@ -91,7 +91,7 @@ def test_database_query_failure_preserves_lexical_results_and_updates_cached_hea
     store = memory_store(tmp_path)
     monkeypatch.setattr(vector_index, "_store", store)
     assert store.update(index._chunks, vector_index.space_from_settings())["ok"]
-    def unavailable(*args):
+    def unavailable(*args, **kwargs):
         raise OperationalError("synthetic query failure", {}, RuntimeError())
     monkeypatch.setattr(store.repository, "scores", unavailable)
     lexical = index._lexical_ranked("端口", 5)

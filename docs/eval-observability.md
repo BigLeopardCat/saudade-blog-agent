@@ -63,6 +63,8 @@ python -m eval.release_readiness --help
 少量POC或脚本模型只验证接线、分页与判据，不能当作模型意图通过率、正式P95或生产SLA。
 短指代展示用例不强迫重复读取：自动判据检查图片格式和禁止行为，跨轮链接来源仍需语义评审。
 
+定点文章问答可同时设置 `max_model_calls` 和 `max_article_body_chars`，避免少量调用读取过量正文。正文量取来源证据的最大累计范围快照，不重复累计同一快照；缺失或无效证据标为未评估，该指标不代替真实 usage 和费用。
+
 ```sh
 python -m eval.daily_metrics --days 7 --json
 python -m eval.daily_metrics --days 7 --tasks
