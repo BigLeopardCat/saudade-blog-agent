@@ -57,7 +57,8 @@ python -m eval.model_retrieval_run eval/fixtures/blog_retrieval --split test \
 向量服务失败、索引不全或空间错误时停止，不把退化为词法的结果冒充混合检索成绩。
 输出同时保留 BM25、vector、hybrid 三路的原始 run 和相同 cutoffs 下的指标。
 
---top-k 控制交付结果数；--candidates 控制每路候选池，默认等于 top-k。
+--top-k 控制交付结果数；--candidates 控制每路候选池，默认与生产共用
+`min(100, max(20, 3 * top_k))`；默认 top_k=8 时每路取24个候选。
 --k 只控制评分截点，须不超过 top-k。扩大池或改变切片是显式研究配置：
 
 ```sh

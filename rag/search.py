@@ -43,6 +43,11 @@ BM25_B = 0.75
 
 REFRESH_TTL = 600.0  # 10 分钟懒刷新
 
+
+def candidate_limit(top_k: int) -> int:
+    """Keep production and evaluation per-retriever candidate windows aligned."""
+    return min(100, max(20, top_k * 3))
+
 # Reviewed query variants contribute only tokens present in the current vocabulary.
 _QUERY_SYNONYMS: tuple[dict, ...] = (
     {"key": "测评", "val": "评测", "why": "将访客措辞映射为站内评测术语。"},
@@ -279,7 +284,7 @@ class RagIndex:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
         if type(top_k) is not int or not 1 <= top_k <= 50:
             raise ValueError("top_k must be an integer between 1 and 50")
-        candidates = min(100, max(20, top_k * 3))
+        candidates = candidate_limit(top_k)
         lex = self._lexical_ranked(query, candidates, article_id=article_id)
         if lex is None:
             _record("unavailable", None)
