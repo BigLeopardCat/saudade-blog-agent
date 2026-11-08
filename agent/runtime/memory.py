@@ -26,7 +26,6 @@ from agent.runtime.message_content import text_content
 from config.settings import SUMMARY_MAX_CHARS
 
 FALLBACK_HISTORY_TOKENS = 1800
-OBSERVATION_CHARS = 1400
 SUMMARY_CHARS = SUMMARY_MAX_CHARS
 
 
@@ -115,9 +114,10 @@ def _turns(messages):
     for message in messages:
         if is_context(message):
             continue
-        if isinstance(message, HumanMessage):
+        if (isinstance(message, HumanMessage)
+                and not message.additional_kwargs.get("runtime_feedback")):
             turns.append([message])
-        elif turns and isinstance(message, (AIMessage, ToolMessage)):
+        elif turns and isinstance(message, (HumanMessage, AIMessage, ToolMessage)):
             turns[-1].append(message)
     return turns
 
@@ -284,29 +284,23 @@ def checkpoint_messages(previous, current, *, context_update=None):
 
 
 def observation(call, result):
-    """Keep the source tool call paired with a bounded historical excerpt."""
+    """Pair an application receipt with its call; source budgets apply before rendering."""
     if isinstance(result, ToolMessage):
         artifact = result.artifact if isinstance(result.artifact, dict) else {}
         if (artifact.get("kind") not in ("ok", "empty", "not_found", "prepared")
                 or result.status != "success" and artifact.get("kind") != "not_found"):
             return []
         result = compact(result)
-        body = _observation_excerpt(str(result.content))
+        body = str(result.content)
         return [AIMessage(content="", tool_calls=[call]), result.model_copy(update={
             "content": body, "artifact": {"kind": artifact["kind"]}})]
     if getattr(result, "kind", None) not in ("ok", "empty", "not_found"):
         return []
-    body = _observation_excerpt(str(result))
+    body = str(result)
     return [AIMessage(content="", tool_calls=[call]), ToolMessage(
         content=body, name=call["name"], tool_call_id=call["id"],
         artifact={"kind": result.kind},
     )]
-
-
-def _observation_excerpt(body):
-    if len(body) > OBSERVATION_CHARS:
-        return body[:OBSERVATION_CHARS] + "\n[历史工具结果节选，完整内容需重新读取]"
-    return body
 
 
 def bind_actor(messages, principal):

@@ -9,13 +9,11 @@ from langchain.agents.middleware import AgentMiddleware, hook_config
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, AIMessageChunk, RemoveMessage, ToolMessage
 from langgraph.errors import GraphInterrupt
-from langgraph.graph.message import REMOVE_ALL_MESSAGES
 from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
 from agent.runtime import (
     approval_messages,
-    memory,
     response_validation,
     trace_context,
 )
@@ -136,17 +134,6 @@ class SessionMiddleware(AgentMiddleware):
             session.budget.attempt_tools(sum(call["id"] not in self.cached for call in self.calls))
             saved["jump_to"] = "tools"
         if "jump_to" not in saved:
-            if state.get("messages"):
-                prompt = [*([self.system_message] if self.system_message else []),
-                          *hydrate(state["messages"], session.transient)]
-                fitted = fit_history(prompt, session.principal, session.menu,
-                    session.budget.limits, session.output_limit,
-                    tool_access=session.history_access, budget=session.budget,
-                    anchor=state.get("context_anchor"), model_key=session.model)
-                if fitted != prompt:
-                    body = fitted[1:] if self.system_message else fitted
-                    saved["messages"] = [RemoveMessage(id=REMOVE_ALL_MESSAGES),
-                                         *stage(body, session.transient)]
             extra = input_additions(session, state)
             if extra:
                 saved.setdefault("messages", []).extend(extra)
@@ -232,8 +219,14 @@ class SessionMiddleware(AgentMiddleware):
         extra_inputs = input_additions(session, request.state)
         if extra_inputs:
             request = request.override(messages=[*request.messages, *extra_inputs])
+        session.framework_state = {**request.state, "messages": list(request.messages)}
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
+        # Emergency capacity selection is a model view, not destructive checkpoint editing.
+        prompt = fit_history(prompt, session.principal, session.menu,
+            session.budget.limits, session.output_limit, tool_access=session.history_access,
+            budget=session.budget, anchor=request.state.get("context_anchor"),
+            model_key=request.model)
         session.system_message = request.system_message
         model = request.model
         selected_model = _model_name(model)
@@ -357,7 +350,6 @@ class SessionMiddleware(AgentMiddleware):
                                ensure_ascii=False), name=call["name"], tool_call_id=call["id"],
                                artifact={"kind": "terminal", "phase": "terminal",
                                          "proposal": None}))
-                session.observations.extend(memory.observation(call, message))
         message = message.model_copy(update={"name": call["name"]})
         if self.calls and call["id"] == self.calls[-1]["id"]:
             update = {**capture(session), **(command.update if command else {}), "messages": [

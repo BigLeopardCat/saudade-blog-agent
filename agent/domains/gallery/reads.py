@@ -7,6 +7,7 @@ import warnings
 from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
 
 import httpx
+from langchain.tools import ToolRuntime
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from PIL import Image as PillowImage
@@ -21,6 +22,7 @@ from agent.runtime.access import configured_reads_enabled
 from agent.runtime.control import model_options
 from agent.runtime.turns import check_cancelled
 from tools import base
+from utils.trace import record
 
 
 @tool
@@ -143,7 +145,7 @@ def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableCon
 
 
 @tool
-def show_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> object:
+def show_gallery_image(image_id: targets.Identifier, runtime: ToolRuntime) -> object:
     """Display one gallery image in the user's chat, without reading pixels or preparing a write.
     Use when an image ID is known but its URL has not been read. If a previous tool result
     already provides its URL or display_markdown, include that Markdown in your reply
@@ -153,11 +155,18 @@ def show_gallery_image(image_id: targets.Identifier, config: RunnableConfig) -> 
     For visual analysis use get_gallery_image separately;
     a model inspection does not display an image to the user.
     """
+    config = runtime.config
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权访问图库。")
-    row = targets.image(image_id, config)
+    from agent.domains.gallery.display import snapshot
+
+    row = snapshot(runtime.state.get("messages", []), image_id)
+    source = "conversation" if row is not None else "backend"
+    if row is None:
+        row = targets.image(image_id, config)
     if isinstance(row, base.ToolResult):
         return row
+    record("gallery", "display_source", image_id=image_id, source=source)
     visible = {"image_id": image_id, "url": row["imageUrl"],
                "markdown": _display_markdown(row)}
     return base.ok(json.dumps({"image_id": image_id, "url": row["imageUrl"],

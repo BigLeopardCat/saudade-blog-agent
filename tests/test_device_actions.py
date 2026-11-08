@@ -161,7 +161,7 @@ def test_service_refusal_is_not_a_success_receipt(service, status):
     assert len(service["requests"]) == 1
 
 
-def test_native_loop_keeps_device_receipt_and_blocks_whole_turn_legacy_replay(service):
+def test_device_receipt_is_preserved_without_repeating_the_write(service):
     class Model:
         responses = iter(
             [
@@ -194,7 +194,8 @@ def test_native_loop_keeps_device_receipt_and_blocks_whole_turn_legacy_replay(se
     result = session.run([HumanMessage(content="显示hello，继续处理")])
     assert len(result.execution["receipts"]) == 1
     assert len([r for r in service["requests"] if r.method == "PUT"]) == 1
-    assert session.observations
+    assert any(isinstance(message, ToolMessage)
+               for message in session.framework_state['messages'])
     unverified = Principal(7, "user", SOURCE_BODY)
     assert not memory._allowed(
         [

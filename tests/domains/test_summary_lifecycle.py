@@ -54,7 +54,7 @@ def operation(monkeypatch, tmp_path):
 
     def middleware():
         session = SimpleNamespace(config=config, store=SimpleNamespace(saver=None),
-                                  state={'effects': {}}, receipts=[], observations=[])
+                                  state={'effects': {}}, receipts=[])
         return SummaryApprovalMiddleware(session)
 
     def stored():
@@ -118,7 +118,7 @@ def test_exit_after_recording_verified_result_does_not_apply_again(operation, mo
     first = selected.before_model(state, None)
     selected.before_model({**state, 'messages': first['messages']}, None)
     assert calls == [1] and len(selected.session.receipts) == 1
-    assert len(selected.session.observations) == 2
+    assert len(first['messages']) == 2
     assert not selected.before_model({**state, 'messages': first['messages']}, None)['messages']
 
 

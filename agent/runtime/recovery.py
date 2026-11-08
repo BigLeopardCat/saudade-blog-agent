@@ -46,29 +46,24 @@ def input_context(snapshot, config):
 
 
 def restore_session(session, state):
-    """Recover metadata and successful observations; never infer write permission."""
+    """Recover framework messages and execution metadata without inferring write permission."""
     restore(session, state)
+    session.framework_state = state
     if session.task:
         from agent.runtime.task_inputs import consumed
         session.input_messages = consumed(state, session.task["id"])
     messages = state.get("messages") or []
     start = max((i for i, message in enumerate(messages) if memory.is_user_input(message)
                  and not message.additional_kwargs.get("task_input")), default=0)
-    calls = {}
     effects = {}
     for message in messages[start:]:
-        if isinstance(message, AIMessage):
-            calls.update({call["id"]: call for call in message.tool_calls})
-        elif isinstance(message, ToolMessage):
+        if isinstance(message, ToolMessage):
             artifact = message.artifact or {}
             effects.update(artifact.get("effects") or {})
             session.receipts.extend(artifact.get("receipts") or [])
             if artifact.get("phase") == "awaiting_approval" and artifact.get("proposal"):
                 restore(session, {**state, "proposal": artifact["proposal"],
                                   "awaiting_call": message.tool_call_id})
-            if message.tool_call_id in calls:
-                session.observations.extend(memory.observation(
-                    calls[message.tool_call_id], message))
     session.state["effects"] = effects | session.state["effects"]
     # A completed child may precede the interrupted parent commit.
     last = messages[-1] if messages else None

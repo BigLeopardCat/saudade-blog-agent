@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.runtime import memory, tool_execution
+from agent.runtime import tool_execution
 from agent.runtime.budget import (
     BudgetExceeded,
     TaskBudget,
@@ -61,7 +61,6 @@ class ToolSession:
         self.recovering = False
         self.recovery_state = None
         self.transient = {}
-        self.observations = []
         self.receipts = []
         self.suppress_output = False
         self.descriptions = descriptions or {}
@@ -154,7 +153,6 @@ class ToolSession:
                                   tool_call_id=call["id"], artifact={
                                       "kind": "ok", "effects": dict(self.state["effects"])})
             prompt.append(message)
-            self.observations.extend(memory.observation(call, message))
         else:
             self.outcome = self._with_receipts(adapted)
 
