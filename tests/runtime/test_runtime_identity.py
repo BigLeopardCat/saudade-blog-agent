@@ -75,8 +75,9 @@ def test_native_model_uses_explicit_reasoning_policy_without_changing_output_lim
         application=BlogApplication(),
         model_factory=factory,
     )
-    config = {"configurable": {"thread_id": "conv_42"}}
-    runtime._session(config, runtime.store.load(config))
+    from _own_support import config
+
+    runtime._session(config(), runtime.store.load(config()))
     assert captured["enable_thinking"] is thinking
     assert captured.get("reasoning_effort") == (effort if thinking else None)
     assert captured["max_tokens"] == settings.agent_output_tokens

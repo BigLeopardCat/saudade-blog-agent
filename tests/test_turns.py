@@ -5,6 +5,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from threading import Event
 
 import pytest
+from _memory_support import ACTOR
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -19,6 +20,7 @@ from agent.runtime.service import AgentRuntime
 
 def _config(thread_id="conv_overlap", stop_event=None):
     return {"configurable": {"thread_id": thread_id, "stop_event": stop_event,
+                             "conversation_id": thread_id.removeprefix("conv_"), "user_id": 7,
                              "principal": Principal(7, "user", SOURCE_ASSERTION)}}
 
 
@@ -57,8 +59,8 @@ def test_turn_serializes_history_and_lifecycle(monkeypatch, operation):
         if operation == "turn":
             return turn("第二轮")
         if operation == "discard":
-            return checkpoint.drop_last_user_turn(runtime, "overlap", "first-turn")
-        return checkpoint.delete_thread(saver, "overlap")
+            return checkpoint.drop_last_user_turn(runtime, "overlap", "first-turn", principal=ACTOR)
+        return checkpoint.delete_thread(saver, "overlap", principal=ACTOR)
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         first = pool.submit(turn, "第一轮")

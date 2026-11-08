@@ -4,6 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from test_task_inputs import Model, config, runtime
 
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.runtime.conversation_store import ConversationAccessDenied
 from agent.runtime.task_inputs import InputConflict
 from agent.runtime.task_management import cancel_paused, list_paused
 
@@ -45,7 +46,7 @@ def test_cancel_invalidates_continuation_but_keeps_saved_messages_and_receipts()
 def test_active_foreign_or_replaced_tasks_cannot_be_cancelled():
     selected, cfg = runtime(Model()), config()
     principal = paused(selected, cfg)
-    with pytest.raises(InputConflict):
+    with pytest.raises(ConversationAccessDenied):
         cancel_paused(selected, Principal(8, 'user', SOURCE_ASSERTION), 42, 'paused')
     selected.inputs.open({'id':'new','scope':{'uid':7,'role':'user','conversation_id':42},
                           'input':[HumanMessage(content='新任务')]})

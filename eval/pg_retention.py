@@ -128,7 +128,7 @@ def _assert_clean(conn, thread_id):
             raise RuntimeError(f"Checkpoint deletion incomplete: {table}")
 
 
-def _retire_thread(conn, store, thread_id, cutoff):
+def _retire_thread(conn, saver, state, thread_id, cutoff):
     from agent.runtime.turns import conversation_lock_key
 
     with conn.transaction():
@@ -139,12 +139,12 @@ def _retire_thread(conn, store, thread_id, cutoff):
         fresh = plan_rows(_activity(conn, thread_id), cutoff, 1)
         if not fresh["prune"]:
             return {"skipped": "activity_changed"}
-        reason = _recoverable(store, thread_id)
+        reason = _recoverable(state, thread_id)
         if reason:
             return {"skipped": reason}
         rows = {table: int(_scalar(conn, f"SELECT count(*) FROM {table} WHERE thread_id=%s",
                                   (thread_id,))) for table in THREAD_TABLES}
-        store.saver.delete_thread(thread_id)
+        saver.delete_thread(thread_id)
         rows.update(_delete_task_state(conn, thread_id))
         _assert_clean(conn, thread_id)
         return {"rows": rows}
@@ -153,14 +153,16 @@ def _retire_thread(conn, store, thread_id, cutoff):
 def apply_plan(conn, plan: dict) -> dict:
     from langgraph.checkpoint.postgres import PostgresSaver
 
-    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.approval import graph
 
-    store = CheckpointConversationStore(PostgresSaver(conn))
+    # This offline maintenance command requires database operator access, not a user identity.
+    saver = PostgresSaver(conn)
+    state = graph(saver)
     result = {"threads": 0, "deleted_threads": [], "rows": {}, "ledger": 0,
               "deletion_fences": 0, "skipped": []}
     for candidate in plan["prune"]:
         thread_id = candidate["thread_id"]
-        retired = _retire_thread(conn, store, thread_id, plan["cutoff"])
+        retired = _retire_thread(conn, saver, state, thread_id, plan["cutoff"])
         if retired.get("skipped"):
             result["skipped"].append({"thread_id": thread_id, "reason": retired["skipped"]})
             continue

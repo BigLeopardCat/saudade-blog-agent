@@ -1,6 +1,7 @@
-"""Native conversation store behavior after the legacy graph adapter retirement."""
+"""Conversation state survives reconstruction and rejects late writes after deletion."""
 
 import pytest
+from _memory_support import ACTOR
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
@@ -56,6 +57,6 @@ def test_delete_barrier_rejects_late_native_write():
     saver = InMemorySaver()
     selected = runtime(saver)
     list(selected.stream_events({"messages": [HumanMessage(content="一次")]}, config()))
-    assert checkpoint.delete_thread(saver, 42)
+    assert checkpoint.delete_thread(saver, 42, principal=ACTOR)
     with pytest.raises(ConversationDeleted):
         selected.store.update_state(config(), {"messages": [AIMessage(content="迟到")]})

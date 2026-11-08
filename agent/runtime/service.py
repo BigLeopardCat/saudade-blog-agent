@@ -57,7 +57,7 @@ class AgentRuntime:
         """
         cfg = ((config or {}).get("configurable") or {})
         with (io_scope(self.model_io, cancel_check=partial(check_cancelled, config)),
-              self.conversation_guard(config),
+              self.conversation_guard(config) as config,
               session_scope(self.application.session_key(
                   cfg.get("principal"), cfg.get("conversation_id")))):
             try:

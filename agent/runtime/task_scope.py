@@ -9,12 +9,21 @@ def background_thread(owner, run_id):
     return "background_" + hashlib.sha256(f"{owner}:{run_id}".encode()).hexdigest()
 
 
-def binding(config):
+def caller(config):
+    """Resolve the verified actor independently of conversation ownership or role scope."""
     cfg = (config or {}).get("configurable") or {}
-    principal, cid = cfg.get("principal"), cfg.get("conversation_id")
-    if (not is_verified_identity(principal) or not principal.known_role
+    principal = cfg.get("principal")
+    if (not is_verified_identity(principal)
             or type(cfg.get("user_id", principal.uid)) is not int
             or cfg.get("user_id", principal.uid) != principal.uid):
+        raise ValueError("invalid_task_identity")
+    return principal
+
+
+def binding(config):
+    cfg = (config or {}).get("configurable") or {}
+    principal, cid = caller(config), cfg.get("conversation_id")
+    if not principal.known_role:
         raise ValueError("invalid_task_identity")
     background = cfg.get("background_run_id")
     if background is not None:

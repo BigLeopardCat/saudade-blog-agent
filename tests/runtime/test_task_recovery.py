@@ -5,6 +5,7 @@ import uuid
 
 import pytest
 from _conversation_seed import seed_turn
+from _memory_support import ACTOR
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
@@ -212,9 +213,10 @@ def test_explicit_regeneration_discards_only_the_unfinished_cursor():
     with pytest.raises(AgentCancelled):
         list(selected.stream_events({"messages": [HumanMessage(content="重新生成这个问题")],
                                      "task_id": "discard-task"}, cfg(stop)))
-    assert checkpoint.drop_last_user_turn(selected, 42, "unrelated-task")["dropped"]
+    assert checkpoint.drop_last_user_turn(
+        selected, 42, "unrelated-task", principal=ACTOR)["dropped"]
     assert selected.store.load(cfg(stop)).run
-    assert checkpoint.drop_last_user_turn(selected, 42, "discard-task")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "discard-task", principal=ACTOR)["dropped"]
     assert selected.store.load(cfg(stop)).messages == before
     assert not selected.store.load(cfg(stop)).run
 

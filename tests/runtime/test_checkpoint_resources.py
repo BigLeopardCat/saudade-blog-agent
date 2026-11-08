@@ -127,7 +127,9 @@ def test_concurrent_persistent_applications_own_their_pools(
                             "/chat", json={"message": "hello", "user_id": 7, "conversation_id": 42}
                         )
                         assert response.status_code == 200 and response.json()["reply"] == "reply"
-                saved = second.state.runtime.get_state({"configurable": {"thread_id": "conv_42"}})
+                from _own_support import config
+
+                saved = second.state.runtime.get_state(config())
                 assert len(saved.values["messages"]) == 4
         finally:
             await one.__aexit__(None, None, None)

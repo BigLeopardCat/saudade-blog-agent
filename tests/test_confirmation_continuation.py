@@ -8,6 +8,7 @@ from copy import deepcopy
 import httpx
 import pytest
 from _framework_ledger import Ledger
+from _memory_support import ACTOR
 from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
@@ -594,7 +595,7 @@ def test_deleted_conversation_rejects_late_approval_and_cannot_revive_a_cursor(b
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
-    assert checkpoint.delete_thread(selected.saver, 42)
+    assert checkpoint.delete_thread(selected.saver, 42, principal=ACTOR)
     with pytest.raises(ConversationDeleted):
         run(selected, grant=grant)
     assert not state["writes"]
@@ -721,7 +722,7 @@ def test_discarding_feedback_history_cannot_restore_the_revoked_approval(backend
     _, grant, _ = prepare(selected, FAVORITE)
     selected.model_factory = lambda **_: Model(AIMessage(content="你好。"))
     run(selected, "先聊一下", task_id="feedback-turn")
-    assert checkpoint.drop_last_user_turn(selected, 42, "feedback-turn")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "feedback-turn", principal=ACTOR)["dropped"]
     selected.model_factory = lambda **_: pytest.fail("revoked approval reached a model")
     replay = run(selected, grant=grant)
     assert not replay.execution["receipts"] and not state["writes"]
@@ -744,7 +745,8 @@ def test_discarding_interrupted_approval_feedback_invalidates_its_original_task(
     selected.model_factory = lambda **_: Interrupted()
     with pytest.raises(AgentCancelled):
         run(selected, "先别收藏，解释一下", task_id="interrupted-feedback")
-    assert checkpoint.drop_last_user_turn(selected, 42, "interrupted-feedback")["dropped"]
+    assert checkpoint.drop_last_user_turn(
+        selected, 42, "interrupted-feedback", principal=ACTOR)["dropped"]
     assert not selected.store.load(config()).run
     blocked = list(selected.stream_events({"resume_task": original_task}, config()))[-1]
     assert blocked.execution["blocked"]

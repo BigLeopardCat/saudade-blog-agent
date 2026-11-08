@@ -4,7 +4,7 @@ import asyncio
 from types import SimpleNamespace
 
 import pytest
-from _memory_support import Capture, config, runtime
+from _memory_support import ACTOR, Capture, config, runtime
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
@@ -28,7 +28,7 @@ def test_repeated_discard_of_identical_text_never_deletes_the_previous_turn():
     first = list(selected.store.load(config()).messages)
     run(selected, "继续", "second")
     for _ in range(2):
-        assert checkpoint.drop_last_user_turn(selected, 42, "second")["dropped"]
+        assert checkpoint.drop_last_user_turn(selected, 42, "second", principal=ACTOR)["dropped"]
         assert selected.store.load(config()).messages == first
     calls = len(model.prompts)
     blocked = run(runtime(selected.saver, model), "继续", "second")
@@ -40,7 +40,7 @@ def test_repeated_discard_of_identical_text_never_deletes_the_previous_turn():
 def test_discard_before_original_delivery_rejects_the_late_request():
     saver, model = InMemorySaver(), Capture()
     selected = runtime(saver, model)
-    assert checkpoint.drop_last_user_turn(selected, 42, "late")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "late", principal=ACTOR)["dropped"]
     rebuilt = runtime(saver, model)
     assert run(rebuilt, "迟到请求", "late").execution["blocked"]
     assert model.prompts == []
@@ -52,7 +52,7 @@ def test_nonlast_target_is_refused_and_not_fenced():
     run(selected, "相同正文", "older")
     run(selected, "相同正文", "newer")
     before = selected.store.load(config()).messages
-    assert checkpoint.drop_last_user_turn(selected, 42, "older") == {
+    assert checkpoint.drop_last_user_turn(selected, 42, "older", principal=ACTOR) == {
         "dropped": False, "why": "not_last_turn"}
     assert selected.store.load(config()).messages == before
     assert not checkpoint_store.turn_deleted(selected.saver, "conv_42", "older")
@@ -63,11 +63,11 @@ def test_failed_checkpoint_update_keeps_the_fence_and_retry_finishes_cleanup(mon
     run(selected, "清除这个轮次", "failed-update")
     real_update = selected.update_state
     monkeypatch.setattr(selected, "update_state", lambda *_: None)
-    assert checkpoint.drop_last_user_turn(selected, 42, "failed-update") == {
+    assert checkpoint.drop_last_user_turn(selected, 42, "failed-update", principal=ACTOR) == {
         "dropped": False, "why": "still_present"}
     assert checkpoint_store.turn_deleted(selected.saver, "conv_42", "failed-update")
     monkeypatch.setattr(selected, "update_state", real_update)
-    assert checkpoint.drop_last_user_turn(selected, 42, "failed-update")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "failed-update", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).messages == []
 
 
@@ -85,7 +85,7 @@ def test_discard_interrupt_preserves_earlier_history_and_blocks_resume():
     with pytest.raises(AgentCancelled):
         run(selected, "被打断的请求", "interrupted")
     assert selected.store.load(config()).run
-    assert checkpoint.drop_last_user_turn(selected, 42, "interrupted")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "interrupted", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).messages == before
     assert not selected.store.load(config()).run
     result = list(selected.stream_events({"resume_task": "interrupted"}, config()))[-1]
@@ -99,7 +99,7 @@ def test_same_task_steering_is_removed_with_its_original_request():
     run(selected, "处理文章", "steered")
     extras = messages([{"id": "constraint", "text": "只处理草稿"}], "steered")
     selected.update_state(config(), {"messages": [*extras, AIMessage(content="已核对草稿。") ]})
-    assert checkpoint.drop_last_user_turn(selected, 42, "steered")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "steered", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).messages == []
 
 
@@ -109,7 +109,7 @@ def test_multimodal_discard_does_not_compare_or_parse_the_message_text():
         {"type": "text", "text": "看图\\n[图片]"},
         {"type": "image_url", "image_url": {"url": "data:image/png;base64,AA"}}])]}, config()))
     assert result[-1].reply
-    assert checkpoint.drop_last_user_turn(selected, 42, "image")["dropped"]
+    assert checkpoint.drop_last_user_turn(selected, 42, "image", principal=ACTOR)["dropped"]
     assert selected.store.load(config()).messages == []
 
 

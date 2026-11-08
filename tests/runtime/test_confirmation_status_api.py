@@ -80,7 +80,12 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
                     json={**payload, "conversation_id": cid},
                     headers=headers(uid, role),
                 )
-                assert value.json()["confirmation"] is None
+                if uid != 7:
+                    assert value.status_code == 404
+                    assert value.json() == {"detail": "conversation_not_found"}
+                else:
+                    assert value.status_code == 200
+                    assert value.json()["confirmation"] is None
                 assert body["confirmation"]["token"] not in value.text
             mismatch = await client.post(
                 "/tasks/confirmation", json={**payload, "task_id": "other-task"}, headers=headers()

@@ -4,6 +4,7 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as _pkg_version
 
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
 
 from agent.api.lifecycle import lifespan
 from agent.api.middleware import BodyLimitMiddleware, trace_id_middleware
@@ -16,6 +17,7 @@ from agent.api.routes import (
     operations,
     task_inputs,
 )
+from agent.runtime.conversation_store import ConversationAccessDenied
 
 
 def app_version() -> str:
@@ -33,6 +35,12 @@ def create_app() -> FastAPI:
     application.state.scheduling = None
     application.add_middleware(BodyLimitMiddleware)
     application.middleware("http")(trace_id_middleware)
+
+    @application.exception_handler(ConversationAccessDenied)
+    async def conversation_denied(request, exc):
+        return JSONResponse({"detail": "conversation_not_found"}, status_code=404,
+                            headers={"Cache-Control": "no-store"})
+
     for router in (
         chat.router,
         automations.router,

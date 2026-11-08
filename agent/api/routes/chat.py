@@ -23,6 +23,7 @@ from agent.api.turns import ProducerCancelled, next_stream_item, run_turn, strea
 from agent.contracts.events import StreamEvent
 from agent.products.blog.context import conversation_session
 from agent.runtime.control import RequestControl
+from agent.runtime.conversation_store import ConversationAccessDenied
 from agent.runtime.memory_scope import safe_request
 from agent.runtime.progress import StreamProgress
 from config.settings import settings
@@ -41,6 +42,8 @@ _RECOVERY_SENTENCE = "喵呜……主人抱歉，泠月喵刚才脑袋卡壳了�
 
 
 def _producer_error_text(error):
+    if isinstance(error, ConversationAccessDenied):
+        return "conversation_not_found"
     facts = error_fields(error)
     if (facts.get("provider_error_code") in {"insufficient_quota", "billing_hard_limit_reached"}
             or facts.get("provider_error_type") == "insufficient_quota"):
@@ -222,6 +225,9 @@ async def chat(req: ChatRequest, request: Request):
             final_reply = _RECOVERY_SENTENCE
         end_reason = "producer_done"
         return ChatResponse(reply=final_reply, success=True, events=result.events)
+    except ConversationAccessDenied:
+        end_reason, trace_errors = "access_denied", 1
+        raise
     except Exception as error:
         end_reason, trace_errors = "producer_error", 1
         logger.exception("Agent invocation failed")
