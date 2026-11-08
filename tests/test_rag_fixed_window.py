@@ -65,21 +65,13 @@ def test_missing_vectors_preserve_the_complete_lexical_window(index, monkeypatch
     assert search.last_route()["reason"] == "warming"
 
 
-def test_recall_report_measures_one_window_and_retains_rank_and_route(monkeypatch):
-    from eval import recall_eval
+def test_standard_offline_run_does_not_score_unavailable_as_empty(monkeypatch):
+    from pathlib import Path
 
-    calls = []
+    from eval.offline_rag_eval import bm25_run
+    from eval.rag_dataset import load
 
-    def retrieve(query, top_k):
-        calls.append((query, top_k))
-        return [{"type": "note", "id": 1}, {"type": "note", "id": 2}]
-
-    monkeypatch.setattr(recall_eval, "search", retrieve)
-    monkeypatch.setattr(recall_eval, "last_route", lambda: {"mode": "degraded"})
-    report = recall_eval.evaluate(None, False, [
-        {"id": "lookup", "query": "raw question", "expected": ["note:2"]},
-    ])
-    assert calls == [("raw question", 5)]
-    assert report["routes"] == {"degraded": 1}
-    assert report["recall@1"] == 0 and report["recall@3"] == 1 and report["MRR"] == 0.5
-    assert report["results"][0]["hits"] == ["note:1", "note:2"]
+    data = load(Path(__file__).resolve().parents[1] / "eval/fixtures/offline_smoke", "test")
+    monkeypatch.setattr(search.RagIndex, "_lexical_ranked", lambda *args: None)
+    with pytest.raises(RuntimeError, match="offline index unavailable"):
+        bm25_run(data, 5)

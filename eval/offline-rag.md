@@ -1,86 +1,90 @@
 # 固定语料检索评测
 
-本入口复用生产 RagIndex 的切片和 BM25，指标采用 ir-measures（底层成熟 IR 工具）。
-不实现新的检索器、向量库或指标算法。它评测检索，不给最终回答的正确性打分。
+检索评测复用生产 RagIndex、BM25S 和 RRF，使用 BEIR 数据格式、TREC run 和
+ir-measures 指标。它检查候选与排序；最终回答、引用和权限由 Agent HTTP 评测及语义复核检查。
 
-## 本地运行
+## 无密钥离线回归
 
-安装锁定的 dev 依赖后，在仓根运行：
+安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：
 
-```bash
-python eval/offline_rag_eval.py eval/fixtures/offline_smoke --output /tmp/rag-smoke.json
+```sh
+python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split dev --output /tmp/rag-dev.json
+python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split test --output /tmp/rag-test.json
 ```
 
-随仓数据为人工编写的三个文档、三个查询，仅验证管道，不能作为模型性能成绩。
-运行不下载数据、不读取部署 .env、不访问博客、不调用 embedding 或创建向量目录。
-生产 RagIndex 的数据加载和向量预热增加可选注入点，原调用方保持既有行为。
+随仓语料是 MIT 许可的人工编写中文技术内容：28 篇文档，开发集14题、公开评估集21题。
+它覆盖长文末尾、重复标题、多文证据、口语改述、相近术语、难负例及无答案。
+开发集包含已经用于别名扩展和契约开发的用例；公开 test 在本批实现评估前固定，
+但作者可见、规模小，不能称作独立盲测、生产成功率或公开榜单成绩。
+语料内容不依赖站点编号，贡献者可复现；新增问题必须有来源和相关性标注。
 
-真实公开语料的准备命令、首轮 BM25 成绩与本地模型探测见
-[SciFact 与 Qwen 首轮验证](scifact-local-baseline.md)。数据下载必须显式选择，
-不进入普通 pytest/PR CI。
+生产验收另外固定真实博客内容版本、问题及证据范围，脱敏后审查最终回答与实际费用。
+生产需求决定验收分布，不代表普通 PR 必须访问维护者的服务器。
+独立验收集应与调参材料隔离；用来调优后轮换，不能只换成 holdout 标签。
 
-## 数据契约
+## 数据和指标
 
-采用 BEIR 通用文件格式，直接支持按其格式准备的开源语料：
+目录包含 corpus.jsonl、queries.jsonl、qrels/<split>.tsv 和 manifest.json。
+文档/查询使用稳定字符串 _id，qrels 标明相关等级；manifest 记录来源、版本、许可和范围。
+默认拒绝超过一万文档，需明确准备子集或提高 --max-docs，不能静默截前 N 篇。
+无答案题必须显式 answerable=false 并有零分标注；没有标注不等于无答案。
+多文问题可用 evidence_groups 表示必须覆盖的证据组，组内文档可以互相替代。
 
-- corpus.jsonl：每行 `_id`（非空字符串）、`text`，可带 `title`。
-- queries.jsonl：每行 `_id`、`text`，可加 `category` 分桶。
-- qrels/test.tsv：表头 `query-id`、`corpus-id`、`score`，以 TAB 分隔；支持非负整数分级相关性。
-- manifest.json：`schema_version:1`，以及非空 `name/source/revision/license/scope`。
-  scope 明确原始全量、固定子集或人工夹具。许可在导入前自行核对，工具不授予再分发权。
+- Success@k：任意相关文档命中。
+- R@k：命中的相关文档占所有已标注相关文档的比例。
+- RR@k、nDCG@k：前排位置与分级相关性，交给 ir-measures 计算。
+- EvidenceCoverage@k：必须证据组的覆盖比例，仅适用于显式标注题。
+- CandidateReturnedOnUnanswerable：只记录候选供给，不是模型误答率。
 
-`--split dev` 读取 qrels/dev.tsv。只评测该 qrels 中的查询；queries 可包含其他 split。
-缺失文档、重复 ID/qrel、空输入、非法分数直接失败。默认最多一万文档；
-超过上限拒绝运行，使用显式准备并留档的子集，或调整 --max-docs，不能静默取前 N 篇。
+默认 k=1/3/8，8与生产工具共用 rag.DEFAULT_TOP_K。无答案题不进入排名指标分母。
+按 category 分桶、保留逐题结果和每项样本数，不把文档命中当成正文已读或答案完整。
+未标注文档不能据此断言不相关。公开小集不提供生产性能或置信区间保证。
 
-无正相关标注的查询必须显式设置 `answerable:false`，并至少有一条零分 qrel。
-不能把“没有标注”误认为“已知无答案”。其结果只报告是否返回候选，不推断模型是否误答。
+## 实际 embedding 与混合检索
 
-多篇问题可增加 `evidence_groups:[["A","A-alternative"],["B"]]`：
-每组是可替代的正相关文档，不同组均需覆盖。成员必须已有正相关 qrel。
-文档标注不自动升级为 chunk 或答案证据范围标注。
+这个显式入口会调用指定服务并写入独立索引目录，普通 pytest/PR CI 不调用它：
 
-## API 与本地模型对照
-
-其他检索器导出标准 TREC run（六列：qid、Q0、docid、rank、score、tag）：
-
-```bash
-python eval/offline_rag_eval.py /path/to/dataset \
-  --run /path/to/model.run --run-info /path/to/model-info.json \
-  --output /tmp/model-report.json
+```sh
+python -m eval.model_retrieval_run eval/fixtures/blog_retrieval --split test \
+  --base-url "$EMBEDDING_BASE_URL" --model "$EMBEDDING_MODEL" \
+  --profile /absolute/path/to/profile.json --expected-dim "$EMBEDDING_DIM" \
+  --index-dir /tmp/rag-eval-index --output /tmp/rag-model.json
 ```
 
-model-info.json 必须包含 name、revision、非空 config。config 应记录模型/权重、
-量化、tokenizer、指令、池化、归一化、维度、切片与检索参数，禁止写入 API 凭据。
-API 与本地模型走相同评分入口；没有 run 记录的查询按空结果处理，不能从分母消失。
-未知查询/文档、重复结果、NaN/Infinity 失败。以 score 排序；同分按文档 ID 升序，
-标准指标与证据覆盖使用同一确定顺序。原始 run 分数保存在报告内。
+默认沿用生产字符切片、profile 的 token 预算细分、embedding批次配置及8候选窗口。
+查询指令、池化、归一化、模型版本和 tokenizer 必须与目标服务一致，不能只匹配维度。
+向量服务失败、索引不全或空间错误时停止，不把退化为词法的结果冒充混合检索成绩。
+输出同时保留 BM25、vector、hybrid 三路的原始 run 和相同 cutoffs 下的指标。
 
-当前检索入口只内置生产 BM25；向量检索生成 run 是后续阶段。
-`probe_embeddings.py` 可使用同一 OpenAI SDK 探测 API 或本地服务的延迟、维度及失败，
-不产生检索质量成绩，也不表示模型已接入生产。
+--top-k 控制交付结果数；--candidates 控制每路候选池，默认等于 top-k。
+--k 只控制评分截点，须不超过 top-k。扩大池或改变切片是显式研究配置：
 
-## 指标和报告
+```sh
+# 追加到上面的同一条命令；两臂使用相同冻结数据和目标模型配置。
+--chunk-chars 384 --candidates 20 --top-k 10 --k 1 3 10
+```
 
-- Success@k：任意正相关文档命中（也常称 Hit@k）。
-- R@k：真正的正相关文档召回率，不是 Success。
-- RR@k、nDCG@k：排名质量，均由 ir-measures 计算。
-- EvidenceCoverage@k：命中所需证据组的比例，仅适用于显式标注的查询。
-- CandidateReturnedOnUnanswerable：只描述候选供给，不能当作回答错误率。
+报告区分 production_retrieval_defaults 与 research_override，记录完整配置与指纹、
+数据/代码哈希、实际词法和向量片段数、增量索引复用、查询缓存初始状态及分阶段耗时。
+query_seconds 包含词法、向量与融合；单顺序客户端不代表并发容量，热缓存和冷缓存分开解释。
 
-默认 k=1/3/10。无答案项不进入排名指标分母；报告逐题结果和每个指标的真实样本数。
-缺少 evidence_groups 的查询不进入证据覆盖分母。按 category 分桶，不把不同能力混成总分。
-未标注项不当作“确定不相关”的事实；公开集标注不完整及模型预训练可能见过该集的局限，
-必须在解读结果时说明。
+其他检索器可以导出标准六列 TREC run，通过同一入口评分：
 
-报告包含语料/查询/qrels/manifest 摘要、检索代码摘要、切片版本、词法参数、
-ir-measures 版本、原始 run、模型 run 来源信息、分桶和逐题结果。
-内置 BM25 另记录构建与逐查询秒数；外部 run 不伪造本机推理耗时。
-使用生产原始查询与固定候选窗口；窗口取本次评测最大 k。
+```sh
+python -m eval.offline_rag_eval /path/to/data --run /path/to/model.run \
+  --run-info /path/to/model-info.json --output /tmp/model-report.json
+```
 
-下一阶段用 DuRetrieval、MIRACL 中文和 BEIR 小规模英文任务生成固定子集，
-保留难负例与背景文档；子集成绩单独命名，不冒充官方全量榜单。
-随后用有人工证据标注的技术文档集验证长文、多篇、无答案与最终引用。
+run-info 需要 name、revision、非空 config；配置记录模型和输入处理，不写入凭据。
+未知文档/查询、重复结果、非有限分数均失败；缺失查询按空结果计入，不能从分母消失。
+
+[BEIR SciFact 验证记录](scifact-local-baseline.md)使用英文科学语料，可补充通用检索控制，
+不代表中文博客效果。公开中文语料可选择许可明确的固定 MIRACL 子集，保留背景与难负例；
+无需将测试材料发布到博客，下载和真实模型执行均显式选择。
+
+当前没有独立 LLM 查询重写器或 cross-encoder reranker。先用逐题证据判断错误发生在
+查询、召回、排序还是正文读取，再比较改写/重排带来的质量、时延与费用，不默认增加模型调用。
 
 参考：[BEIR](https://github.com/beir-cellar/beir)、
-[ir-measures](https://ir-measur.es/en/latest/getting-started.html)。
+[ir-measures](https://ir-measur.es/en/latest/getting-started.html)、
+[MIRACL](https://github.com/project-miracl/miracl)。

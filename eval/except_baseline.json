@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 31,
+  "total": 29,
   "by_file": {
     "agent/checkpoint.py": 1,
     "agent/confirm.py": 5,
@@ -15,7 +15,6 @@
     "eval/fixtures/serve.py": 1,
     "eval/golden_evaluation.py": 2,
     "eval/identity_preflight.py": 2,
-    "eval/recall_eval.py": 1,
     "eval/trace_reconcile.py": 3,
     "rag/graph_build.py": 1,
     "rag/search.py": 2,
@@ -23,7 +22,6 @@
     "scripts/sticker_smoke.py": 1,
     "tests/test_checkpoint_factory.py": 2,
     "tests/test_packaging.py": 1,
-    "tests/test_query_expansion.py": 1,
     "tests/test_style_hygiene.py": 1,
     "tools/notes.py": 1
   }

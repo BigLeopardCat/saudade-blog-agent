@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import ir_measures  # noqa: E402
 
 from eval.rag_dataset import load  # noqa: E402
+from rag import DEFAULT_TOP_K  # noqa: E402
 
 
 def bm25_run(data: dict, top_k: int) -> tuple[dict, dict]:
@@ -122,7 +123,7 @@ def main(argv=None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--run", type=Path, help="external API/local-model run in TREC format")
     parser.add_argument("--run-info", type=Path, help="external run provenance JSON")
-    parser.add_argument("--k", type=int, nargs="+", default=[1, 3, 10])
+    parser.add_argument("--k", type=int, nargs="+", default=[1, 3, DEFAULT_TOP_K])
     parser.add_argument("--max-docs", type=int, default=10000)
     args = parser.parse_args(argv)
     if not args.k or min(args.k) < 1 or args.max_docs < 1:
@@ -145,7 +146,7 @@ def main(argv=None) -> int:
     result = evaluate(data, run, sorted(set(args.k)))
     from rag.chunks import INDEX_VERSION
     from rag.lexical import backend_info
-    from rag.search import BM25_B, BM25_K1, synonyms
+    from rag.search import BM25_B, BM25_K1, expansion_enabled, synonyms
 
     root = Path(__file__).resolve().parents[1]
     sources = [*sorted((root / "rag").glob("*.py")), Path(__file__), root / "eval/rag_dataset.py"]
@@ -171,6 +172,7 @@ def main(argv=None) -> int:
             "bm25_k1": BM25_K1,
             "bm25_b": BM25_B,
             "synonyms": synonyms(),
+            "query_expansion": expansion_enabled(),
         },
         run_hash=(hashlib.sha256(args.run.read_bytes()).hexdigest() if args.run else None),
     )

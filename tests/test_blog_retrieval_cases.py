@@ -30,7 +30,7 @@ SUITE = ROOT / "eval/golden/retrieval_requests.jsonl"
 
 @pytest.fixture(scope="module")
 def corpus():
-    data = load(DATASET, "test")
+    data = load(DATASET, "dev")
     keys = sorted(data["corpus"])
     documents = [
         {"type": "note", "id": number, "title": data["corpus"][key]["title"],
@@ -201,7 +201,8 @@ def test_standard_metrics_require_both_articles_and_keep_no_answer_out_of_recall
     assert result["per_query"]["multi_evidence"]["R@3"] == 1
     assert run["absent"] == {}
     assert "R@3" not in result["per_query"]["absent"]
-    assert result["summary"]["all"]["R@3"]["queries"] == 6
+    assert result["summary"]["all"]["R@3"]["queries"] == sum(
+        any(grade > 0 for grade in row.values()) for row in data["qrels"].values())
     for qid in ("firmware_layout", "firmware_paraphrase"):
         assert next(iter(run[qid])) == "firmware"
 

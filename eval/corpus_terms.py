@@ -36,7 +36,7 @@ _SCOPE_TAGS = ("rag", "recall")
 
 
 def doc_key(doc: dict) -> str:
-    """文档 → `type:id`（与 `recall_eval.QUERIES` 的 expected 同一形态）。"""
+    """Normalize stable document references as type:id strings."""
     return f"{doc.get('type') or 'note'}:{doc.get('id')}"
 
 

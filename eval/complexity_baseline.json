@@ -87,10 +87,6 @@
     "c": 115,
     "lines": 295
   },
-  "tests/test_query_expansion.py::test_query_expansion": {
-    "c": 34,
-    "lines": 86
-  },
   "tests/test_reconcile_offline.py::test_reconcile_offline": {
     "c": 46,
     "lines": 241

@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 
 from config.settings import settings
+from rag import DEFAULT_TOP_K
 from rag.chunks import split as split_chunks
 from rag.corpus import corpus_revision
 from rag.corpus import fetch as fetch_corpus
@@ -243,7 +244,7 @@ class RagIndex:
 
     # ── 编排──────────────────────────
 
-    def search(self, query: str, top_k: int = 8) -> list[dict] | None:
+    def search(self, query: str, top_k: int = DEFAULT_TOP_K) -> list[dict] | None:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
         lex = self._lexical_ranked(query, top_k)
         if lex is None:
@@ -331,7 +332,7 @@ def invalidate_document(article_id: int, revision: str) -> None:
     warm_async()
 
 
-def search(query: str, top_k: int = 8) -> list[dict] | None:
+def search(query: str, top_k: int = DEFAULT_TOP_K) -> list[dict] | None:
     """Return ranked article candidates with readable source locators, without full text."""
     return get_index().search(query, top_k=top_k)
 
