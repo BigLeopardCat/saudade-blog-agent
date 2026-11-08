@@ -1,6 +1,7 @@
 """Ordered domain activation through the framework's conversation and task state."""
 
-from langchain_core.messages import SystemMessage
+from langchain.agents.middleware import AgentMiddleware
+from langchain_core.messages import AIMessage, SystemMessage
 
 from agent.runtime.conversation_store import bound_tool_domains
 from agent.runtime.task_scope import binding
@@ -33,8 +34,67 @@ def apply(session, saved):
     session.refresh_menu()
 
 
+def _prompt(session, messages):
+    current = list(messages)
+    if session.system_message is not None:
+        if current and isinstance(current[0], SystemMessage):
+            current[0] = session.system_message
+        else:
+            current.insert(0, session.system_message)
+    return current
+
+
+def _required(session, messages, *, discovery=False):
+    """Protect the model's current batch, not every capability ever used."""
+    response = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+    names = {call["name"] for call in response.tool_calls} if response else set()
+    domains = {domain for domain, tools in session.domains.items() if names & tools.keys()}
+    if discovery:
+        domains.update(session.loaders[name] for name in names if name in session.loaders)
+    return domains
+
+
+def _fixed(session, messages):
+    """Separate compressible old history from the active task's admission floor."""
+    from agent.runtime import memory
+
+    anchor = session.state.get("context_anchor")
+    start = next((i for i, m in enumerate(messages) if anchor and m.id == anchor), None)
+    if start is None:
+        start = max((i for i, m in enumerate(messages) if memory.is_user_input(m)
+                     and not m.additional_kwargs.get("task_input")), default=len(messages))
+    return [*(m for m in messages[:start]
+              if isinstance(m, SystemMessage) or memory.is_context(m)), *messages[start:]]
+
+
+def _reason(session, messages):
+    reason = session.budget.call_block_reason(messages, session.menu,
+        output_limit=session.output_limit, model_key=session.model)
+    if reason in {"context_tokens", "input_tokens"}:
+        # Framework compaction and emergency history selection run before model I/O.
+        return session.budget.call_block_reason(_fixed(session, messages), session.menu,
+            output_limit=session.output_limit, model_key=session.model)
+    return reason
+
+
+def _reduce(session, protected):
+    before = session.state["tool_domains"]
+    items = (before or {}).get("domains", [])
+    released = [item["domain"] for item in items if item["domain"] not in protected]
+    if released:
+        apply(session, {"scope": _scope(session), "domains": [
+            item for item in items if item["domain"] in protected]})
+    return released
+
+
+def _rebalanced(session, released, reason):
+    if released:
+        record("native", "tool_menu_rebalanced", reason=reason,
+               released_domains=released, active_domains=loaded(session))
+
+
 def activate(session, domain, prompt, *, source="discovery"):
-    """Admit a new schema without evicting already activated capabilities."""
+    """Admit schemas, releasing idle domains on capacity pressure before refusing."""
     if domain not in session.domains:
         raise ValueError("Tool domain is not in the current catalog")
     if domain in loaded(session):
@@ -45,12 +105,15 @@ def activate(session, domain, prompt, *, source="discovery"):
         *(before or {}).get("domains", []), {"domain": domain,
             "turn_id": task.get("turn_id") or task.get("id")}]}
     apply(session, proposed)
-    current = list(prompt)
-    if current and isinstance(current[0], SystemMessage) and session.system_message:
-        current[0] = session.system_message
+    current = _prompt(session, prompt)
+    released = []
+    pressure = None
     try:
-        reason = session.budget.call_block_reason(current, session.menu,
-            output_limit=session.output_limit, model_key=session.model)
+        reason = _reason(session, current)
+        if reason in {"context_tokens", "input_tokens", "task_tokens"}:
+            pressure = reason
+            released = _reduce(session, _required(session, current) | {domain})
+            reason = _reason(session, current)
     except BaseException:
         apply(session, before)
         raise
@@ -58,6 +121,7 @@ def activate(session, domain, prompt, *, source="discovery"):
         apply(session, before)
         record("native", "tool_domain_activation_rejected", domain=domain, reason=reason)
     else:
+        _rebalanced(session, released, pressure)
         record("native", "tool_domain_activated", domain=domain, source=source,
                turn_id=task.get("turn_id") or task.get("id"))
     return reason
@@ -86,3 +150,33 @@ def without_turn(saved, turn_id):
 
 def contains_turn(saved, turn_id):
     return any(item["turn_id"] == turn_id for item in (saved or {}).get("domains", []))
+
+
+class ToolCapacityMiddleware(AgentMiddleware):
+    """Recover schema capacity before framework summarization or model admission."""
+
+    def __init__(self, session):
+        self.session = session
+
+    def before_model(self, state, runtime):
+        from agent.runtime.execution_state import capture, restore
+        from agent.runtime.memory_media import hydrate
+
+        session = self.session
+        if (session.recovering or state.get("resume") or state.get("proposal")
+                or state.get("terminal")):
+            return None
+        restore(session, state)
+        current = _prompt(session, hydrate(state["messages"], session.transient))
+        reason = _reason(session, current)
+        if reason not in {"context_tokens", "input_tokens", "task_tokens"}:
+            return None
+        before = session.state["tool_domains"]
+        released = _reduce(session, _required(session, current, discovery=True))
+        if not released:
+            return None
+        if _reason(session, current) not in {None, "context_tokens", "input_tokens"}:
+            apply(session, before)
+            return None
+        _rebalanced(session, released, reason)
+        return capture(session)

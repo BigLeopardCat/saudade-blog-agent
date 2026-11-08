@@ -19,6 +19,7 @@ from agent.runtime.memory_media import stage
 from agent.runtime.middleware import OrderedToolsMiddleware, SessionMiddleware
 from agent.runtime.recovery import restore_session
 from agent.runtime.results import TurnResult
+from agent.runtime.tool_state import ToolCapacityMiddleware
 from agent.runtime.turns import check_cancelled
 from models.errors import retry_after, retryable_model_request
 
@@ -76,6 +77,7 @@ class FrameworkExecution:
                                         OrderedToolsMiddleware(middleware),
                                         ApprovalResumeMiddleware(middleware),
                                         *self.session.middleware,
+                                        ToolCapacityMiddleware(self.session),
                                         ConversationCompaction(self.session), middleware],
                             state_schema=ExecutionState,
                             checkpointer=True if persistent else None)

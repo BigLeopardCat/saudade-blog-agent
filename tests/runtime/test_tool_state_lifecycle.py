@@ -209,7 +209,7 @@ def test_catalog_removal_rechecks_loaded_domains(setup):
     assert names(model.requests[0]) == ["load_alpha_info_tools"]
 
 
-def test_inherited_domains_exceeding_budget_stop_before_model_without_eviction(setup):
+def test_exhausted_task_budget_is_not_reset_by_releasing_domains(setup):
     runtime, domains, _ = setup
     domains["beta"]["read_beta"].description = "Large domain description. " * 1500
     selected = runtime(Model(call("load_beta_info_tools"), AIMessageChunk(content="Ready.")))
@@ -217,10 +217,13 @@ def test_inherited_domains_exceeding_budget_stop_before_model_without_eviction(s
     saved = selected.store.load(config()).tool_domains
     model = Model(AIMessageChunk(content="Must not call."))
     budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))
+    budget.tokens = budget.limits.task_tokens
+    budget.reason = "task_tokens"
     with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
-    assert result.execution["blocked"][0]["reason"] == "context_tokens"
-    assert not model.requests and budget.model_calls == 0 and budget.tokens == 0
+    assert result.execution["blocked"][0]["reason"] == "task_tokens"
+    assert not model.requests and budget.model_calls == 0
+    assert budget.tokens == budget.limits.task_tokens
     assert selected.store.load(config()).tool_domains == saved
 
 
@@ -272,21 +275,24 @@ def test_loading_another_domain_preserves_current_task_tools_until_completion(se
         "load_alpha_info_tools", "load_beta_info_tools", "read_beta", "read_alpha"]
 
 
-def test_over_budget_saved_domains_remain_available_for_a_larger_request(setup):
-    runtime, domains, _ = setup
+def test_over_budget_saved_domains_release_capacity_and_can_be_loaded_again(setup):
+    runtime, domains, calls = setup
     domains["beta"]["read_beta"].description = "Large read schema. " * 1500
     selected = runtime(Model(call("load_beta_info_tools"), call("read_beta"),
                              AIMessageChunk(content="Read complete.")))
     turn(selected)
-    saved = selected.store.load(config()).tool_domains
-    model = Model(AIMessageChunk(content="Must not call."))
-    with budget_scope(TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))):
+    model = Model(AIMessageChunk(content="Hello."))
+    budget = TaskBudget(BudgetLimits(context_tokens=3500, task_tokens=6000))
+    with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
-    assert result.execution["blocked"] and not model.requests
-    assert selected.store.load(config()).tool_domains == saved
-    restored = Model(AIMessageChunk(content="Larger request budget."))
-    turn(runtime(restored), "Continue.")
-    assert "read_beta" in names(restored.requests[0])
+    assert result.reply == "Hello." and calls == ["beta"]
+    assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
+    assert selected.store.load(config()).tool_domains["domains"] == []
+    assert budget.reason is None and budget.model_calls == 1
+    restored = Model(call("load_beta_info_tools"), call("read_beta"),
+                     AIMessageChunk(content="Read again."))
+    turn(runtime(restored), "Read beta again.")
+    assert calls == ["beta", "beta"] and "read_beta" in names(restored.requests[-1])
 
 
 def test_discarded_child_activation_does_not_replace_the_committed_domains(setup):
