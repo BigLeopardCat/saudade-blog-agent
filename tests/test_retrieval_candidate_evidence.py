@@ -3,16 +3,23 @@
 from copy import deepcopy
 
 import pytest
+from _memory_support import Capture, config
 from langchain_core.messages import ToolMessage
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog.articles import ArticleMiddleware
+from agent.runtime.session import ToolSession
+from agent.runtime.tool_execution import result_limit
+from config.settings import settings
 from rag import search
+from rag.chunks import split
 from rag.corpus import content_revision
 from rag.ranking import EXCERPT_CHARS, documents, source_excerpt
 from rag.reading import candidate_text, render_search_result, search_text
 from rag.sections import outline
 from rag.tokenization import tokenize
 from rag.vector_index import rrf_fuse
+from tools.notes import rag_search
 
 QUERY = "持久调度归还槽位"
 FACT = "事务提交后保存执行结果，工作线程退出后归还并发槽位。"
@@ -164,3 +171,43 @@ def test_bad_chunk_ranges_do_not_create_an_excerpt_and_budgeting_keeps_whole_can
     shown = render_search_result([first, second], text, meta, len(text) - 1)
     assert shown.kind == "ok" and shown.data == [first]
     assert candidate_text(1, first) in shown.text and "id=2 " not in shown.text
+
+
+@pytest.mark.parametrize("token_limit", [None, 4096])
+def test_full_tool_frame_keeps_multiple_documents_or_reports_exact_omissions(
+        monkeypatch, token_limit):
+    chunks = []
+    for ident in range(1, 9):
+        title = "公开技术材料" + str(ident)
+        body = "".join(f"## 章节{n}\n{QUERY}：{FACT}\n" + "其他证据背景。" * 100 + "\n"
+                       for n in range(1, 4))
+        chunks.extend({**chunk, "type": "note", "id": ident, "title": title,
+                       "revision": content_revision(title, body)} for chunk in split(title, body))
+    hits = documents(chunks, {index: 1.0 for index in range(len(chunks))}, "corpus",
+                     query_terms=tokenize(QUERY), limit=8)
+    assert len(hits) == 8 and all(len(hit["matches"]) == 3 for hit in hits)
+    meta = {"retrieval": {"mode": "lexical", "limit": 8}}
+    text = search_text(meta, "\n".join(candidate_text(i + 1, hit) for i, hit in enumerate(hits)))
+    message = ToolMessage(content=text, tool_call_id="search", artifact={
+        "kind": "ok", "data": hits, "meta": meta})
+    if token_limit is not None:
+        monkeypatch.setattr(settings, "agent_tool_result_tokens", token_limit)
+    session = ToolSession(Capture(), config(), {"rag_search": rag_search}, {})
+    middleware = ArticleMiddleware(session)
+    cap = result_limit(message)
+    shown = middleware.render_result({"name": "rag_search", "args": {"query": QUERY}}, message, cap)
+    visible = shown.artifact["data"]
+    assert shown.status == "success" and shown.artifact["kind"] == "ok"
+    assert len(shown.content) <= cap and shown.content.count("index_excerpt[") == 3 * len(visible)
+    assert set(middleware.evidence.candidates) == {hit["id"] for hit in visible}
+    assert middleware.evidence.documents == {} and middleware.evidence.read_ranges == {}
+    for i, hit in enumerate(visible):
+        assert candidate_text(i + 1, hit) in shown.content
+    if token_limit is None:
+        assert len(visible) == 8 and "presentation" not in shown.artifact["meta"]
+    else:
+        assert 0 < len(visible) < 8
+        expected = {"shown_candidates": len(visible), "omitted_candidates": 8 - len(visible)}
+        assert shown.artifact["meta"]["presentation"] == expected
+        assert '"presentation":' in shown.content
+        assert all(f"id={hit['id']} " not in shown.content for hit in hits[len(visible):])
