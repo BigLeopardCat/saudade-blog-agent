@@ -185,7 +185,7 @@ def prepare_talk_change(
     row = current["after"] or current["before"]
     target = f"说说《{row['title']}》" + (f"（#{row['id']}）" if row["id"] else "")
     question = target + (
-        "\n永久删除此说说，不影响河灯留言。"
+        "\n删除此说说？"
         if action == "delete"
         else "\n发布/更新后的完整正文：\n\n" + row["content"]
     )
@@ -204,6 +204,8 @@ def prepare_talk_change(
         question=question,
         target=target,
         schedule=schedule,
+        notices=[{"kind": "warning", "text": "永久删除此说说，不影响河灯留言。"}]
+        if action == "delete" else [],
     )
 
 

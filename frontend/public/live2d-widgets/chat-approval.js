@@ -62,6 +62,7 @@
       const view = read(ask.convId), old = view.records.find(row => row.id === ask.id);
       const anchor = owners.get(ask.id);
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
+        notices: ask.notices,
         image_review: ask.image_review,
         cover_review: ask.cover_review,
         article_ids_to_refresh: ask.article_ids_to_refresh,
@@ -87,6 +88,22 @@
       if (anchor) owners.set(ask.id, anchor);
       return anchor || null;
     };
+    const renderNotices = (container, notices) => {
+      if (!Array.isArray(notices) || !notices.length) return;
+      const section = document.createElement('aside');
+      section.className = 'chat-approval-notices';
+      section.setAttribute('role', 'note');
+      section.setAttribute('aria-label', '系统提示');
+      for (const notice of notices) {
+        if (!notice || !['info', 'warning'].includes(notice.kind)
+            || typeof notice.text !== 'string' || !notice.text || notice.text.length > 1000) continue;
+        const row = document.createElement('p');
+        row.className = 'chat-approval-notice ' + notice.kind;
+        row.textContent = notice.text;
+        section.appendChild(row);
+      }
+      if (section.childElementCount) container.appendChild(section);
+    };
     const renderRecord = (ask, note) => {
       const anchor = findAnchor(ask);
       if (!anchor) return;
@@ -99,6 +116,7 @@
       const question = document.createElement('div'); applyMsg(question, ask.q || '');
       window.__waifuImageReview?.render(question, ask.image_review);
       window.__waifuImageReview?.renderCover(question, ask.cover_review);
+      renderNotices(question, ask.notices);
       record.append(label, question); anchor.appendChild(record);
     };
     const restoreRecords = () => {
@@ -211,6 +229,7 @@
       window.__waifuImageReview?.render(askQuestion, review);
       const cover = ctx.state.pendingAsk?.cover_review || currentAsk?.cover_review;
       window.__waifuImageReview?.renderCover(askQuestion, cover);
+      renderNotices(askQuestion, (ctx.state.pendingAsk || currentAsk)?.notices);
       if (note) {
         const el = document.createElement('div');
         el.className = 'chat-ask-retry-note';

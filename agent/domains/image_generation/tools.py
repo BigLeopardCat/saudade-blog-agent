@@ -49,7 +49,7 @@ def approve_card(job, config, *, result=False):
             question = "上一次保留未完成，图片仍在。请核对后决定是否再次保存到图库。"
     else:
         version, name, workflow = job.requestHash, "start_image_generation", "image_generation"
-        question = "批准后调用计费 API 生成 1 张图片，实际结果仍需你决定是否保留。"
+        question = "请核对这次图片生成请求。"
     question += (f"\n\n模型：{request.model}；尺寸：{request.size}；质量：{request.quality}"
                  f"\n\n服务地址：{request.provider}；固定参考图：{len(request.references)} 张。")
     review = {"job_id": job.id, "version": version, "prompt": request.prompt,
@@ -67,7 +67,9 @@ def approve_card(job, config, *, result=False):
         {"tool": name, "args": {"job_id": job.id, "version": version}},
         executor="image_generation", question=question,
         target="生成图片入库" if result else "调用图片生成 API",
-        payload={"image_review": review}, preparation_facts=facts)
+        payload={"image_review": review}, preparation_facts=facts,
+        notices=[] if result else [{"kind": "warning", "text":
+            "批准后调用计费 API 生成 1 张图片，实际结果仍需你决定是否保留。"}])
     if not isinstance(card, TurnResult):
         return card
     options = [{"label": "保留到图库" if result else "生成图片", "value": "yes", "kind": "primary"},

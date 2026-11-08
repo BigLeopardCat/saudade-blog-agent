@@ -163,6 +163,8 @@ const server = createServer(async (req, res) => {
             id: next ? 'offline-next' : 'offline-ask', task_id: taskId,
             replay_safe: mode === 'confirmation-resumable',
             q: mode === 'confirmation-images' ? 'fixture-images' : next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
+            notices: [{kind:'warning',text:'删除后不可恢复。'},
+              {kind:'info',text:'确认后执行；修改需求直接在聊天里说。'}],
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
             article_ids_to_refresh: mode === 'confirmation-select' ? [] : [23,54],
             exp: Math.floor(Date.now() / 1000) + 600,
@@ -961,6 +963,12 @@ try {
   passed('actual tool names and summary progress remain visible in the process panel');
   const approve = page.locator('#chat-ask-btns [data-ask-value="yes"]');
   await approve.waitFor({ state: 'visible' });
+  const notice = page.locator('#chat-ask .chat-approval-notices');
+  assert.equal(await notice.getAttribute('aria-label'), '系统提示');
+  assert.match(await notice.innerText(), /删除后不可恢复/);
+  assert.equal(await notice.evaluate(el => getComputedStyle(el).borderTopStyle), 'solid');
+  assert.equal(await notice.evaluate(el => parseFloat(getComputedStyle(el).borderTopWidth)), 1);
+  assert.equal(await page.locator('#chat-ask .chat-approval-notices').count(), 1);
   nextMode = 'unknown';
   count = streamCount();
   await approve.click();

@@ -46,6 +46,7 @@ def prepared(call, proposal, todos):
         "tool_execution": "disabled_until_decision",
         "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
     }
+    visible["notices"] = proposal["execution"]["pending_confirm"].get("notices", [])
     facts = proposal["execution"]["pending_confirm"].get("preparation_facts")
     if facts is not None:
         visible["preparation_facts"] = facts

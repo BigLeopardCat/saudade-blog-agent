@@ -63,7 +63,8 @@ def prepare_dashboard_todo_deletions(
         specs,
         executor="todos",
         target=f"删除所选的 {len(rows)} 项待办",
-        question="选择要删除的待办；未勾选的保留。删除后不可恢复。",
+        question="选择要删除的待办；未勾选的保留。",
+        notices=[{"kind": "warning", "text": "删除后不可恢复。"}],
         choices=[f"{row['text']}（#{row['id']}）" for row in rows],
     )
 
