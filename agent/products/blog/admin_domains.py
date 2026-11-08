@@ -14,6 +14,7 @@ from agent.domains.categories import preparation as categories
 from agent.domains.gallery import folders as gallery_folders
 from agent.domains.gallery import preparation as gallery_preparation
 from agent.domains.gallery import reads as gallery_reads
+from agent.domains.gallery import transfers as gallery_transfers
 from agent.domains.image_generation import tools as image_generation
 from agent.domains.moderation_actions import preparation as moderation
 from agent.domains.notices import preparation as notices
@@ -26,6 +27,7 @@ _PREPARATIONS = (
     ("admin_account_actions", accounts),
     ("admin_gallery", gallery_preparation),
     ("admin_gallery", gallery_folders),
+    ("admin_gallery", gallery_transfers),
     ("admin_talks", talks),
     ("admin_catalog", article_deletions),
     ("admin_image_generation", image_generation),

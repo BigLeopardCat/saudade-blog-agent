@@ -52,7 +52,8 @@ def test_no_argument_discovery_rejects_injected_fields_before_activation():
     assert error.status == "error" and error.artifact['kind'] == 'invalid_args'
     assert session.state['tool_domains'] == {'scope': None, 'domains': []}
     assert session.menu[0]['function'] == {'name': 'load_public_info_tools',
-        'description': 'Load tools for the public domain.'}
+        'description': 'Load tools for the public domain.',
+        'parameters': {'type': 'object', 'properties': {}, 'additionalProperties': False}}
 
 
 def test_shared_primitive_has_one_unambiguous_execution_binding():

@@ -11,7 +11,7 @@ from tools.site import nav_label
 
 _EFFECT_CN = {"sakura": "樱花", "rain": "大雨", "snow": "雪花"}
 
-# Display labels for parameterless read operations.
+# Stable labels for tool progress and execution receipts.
 _NOARG_VERB = {
     "list_admin_talks": "查看后台说说",
     "prepare_talk_change": "准备说说变更",
@@ -30,6 +30,9 @@ _NOARG_VERB = {
     "get_gallery_image": "查看图片",
     "get_gallery_image_metadata": "查看图片信息",
     "prepare_gallery_images": "准备图库修改",
+    "prepare_gallery_transfer": "准备图片传输",
+    "get_gallery_transfer": "查看图片传输",
+    "transfer_gallery_images": "提交图片传输",
     "prepare_article_cover": "准备文章封面",
     "manage_gallery_images": "管理图库图片",
     "set_article_cover": "设置文章封面",
@@ -411,7 +414,7 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         return (f"查看后台文章列表（关键词「{k[:24] if preview else k}」）"
                 if k else "查看后台文章列表")
     if name == "list_accounts":
-        # Display labels for parameterless read operations.
+        # Stable labels for tool progress and execution receipts.
         return "查看后台账号名录"
     if name == "get_article_detail":
         what = DOC_TYPE_CN.get(_raw(a.get("doc_type")) or "note", "文章")
