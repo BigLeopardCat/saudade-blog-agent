@@ -235,7 +235,16 @@ def article_deferred_read(turn, state):
     first = turn(f"能查文章{ARTICLE_ID}里关于“{QUERY}”的原始说明吗？先不要读取，只说能否查。")
     _check(first, max_model_calls=1, forbid_business_write=True)
     _require(not state["requests"] and not first["tool_calls"], "user deferred all reading")
-    scoped_article(lambda _: turn("去查吧，只读相关段落就好。"), state)
+    started = False
+
+    def followup(message):
+        nonlocal started
+        if not started:
+            started = True
+            message = "去查吧，只读相关段落就好。"
+        return turn(message)
+
+    scoped_article(followup, state)
 
 
 CASES = [("efficiency_article_metadata", article_backend, article_metadata),

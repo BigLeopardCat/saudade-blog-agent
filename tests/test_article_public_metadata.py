@@ -64,7 +64,8 @@ def runtime(model):
 
 
 @pytest.mark.parametrize("view", ["body", "metadata"])
-def test_model_tool_message_has_public_display_fields_without_identity_or_extra_http(tmp_path, view):
+def test_model_tool_message_has_public_display_fields_without_identity_or_extra_http(
+        tmp_path, view):
     reply = json.dumps(
         {
             "authorName": DISPLAY["authorName"],

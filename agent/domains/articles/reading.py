@@ -92,7 +92,8 @@ class Page(BaseModel):
             or self.nextSectionsOffset != (section_end if section_end < self.sectionCount else None)
             or not self.sections and self.nextSectionsOffset is not None
             or self.view == "body" and self.sectionsOffset != 0
-            or self.view in {"outline", "metadata"} and (self.readOffset != 0 or self.source is not None)
+            or self.view in {"outline", "metadata"}
+            and (self.readOffset != 0 or self.source is not None)
             or self.view == "metadata" and (self.sectionCount != 0 or self.totalChars != 0)
         ):
             raise ValueError("inconsistent section directory range")
