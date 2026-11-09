@@ -234,9 +234,8 @@ def rag_search(
 ) -> str | ToolResult:
     """Locate public article passages for factual questions, including a known article.
     Set article_id for a known source; results contain version-bound section and character
-    ranges for get_article_detail. Each candidate's revision/section_schema applies to all
-    its section ranges. Candidates are not body reads. For title/tag discovery use search_notes;
-    public announcements/guestbook/talks use public_activity; your own entries use own_activity.
+    ranges for get_article_detail. Candidates are not body reads. For title/tag discovery
+    use search_notes; announcements, guestbook and talks use public_activity.
     """
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
