@@ -129,6 +129,9 @@ RRF 是相对排名，不是相关性置信度。启用前比较固定语料上�
 section_schema、section、offset 和 max_chars 读取原文；需要全文才顺序续读。文章限定在
 BM25S 评分 mask 和 PG 距离查询的 WHERE 中生效，先限定再取文档 top_k。检索文字按完整
 候选条目缩页，结构化 evidence 只登记模型看见的候选；一个条目也放不下时返回 unavailable。
+同一候选的 revision 与 section_schema 在文档级只输出一次，适用于其全部小节定位；
+保留各小节的范围、评分和证据片段，不缩短版本摘要或减少候选来节省上下文。
+工具 schema 与检索入口共用 top_k 上限 50，越界输入在参数校验时拒绝。
 
 get_article_detail 默认 `view=body`，使用 offset、max_chars、revision，返回 contentRevision、
 readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。

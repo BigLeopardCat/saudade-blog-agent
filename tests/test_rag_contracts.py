@@ -284,9 +284,8 @@ def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offs
                        {"section_id": "s20", "offset": 96}]}
     result = candidate_text(1, hit)
     assert "rank=1" in result and "score=" not in result
-    assert "section=s1 revision=rev1 offset=0" in result
-    assert "section=s20 revision=rev1 offset=96" in result
-    assert "section=s18 revision=rev1" in result
-    assert "section=s18 revision=rev1 offset=" not in result
-    assert "section=s99 revision=rev1" in result
-    assert "section=s99 revision=rev1 offset=" not in result
+    assert result.count("revision=rev1") == 1
+    assert "section=s1 offset=0" in result
+    assert "section=s20 offset=96" in result
+    assert "section=s18" in result and "section=s18 offset=" not in result
+    assert "section=s99" in result and "section=s99 offset=" not in result

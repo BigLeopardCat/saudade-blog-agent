@@ -179,7 +179,7 @@ def test_missing_cached_source_revision_requests_a_rebuild_without_reading_the_s
     assert rebuilds == [True] and not requests
 
 
-@pytest.mark.parametrize("top_k", [True, 0, -1, 65])
+@pytest.mark.parametrize("top_k", [True, 0, -1, 51, 64, 65])
 def test_tool_candidate_count_is_bounded_before_retrieval(top_k):
     from pydantic import ValidationError
 

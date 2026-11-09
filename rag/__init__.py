@@ -4,3 +4,4 @@ Import modules explicitly so importing rag does not initialize indexes, optional
 model dependencies or application resources."""
 
 DEFAULT_TOP_K = 8
+MAX_TOP_K = 50

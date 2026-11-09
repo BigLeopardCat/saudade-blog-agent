@@ -1,6 +1,7 @@
 """Known-document retrieval, complete outlines and original-source reading costs."""
 
 import json
+import re
 
 import httpx
 import pytest
@@ -135,6 +136,25 @@ def test_direct_locator_reads_the_deep_match_and_not_the_start_of_a_long_section
     assert result.kind == "ok" and FACT in result.data["sectionText"]
     assert len(result.data["sectionText"]) == arguments["max_chars"]
     assert result.data["source"]["offset"] == arguments["offset"]
+
+
+def test_shared_candidate_version_can_read_every_visible_section(article):
+    _, index, _ = article
+    hit = index._lexical_ranked("青花瓷器图案", 1, article_id=ARTICLE)[0]
+    wire = candidate_text(1, hit)
+    revision = re.findall(r"\brevision=(\S+)", wire)
+    schema = re.findall(r"\bsection_schema=(\S+)", wire)
+    assert revision == [hit["document_revision"]] and schema == [PARSER_VERSION]
+    ranges = re.findall(r"\bsection=(s\d+) offset=(\d+) max_chars=(\d+)", wire)
+    assert len(ranges) == len(hit["matches"]) > 1
+    for section, offset, length in ranges:
+        result = notes.get_article_detail.invoke({
+            "article_id": ARTICLE, "section": section, "offset": int(offset),
+            "max_chars": int(length), "revision": revision[0], "section_schema": schema[0],
+        })
+        assert result.kind == "ok" and result.data["sectionText"]
+        assert result.data["source"]["offset"] == int(offset)
+        assert len(result.data["sectionText"]) == int(length)
 
 
 def test_every_directory_entry_can_be_traversed_without_claiming_body_reads(article):
