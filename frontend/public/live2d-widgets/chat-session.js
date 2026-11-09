@@ -14,8 +14,8 @@
         return value >= CONV_MIN && value <= CONV_MAX ? value : CONV_DEF;
       } catch (_) { return CONV_DEF; }
     })();
-    // 会话切换阻断：发送/流式中不切会话（收尾保存仍写原会话，见 chat-engine 注释）
-    const switchBlocked = () => !!(ctx.state.isSending || ctx.state.streamCtrl
+    // Detached subscriptions do not cancel their server-owned execution.
+    const switchBlocked = () => !ctx.ui.canDetachRun?.() && !!(ctx.state.isSending || ctx.state.streamCtrl
       || (ctx.state.remoteRounds && Object.keys(ctx.state.remoteRounds).length));
     const getToken = () => { try { return localStorage.getItem('tokenKey') || ''; } catch (e) { return ''; } };
     // 相对时间（列表行）：<1min 刚刚 · <60min N 分钟前 · 当日 N 小时前 ·
@@ -31,7 +31,8 @@
       return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
     };
     // 行标题：title NULL（未派生/纯图轮）显示"新对话"（产品拍板）
-    const rowTitle = (c) => (c && c.title && String(c.title).trim()) ? String(c.title).trim() : '新对话';
+    const rowTitle = c => ((c?.title && String(c.title).trim()) || '新对话')
+      + (ctx.ui.backgroundStatus?.(c?.id) ? ' · ' + ctx.ui.backgroundStatus(c.id) : '');
     const rowSince = (c) => {
       const t = c && c.created_at, u = c && c.updated_at;
       if (!(t > 0) || typeof t !== 'number' || !(u > 0) || typeof u !== 'number') return '';
@@ -176,7 +177,10 @@
     const doDelete = async (id) => {
       const tk = getToken();
       if (!tk) return;
-      if (switchBlocked()) return; // 流式中不删会话（收尾保存仍写原会话）
+      if (ctx.state.isSending || ctx.state.streamCtrl || ctx.ui.backgroundStatus?.(id)) {
+        ctx.ui.notify?.('请先停止该会话的任务，再删除会话', 'info');
+        return;
+      }
       const isCurrent = ctx.state.conv === id && !ctx.state.convNeedCreate;
       clearMenuAll();
       const rearm = () => { // 删除失败：恢复确认条（红色可见、3s 后还原），不静默
@@ -282,7 +286,7 @@
         row.appendChild(meta);
         row.appendChild(text);
         row.addEventListener('click', () => {
-          if (switchBlocked()) return; // 流式中不切会话（收尾保存仍写原会话）
+          if (switchBlocked()) return; // 已接受的后台任务可分离；直连请求仍需等收尾
           clearMenuAll();
           switchTo(Number(row.dataset.conv), row.dataset.hit);
         });
@@ -388,10 +392,11 @@
     };
 
     const switchTo = (id, hit) => {
-      if (switchBlocked()) return; // 流式中不切会话（收尾保存仍写原会话）
+      if (switchBlocked()) return; // 已接受的后台任务可分离；直连请求仍需等收尾
       clearMenuAll();
       const hitId = hit ? Number(hit) : 0;
       if (ctx.state.conv === id && !ctx.state.convNeedCreate && !hitId) return; // 当前行且无命中锚：无操作
+      ctx.ui.detachRun?.();
       // 清旧视图 + 拉新会话 + 持久化（内部触发 onConvChange；带 hitId 时引擎
       // 拉取完成后定位闪烁到命中消息，长会话自动翻更早窗口）
       engine.adoptConversation(id, hitId || undefined);
@@ -399,6 +404,7 @@
     const startNew = () => {
       if (switchBlocked()) return;
       clearMenuAll();
+      ctx.ui.detachRun?.();
       engine.adoptConversation(null); // 空白态：只清视图置 needCreate，不发无参拉取
       try { ctx.dom.input && ctx.dom.input.focus(); } catch(e) {/* ignore */}
     };

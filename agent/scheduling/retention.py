@@ -5,6 +5,7 @@ import json
 from contextlib import ExitStack
 from datetime import timedelta
 
+from agent.background.service import WORKFLOW as CHAT_WORKFLOW
 from agent.scheduling.backend import APP, ONCE, PERIODIC, Backend
 from agent.scheduling.checkpoints import Cleanup
 from agent.scheduling.factory import configured_dsn
@@ -49,6 +50,18 @@ def collect(backend, *, apply=False, now=utc_now, cleanup=None):
     return {"candidates": candidates, "deleted": candidates if apply else []}
 
 
+def collect_chat_runs(backend, *, apply=False, now=utc_now):
+    """Expire terminal transport streams without deleting conversation checkpoints."""
+    rows = backend.client.list_workflows(application_name=APP, name=CHAT_WORKFLOW,
+        status=["SUCCESS", "ERROR", "CANCELLED"], limit=100,
+        completed_before=(now() - timedelta(days=KEEP_DAYS)).isoformat(),
+        load_input=False, load_output=False)
+    candidates = [row.workflow_id for row in rows]
+    if apply and candidates:
+        backend.client.delete_workflows(candidates)
+    return {"candidates": candidates, "deleted": candidates if apply else []}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true")
@@ -59,11 +72,9 @@ def main():
     with ExitStack() as resources:
         backend = Backend(configured_dsn())
         resources.callback(backend.close)
-        print(
-            json.dumps(
-                collect(backend, apply=args.apply, cleanup=Cleanup(backend.client, resources))
-            )
-        )
+        result = collect(backend, apply=args.apply, cleanup=Cleanup(backend.client, resources))
+        result["chat_runs"] = collect_chat_runs(backend, apply=args.apply)
+        print(json.dumps(result))
 
 
 if __name__ == "__main__":

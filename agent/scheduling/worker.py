@@ -7,6 +7,8 @@ from threading import Event
 
 from dbos import DBOS, DBOSPortableJSONSerializer
 
+from agent.background import workflows as chat_workflows  # noqa: F401
+from agent.background.service import QUEUE as CHAT_QUEUE
 from agent.scheduling import workflows
 from agent.scheduling.backend import (
     APP,
@@ -134,6 +136,7 @@ def main():
         workflows.configure(WorkerActions(backend, host, resources))
         try:
             DBOS.launch()
+            DBOS.register_queue(CHAT_QUEUE, worker_concurrency=4, global_concurrency=4)
             DBOS.register_queue(CONTROL_QUEUE, worker_concurrency=100)
             DBOS.register_queue(EXECUTION_QUEUE, worker_concurrency=1, global_concurrency=1)
             DBOS.register_queue(REMINDER_QUEUE, worker_concurrency=2, global_concurrency=2)

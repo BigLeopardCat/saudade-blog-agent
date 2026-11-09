@@ -47,3 +47,19 @@ def test_failed_checkpoint_cleanup_preserves_scheduler_recovery_evidence():
     with pytest.raises(RuntimeError):
         collect(SimpleNamespace(client=client), apply=True, cleanup=failed)
     client.delete_workflows.assert_not_called()
+
+
+def test_chat_stream_retention_excludes_active_runs_and_preserves_task_checkpoints():
+    from agent.background.service import WORKFLOW
+    from agent.scheduling.retention import collect_chat_runs
+
+    client = Mock()
+    client.list_workflows.return_value = [SimpleNamespace(workflow_id="finished-chat")]
+    backend = SimpleNamespace(client=client)
+    assert collect_chat_runs(backend)["deleted"] == []
+    client.delete_workflows.assert_not_called()
+    query = client.list_workflows.call_args.kwargs
+    assert query["name"] == WORKFLOW and query["completed_before"]
+    assert set(query["status"]) == {"SUCCESS", "ERROR", "CANCELLED"}
+    assert collect_chat_runs(backend, apply=True)["deleted"] == ["finished-chat"]
+    client.delete_workflows.assert_called_once_with(["finished-chat"])

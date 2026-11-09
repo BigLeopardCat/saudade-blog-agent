@@ -5,6 +5,7 @@ import { createServer } from 'node:http';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
+import { backgroundFixture, assertBackgroundRuns } from './chat-background.browser.mjs';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
 import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
@@ -14,6 +15,7 @@ const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
 const modulePath = process.env.PLAYWRIGHT_MODULE;
 const { chromium } = await import(modulePath ? pathToFileURL(modulePath) : 'playwright');
 const requests = [];
+const background = backgroundFixture();
 let nextMode = 'reply';
 let serviceReady = true;
 let managedTasks = {paused:{items:[]},schedules:{items:[]}};
@@ -44,6 +46,7 @@ const server = createServer(async (req, res) => {
       for await (const chunk of req) chunks.push(chunk);
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : {};
       requests.push({ method: req.method, path: url.pathname, body });
+      if (background.handle(req, res, url, body)) return;
       if (url.pathname === '/api/chat/service/status') return json(res, {ready:serviceReady});
       if (url.pathname === '/api/chat/tasks') {
         const snapshot = structuredClone({...managedTasks,server_time:new Date().toISOString()});
@@ -1465,6 +1468,9 @@ try {
   assert.equal(await savedFailures(),null);
   assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.resume_task,failedTask);
   passed('repeated provider failures keep one pause card and successful resume clears it');
+
+  await assertBackgroundRuns(page, background);
+  passed('background runs survive switching and reload without mixing conversations');
 
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } catch (error) {

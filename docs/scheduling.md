@@ -67,3 +67,11 @@ HTTP 内部管理 API 位于 `/automations`，需要 `X-Agent-Assertion` 管理�
 CI 提供临时 PostgreSQL 16；不依赖本机路径、服务或生产密钥。
 测试包括管理员隔离、确认不执行、执行账重放、真实暂停恢复、权限变化，以及杀 Worker
 后已完成步骤不重做、通知重试不重复。博客侧的通知事务由 `TEST_PG_URL` 显式启用验证。
+
+## 聊天后台队列
+
+同一个 DBOS Worker 注册 `chat-executions` 队列（全局/每 Worker 并发 4），执行
+`saudade.chat.execute.v1`。它使用宿主签发的单次聊天票据，不借用管理员定时任务授权。
+任务提交、订阅和取消见[聊天协议](chat-stream-protocol.md)。每个用户最多 4 个活动运行、每会话 1 个，
+原有模型许可和工具执行账继续生效。部署需要启用 `SCHEDULING_ENABLED` 并启动配套 Worker。
+清理入口同时预览/删除超过 30 天的终态聊天流，保留任务 checkpoint。

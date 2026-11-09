@@ -127,6 +127,7 @@
     ['chat-protocol', '__waifuChatProtocol'],
     ['chat-browser-actions', '__waifuBrowserActions'],
     ['chat-steering', '__waifuSteering'],
+    ['chat-runs', '__waifuRuns'],
     ['chat-approval', '__waifuApproval'],
     ['chat-stream', '__waifuStream'],
     ['chat-tasks', '__waifuTaskUI'],
@@ -136,7 +137,7 @@
   ];
   for (const [name, globalKey] of MODS) {
     try {
-      await loadScript(live2d_path + name + '.js?v=' + VER, name === 'chat-protocol');
+      await loadScript(live2d_path + name + '.js?v=' + VER, ['chat-protocol', 'chat-runs'].includes(name));
     } catch (err) {
       console.error('[agent-chat] 子模块加载失败: ' + name + '.js（' + err + '），聊天功能不可用');
       if (window.__reportError) window.__reportError({ type: 'module_load_fail', message: '子模块加载失败: ' + name + '.js', url: live2d_path + name + '.js?v=' + VER });

@@ -73,6 +73,7 @@
 
     const init = () => {
       if (!chatPanel) { setTimeout(init, 500); return; }
+      const runs = g.__waifuRuns?.(ctx, engine);
       const steering = g.__waifuSteering ? g.__waifuSteering(ctx, engine) : null;
       const postDiscard = async (convId, turnId) => {
         if (!turnId || convId == null) return { ok: false, why: '缺少轮次标识，请新建会话后重试' };
@@ -337,7 +338,7 @@
         const silent = !!opts.silent;
         const msg = silent ? (opts.message || '') : input.value.trim();
         const imgs = silent ? [] : (ctx.state.pendingImages || []);
-        if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken) || ctx.state.isSending
+        if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken && !opts.attachRun) || ctx.state.isSending
             || ctx.state.steeringSubmitting || Object.keys(ctx.state.remoteRounds || {}).length) {
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('此刻有轮次在跑');
           return;
@@ -413,8 +414,8 @@
               || opts.resumeInvalidation?.articleIdsToRefresh || [])
               .filter(id => Number.isSafeInteger(id) && id > 0))],
           },
-          taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
-          turnId: silent ? (opts.resumeTurn || lastUserTurn()) : roundId,
+          taskId: opts.attachRun?.task_id || opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
+          turnId: opts.attachRun?.turn_id || (silent ? (opts.resumeTurn || lastUserTurn()) : roundId),
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
@@ -568,11 +569,7 @@
           // 总超时（300s，与后端 STREAM_TOTAL_TIMEOUT 对齐）：agent 工具调用循环等场景
           // 每轮都有帧会重置空闲计时，此计时器不被重置，保证界面必然恢复
           totalTimer = setTimeout(() => { ctx.state.timedOut = true; ctrl.abort(); }, 300000);
-          const resp = await fetch('/api/chat/stream', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
-                       'X-Agent-Stream-Version': '2' },
-            body: JSON.stringify({
+          const payload = {
               task_inputs: !!steering && (!silent || !!opts.resumeTask),
               message: msg,
               turn_id: roundState.turnId,
@@ -590,9 +587,12 @@
               ...(silent && opts.confirmToken ? { confirm_token: opts.confirmToken } : {}),
               ...(silent && opts.confirmToken && opts.confirmPick
                   ? { confirm_pick: opts.confirmPick } : {}),
-            }),
-            signal: ctrl.signal,
-          });
+            };
+          const resp = await runs?.open(payload, roundState, ctrl.signal, opts.attachRun)
+            || await fetch('/api/chat/stream', {method: 'POST',
+              headers: {'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token,
+                        'X-Agent-Stream-Version': '2'},
+              body: JSON.stringify(payload), signal: ctrl.signal});
           if (!ownsRound()) throw staleRound();
           if (!resp.ok) {
             if (resp.status >= 500) void ctx.ui.checkService?.();
@@ -731,9 +731,12 @@
           const protocol = window.__waifuChatProtocol.createStream(({ type, data }) => {
             if (!ownsRound()) throw staleRound();
             kickTyping();
+            if (['done', 'error'].includes(type) && roundState.backgroundRun)
+              runs.acknowledge(roundState.backgroundRun);
             if (type === 'error') {
               const err = new Error(data);
               err.userText = data;
+              if (ctx.state.stoppedByUser) err.name = 'AbortError';
               throw err;
             }
             if (type === 'done') return;
@@ -831,6 +834,14 @@
           execAgentCommands(programCmds, contentSpan);
         } catch(e) {
           if (e?.staleRound || !ownsRound()) return false;
+          if (roundState.backgroundRun && !ctx.state.stoppedByUser && !e?.userText) {
+            if (typingTimer) clearTimeout(typingTimer);
+            typingEl?.remove();
+            ctx.ui.notify?.('连接已断开，后台任务状态会在返回会话时重新核对。', 'info');
+            if (ctx.state.confirmRound) ctx.state.confirmRound.failed = '后台结果待核对';
+            void runs.refresh();
+            return false;
+          }
           if (e && e.skipFailedPersist) {
             if (typingTimer) clearTimeout(typingTimer);
             if (typingEl) typingEl.remove();
@@ -949,6 +960,7 @@
                 if (ctx.state.pendingAsk) saveAsk(ctx.state.pendingAsk);
               }
             }
+            if (roundState.backgroundRun) { void runs.refresh(); ctx.state.pendingPull = true; }
             // 流式中被推迟的 DB 拉取在此补拉（storage 事件可能在流中到达）
             if (ctx.state.pendingPull) { ctx.state.pendingPull = false; setTimeout(pullHistory, 0); }
             engine.notifyListDirty();
@@ -1363,9 +1375,46 @@
       };
       ['br', 'tl', 'tr', 'bl'].forEach(makeResizeHandle);
 
-      const pauseTask = () => {
+      ctx.ui.canDetachRun = () => !!ctx.state.activeRound?.backgroundAccepted;
+      ctx.ui.detachRun = () => {
+        if (!ctx.ui.canDetachRun()) return false;
+        const previous = ctx.state.activeRound;
+        ctx.state.activeRound = null;
+        ctx.state.streamCtrl?.abort();
+        ctx.state.streamCtrl = null;
+        ctx.state.isSending = false;
+        ctx.state.stoppedByUser = false;
+        ctx.state.confirmRound = null;
+        ctx.state.approvalBusy = false;
+        ctx.state.remoteRounds = {};
+        steering?.end();
+        resetMouth();
+        broadcast({t: 'idle', roundId: previous.roundId, from: engine.windowId});
+        try { localStorage.removeItem('saudade-chat-busy'); } catch (_) { /* optional lease */ }
+        ctx.ui.refreshComposer?.();
+        return true;
+      };
+      ctx.ui.attachBackgroundRun = row => {
+        if (ctx.state.isSending || row.conversation_id !== ctx.state.conv) return;
+        void sendMessage({silent: true, attachRun: row, message: '',
+          resumeText: row.title, resumeTurn: row.turn_id});
+      };
+      const pauseTask = async () => {
         if (!ctx.state.isSending) return;
         const pausedRound = ctx.state.activeRound;
+        if (pausedRound?.backgroundRun) {
+          ctx.state.stoppedByUser = true;
+          ctx.ui.refreshComposer?.();
+          try { await runs.cancel(pausedRound.backgroundRun); }
+          catch (error) {
+            if (ctx.state.activeRound === pausedRound) {
+              ctx.state.stoppedByUser = false; ctx.ui.refreshComposer?.();
+              ctx.ui.notify?.(error.message, 'error');
+            }
+            return;
+          }
+          if (ctx.state.activeRound !== pausedRound) return;
+        }
           // 输出中点击 = 停止生成
           ctx.state.stoppedByUser = true;
           ctx.ui.refreshComposer?.();
@@ -1713,7 +1762,7 @@
         });
       }
       if (typeof engine.setConvUI === 'function') {
-        engine.setConvUI({ onAskResync: () => { restoreAsk(); syncAsk(); },
+        engine.setConvUI({ onAskResync: () => { restoreAsk(); syncAsk(); void runs?.restore(); },
                            onFailedResync: () => { attachHistoryFailedRetry(); steering?.restore(); } });
       }
 

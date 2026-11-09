@@ -11,6 +11,7 @@ from agent.api.middleware import BodyLimitMiddleware, trace_id_middleware
 from agent.api.routes import (
     automations,
     chat,
+    chat_runs,
     conversations,
     knowledge_graph,
     moderation,
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
 
     for router in (
         chat.router,
+        chat_runs.router,
         automations.router,
         conversations.router,
         task_inputs.router,
