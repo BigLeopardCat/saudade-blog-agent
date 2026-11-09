@@ -73,3 +73,26 @@ def test_tool_limits_require_trace_and_suite_accepts_batched_followup():
                 if row["id"] == "activity_keyword_followup")
     assert all(rnd["gold"]["max_tool_calls"] == {"search_public_activity": 1}
                for rnd in case["rounds"])
+
+
+@pytest.mark.parametrize("check_eligibility", [False, True])
+def test_tentative_moderation_accepts_clarification_or_eligibility_read(check_eligibility):
+    case = next(row for row in online_baseline.load_suite()
+                if row["id"] == "board_publisher_followup")
+    gold = case["rounds"][1]["gold"]
+    calls = [{"node": "native", "event": "call", "name": "list_admin_board",
+              "kind": "ok", "args": {"item_id": 45}}]
+    if check_eligibility:
+        calls.append({"node": "native", "event": "call",
+                      "name": "get_account_action_eligibility", "kind": "ok",
+                      "args": {"account_id": 20, "action": "mute"}})
+    assert not native_assertions.check(gold, {"native_events": calls})
+    assert native_assertions.check(gold, {"native_events": calls[1:]})
+
+
+@pytest.mark.parametrize("case_id", ["account_mute_missing_duration",
+                                    "account_mute_protected_target"])
+def test_explicit_moderation_still_requires_eligibility_evidence(case_id):
+    case = next(row for row in online_baseline.load_suite() if row["id"] == case_id)
+    failures = native_assertions.check(case["gold"], {"native_events": []})
+    assert any("get_account_action_eligibility" in failure for failure in failures)
