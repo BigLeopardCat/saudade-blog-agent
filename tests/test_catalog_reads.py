@@ -185,7 +185,7 @@ def test_runtime_discovers_catalog_without_legacy(backend, monkeypatch, name):
     def call(tool_name):
         return AIMessage(content="", tool_calls=[{"name": tool_name, "args": {}, "id": tool_name}])
 
-    domain = "admin_account_actions" if name == "list_accounts" else "admin_catalog"
+    domain = "admin_accounts" if name == "list_accounts" else "admin_catalog"
     responses = iter([call(f"load_{domain}_info_tools"), call(name),
                       AIMessage(content="已读取当前页面，尚有后续记录。")])
 
@@ -281,7 +281,7 @@ def test_candidate_read_is_initial_only_when_the_catalog_authorizes_it(role):
         cfg, CheckpointConversationStore(None).load(cfg), None, None, True)
     assert ("list_accounts" in initial) == (role in {"admin", "superadmin"})
     assert not {"prepare_account_role", "prepare_account_freeze"} & initial.keys()
-    assert ("admin_account_actions" in domains) == (role in {"admin", "superadmin"})
+    assert ("admin_accounts" in domains) == (role in {"admin", "superadmin"})
 
 
 def test_empty_draft_title_is_preserved_instead_of_losing_the_page(backend):

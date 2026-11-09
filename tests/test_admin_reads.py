@@ -225,5 +225,7 @@ def test_read_discovery_excludes_preparation_schemas(read_domain, management_dom
     menus = [{item["function"]["name"] for item in menu} for menu in model.menus]
     assert result.reply == "读取工具已加载，尚未查询。"
     assert domains[read_domain].keys() <= menus[-1]
-    assert all(not menu.intersection(domains[management_domain]) for menu in menus)
+    preparations = {name for name in domains[management_domain] if name.startswith("prepare_")}
+    assert preparations
+    assert all(not menu.intersection(preparations) for menu in menus)
     assert f"load_{management_domain}_info_tools" in menus[-1]

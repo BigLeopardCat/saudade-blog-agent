@@ -42,7 +42,8 @@ DOMAIN_DESCRIPTIONS = {
     "Article-tag assignment: admin_article_management.",
     "admin_accounts": "Read account metadata; check exact-ID operation eligibility without "
     "a mute duration. Read-only checks, not mutation preparation.",
-    "admin_account_actions": "Prepare account freeze, mute or role changes. "
+    "admin_account_actions": "Check exact-ID eligibility (no mute duration needed); "
+    "prepare account freeze, mute or role changes. "
     "Search ambiguous names in admin_accounts first. "
     "Automatic notices are fixed status templates; custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
