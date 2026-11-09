@@ -43,7 +43,6 @@ class Backend:
             application_name=APP,
             serializer=DBOSPortableJSONSerializer(),
             system_database_pool_size=2,
-            lazy=True,
             use_listen_notify=True,
             retry_connection_errors=False,
             observability_query_timeout_sec=5,
