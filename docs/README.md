@@ -14,6 +14,6 @@
 | [Embedding 输入](embedding-inputs.md) | 本地模型、完整输入预算与缓存 |
 | [后台计划](scheduling.md) | DBOS、权限和 Worker 部署 |
 | [离线改进](offline-improvement.md) | 反馈、独立验收集和候选发布 |
-| [架构决策记录](adr/README.md) | 长期架构与发布取舍、决策状态及历史 ADR 入口 |
+| [架构决策记录](adr/README.md) | 框架、权限、幂等、恢复、预算与检索的决策理由、取代关系及历史来源 |
 
 [快速开始](../README.md) · [参与开发](../CONTRIBUTING.md) · [路线图](../ROADMAP.md)
