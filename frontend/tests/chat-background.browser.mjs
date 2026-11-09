@@ -102,4 +102,9 @@ export async function assertBackgroundRuns(page, fixture) {
   fixture.complete(third, '刷新后的后台结果');
   await idle();
   await page.waitForFunction(() => document.getElementById('chat-messages').textContent.includes('刷新后的后台结果'));
+  const stopped = await send('显式停止后台任务');
+  await page.locator('#chat-send').click();
+  await idle();
+  assert.equal(stopped.status, 'CANCELLED');
+
 }

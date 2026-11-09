@@ -95,7 +95,8 @@ CLASSES = [
         status="managed", owner="agent/scheduling/retention.py",
         owner_ref="agent/scheduling/retention.py", retention="Terminal runs older than 30 days",
         why="Public DBOS APIs delete terminal execution trees. Live and paused plans remain; "
-            "child executions must be terminal. Chat streams expire without deleting task checkpoints. "
+            "child executions must be terminal. Chat streams expire without "
+            "deleting task checkpoints. "
             "Nightly cleanup is disabled with scheduling.",
         rule=None, dsn_env="SCHEDULING_DSN",
         tables=["saudade_automations.workflow_status", "saudade_automations.operation_outputs",
