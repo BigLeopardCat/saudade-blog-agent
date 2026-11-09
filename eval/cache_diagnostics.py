@@ -18,7 +18,7 @@ def common_prefix(left, right):
 
 
 def compare(previous, current):
-    """Only compare recorded SDK layouts; an identical payload can still miss cache."""
+    """Compare observed layouts; an identical payload can still miss provider cache."""
     if previous is None:
         return {"change": "first_observed"}
     before, after = previous.get("messages", []), current.get("messages", [])
@@ -65,16 +65,19 @@ def _timestamp(doc):
 
 
 def _calls(doc, source):
-    layout, flags = None, set()
+    layout, source_kind, flags = None, "unavailable", set()
     stamp = _timestamp(doc)
     for index, event in enumerate(doc.get("events", [])):
         kind = event.get("event")
         if kind in ("task_resumed", "confirmation_resumed", "compacted"):
             flags.add(kind)
-        if kind == "request_layout":
-            layout = event
+        if kind in ("request_layout", "wire_request"):
+            layout, source_kind = event, "wire" if kind == "wire_request" else "sdk"
+        elif kind == "wire_request_unavailable":
+            layout, source_kind = {}, "unavailable"
         elif kind in ("llm_done", "llm_error") and layout is not None:
             yield {"trace": source, "index": index, "layout": layout, "usage": event,
+                   "layout_source": source_kind,
                    "phase": event.get("node"), "flags": sorted(flags),
                    "timestamp": stamp + event.get("t", 0) if stamp is not None else None}
             layout = None
@@ -102,11 +105,11 @@ def request_cohorts(documents, prices=None):
         _timestamp(item[1]) is None, _timestamp(item[1]) or 0, item[0]))
     for _, doc in ordered:
         events = [event for event in doc.get("events", []) if isinstance(event, dict)]
-        layouts = [event for event in events if event.get("event") == "request_layout"]
+        layouts = [row["layout"] for row in _calls(doc, "")]
         layout = next((event for event in layouts if event.get("tool_choice") == "auto"),
                       layouts[0] if layouts else {})
         identity = (layout.get("endpoint"), layout.get("session"))
-        comparable = all(identity) and _timestamp(doc) is not None
+        comparable = all(identity) and all(layouts) and _timestamp(doc) is not None
         compacted = any(event.get("event") == "compacted" for event in events)
         if compacted or _summary_attempted(events):
             cohort = "compaction_request"
@@ -123,7 +126,9 @@ def request_cohorts(documents, prices=None):
             after_compaction.discard(identity)
             if compacted:
                 after_compaction.add(identity)
-        models = {event.get("model") for event in layouts if event.get("model")}
+        models = {event["model"] for event in events
+                  if event.get("event") in {"request_layout", "wire_request"}
+                  and event.get("model")}
         model = next(iter(models)) if len(models) == 1 else "mixed_or_unknown"
         key = (cohort, model, *_source_labels(doc))
         if key not in groups:
@@ -153,8 +158,9 @@ def diagnose(documents, *, prices=None):
         complete_identity = bool(layout.get("session") and layout.get("endpoint")
                                  and row["timestamp"] is not None)
         key = (layout.get("model"), layout.get("endpoint"), layout.get("session"),
-               row["phase"], None if complete_identity else row["trace"])
-        delta = compare(previous.get(key), layout)
+               row["phase"], row["layout_source"],
+               None if complete_identity else row["trace"])
+        delta = compare(previous.get(key), layout) if layout else {"change": "unobserved"}
         previous[key] = layout
         event = row["usage"]
         measured = usage.totals([event])
@@ -162,7 +168,7 @@ def diagnose(documents, *, prices=None):
             groups[delta["change"]][field] += value
         incoming, cached = usage.count(event.get("input")), usage.count(event.get("cache_read"))
         known = incoming is not None and cached is not None and cached <= incoming
-        result.append({key: row[key] for key in ("trace", "index", "phase", "flags")} | delta | {
+        result.append({key: row[key] for key in ("trace", "index", "phase", "flags", "layout_source")} | delta | {
             "cross_request_comparable": complete_identity,
             "input": incoming, "cache_read": cached if known else None,
             "uncached_input": incoming - cached if known else None,
