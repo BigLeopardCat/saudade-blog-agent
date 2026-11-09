@@ -15,23 +15,26 @@ from agent.runtime.writes import bound_context
 from tools import base
 
 
-def _question(resource, action, current):
+def _review(resource, action, current):
     label = "河灯留言" if resource == "board" else "文章评论"
     publisher = current["publisher"]
     author = (publisher["nickname"] or publisher["username"]) if publisher else "账号已不存在"
-    text = f"{label} {current['id']}；发表账号：{author}（UID {current['userId']}）"
+    fields = [
+        {"label": "目标", "value": f"{label} {current['id']}"},
+        {"label": "发表账号", "value": f"{author}（UID {current['userId']}）"},
+    ]
     if resource == "board":
-        text += f"；自由留名：{current['displayName'] or '未留名'}"
+        fields.append({"label": "自由留名", "value": current["displayName"] or "未留名"})
     else:
         title = current["articleTitle"]
         title = "文章已不存在" if title is None else title or "无标题"
-        text += f"；文章 {current['articleId']}《{title}》"
+        fields.append({"label": "所属文章", "value": f"{current['articleId']}《{title}》"})
     state = ("待审", "已通过", "已驳回")[current["approved"]]
-    text += f"；现状：{state}\n原文：{current['content']}\n"
+    fields.append({"label": "当前状态", "value": state})
     if action == "delete":
-        text += "删除这条内容。"
+        text = "删除这条内容。"
     elif action == "pass":
-        text += "将审核结果改为通过，并清空驳回理由。"
+        text = "将审核结果改为通过，并清空驳回理由。"
     else:
         reason = next(
             (
@@ -41,7 +44,7 @@ def _question(resource, action, current):
             ),
             None,
         )
-        text += "将审核结果改为驳回并隐藏。" + (
+        text = "将审核结果改为驳回并隐藏。" + (
             f"沿用已有理由：{reason}。" if reason else "当前没有已有驳回理由。"
         )
     if current["affectedReplies"]:
@@ -50,7 +53,10 @@ def _question(resource, action, current):
         )
     if resource == "comment" and not (current["rootVisible"] and current["articleVisible"]):
         text += "所属文章或根评论当前不可见，审核通过不保证公开展示。"
-    return text + "确认执行？"
+    return text + "确认执行？", {
+        "fields": fields,
+        "sections": [{"label": "原文", "text": current["content"], "format": "plain"}],
+    }
 
 
 @tool(return_direct=True)
@@ -92,7 +98,7 @@ def prepare_moderation_change(
             reply,
             {"noop_note": reply, "noop_text": reply, "receipts": [], "task_satisfied": [spec]},
         )
-    question = _question(resource, action, current)
+    question, details = _review(resource, action, current)
     principal, cid = bound_context(config)
     check_cancelled(config)
     return proposal(
@@ -102,7 +108,8 @@ def prepare_moderation_change(
         spec,
         executor="moderation",
         question=question,
-        target=question,
+        details=details,
+        target=f"{resource} #{item_id}",
         notices=[{"kind": "warning", "text": ("永久删除这条留言，不可恢复。"
                   if resource == "board" else "软删除这条评论，后台保留记录；无恢复入口。")}]
         if action == "delete" else [],

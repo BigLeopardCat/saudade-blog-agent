@@ -35,7 +35,12 @@ Python 与博客都使用 v2；旧 `/chat/stream` 入口及其编码适配已退
 相同正文属于不同消息时保持独立，不以文本相等消除消息。
 
 `confirmation` 只含 `id`、`task_id`、`q`、`opts`、`token`、`exp`、`server_time`、
-`replay_safe`，以及生图审批可选的 `image_review`。后者来自已核实的后端任务，包含完整
+`replay_safe`、`article_ids_to_refresh`、`notices`，以及可选的 `details`、`image_review`、
+`cover_review`。`q` 是简短的纯文本问题；`details.fields` 保存纯文本标签和值，
+`details.sections` 保存标签、完整正文和显式的 `plain/markdown` 格式。只有明确标记的
+Markdown 正文进入宿主渲染器，网址、名称与提示词不会因字符串拼接变成链接或控件。
+`notices` 是系统说明，与待批准内容分隔展示；这些展示字段不参与签名执行规格。
+`image_review` 来自已核实的后端任务，包含完整
 提示词、冻结参考图及结果预览；预览链接只用于展示，不进入模型上下文或作为执行凭据。
 提示词按纯文本展示，提供专用复制按钮；确认授权仍只认签名的任务 ID 与版本。
 `server_time` 配合浏览器单调计时器展示剩余时间，不依赖本机钟面准确；
@@ -47,6 +52,7 @@ Agent `POST /tasks/confirmation`。Agent 从 checkpoint 投影仍有效的当前
 跨账号、角色、会话或任务不匹配时不返回凭据。查询不等待模型轮锁、不调用模型、
 不签发新授权、不执行操作，响应 `Cache-Control: no-store`。
 本地最多保存 64 条、24 小时的卡片展示记录，不保存确认令牌、操作参数或可执行按钮；
+展示记录保留源轮次标识，服务器消息 ID 替换本地临时 ID 后仍关联原回复。
 历史源消息不在当前窗口时，恢复出的有效卡片单独展示，绝不猜测附着到最后一条消息。
 
 导航的页面到达与超时结果只恢复原任务；账号、会话、任务、命令与路径分别校验。

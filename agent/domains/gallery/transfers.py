@@ -148,14 +148,12 @@ def prepare_gallery_transfer(intent: Intent, config: RunnableConfig) -> object:
         observed("gallery_transfer_sources", {"images": [
             image.model_dump(include={"imageKey", "displayName", "folderId", "storage"})
             for image in preview.images[start:start + 20]]}, ("images",))
-    from agent.domains.gallery.preparation import _literal
-
     verb = "复制" if request["mode"] == "copy" else "移动"
     provider = {"local": "本地存储", "r2": "R2 存储"}.get(
         request.get("storage") or "", "各图片当前存储")
-    names = "、".join(_literal(image.displayName or f"图片 #{image.imageKey}")
+    names = "、".join((image.displayName or f"图片 #{image.imageKey}")
                      for image in preview.images[:10])
-    destination = _literal(preview.destinationName)
+    destination = preview.destinationName
     question = (f"{verb} {len(preview.images)} 张图片到{provider} /「{destination}」\n\n"
                 + names + ("……" if len(preview.images) > 10 else "")
                 + "\n\n完整图片编号：" + "、".join(map(str, request["imageIds"])))

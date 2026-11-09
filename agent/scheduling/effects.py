@@ -146,8 +146,20 @@ def task_title(write):
     return f"文章变更：{len(change['items'])} 篇"
 
 
-def propose(principal: Principal, cid, executor, spec, question, target, schedule, *,
-            preparation_facts=None, notices=()):
+def propose(
+    principal: Principal,
+    cid,
+    executor,
+    spec,
+    question,
+    target,
+    schedule,
+    *,
+    preparation_facts=None,
+    notices=(),
+    details=None,
+):
+    from agent.contracts.events import ConfirmationDetails
     from agent.proposals import proposal
     from config.settings import settings
     from tools.result import unavailable
@@ -159,8 +171,12 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         schedule if isinstance(schedule, WriteSchedule) else WriteSchedule.model_validate(schedule)
     )
     values = timing.definition_values()
-    details = question if str(target) in question else f"{question}\n{target}"
-    preview = details if len(details) <= 2000 else details[:1960] + "…（完整内容以审批卡为准）"
+    description = question if str(target) in question else f"{question}\n{target}"
+    preview = (
+        description
+        if len(description) <= 2000
+        else description[:1960] + "…（完整内容以审批卡为准）"
+    )
     write = effect(executor, spec)
     definition = Definition(
         **values,
@@ -174,6 +190,8 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         "schedule_id": "sc_" + uuid.uuid4().hex,
         "definition": definition.model_dump(mode="json"),
     }
+    review = ConfirmationDetails.model_validate(details or {}).model_dump()
+    review["fields"].insert(0, {"label": "时间", "value": time_description(definition)})
     return proposal(
         principal,
         cid,
@@ -184,6 +202,7 @@ def propose(principal: Principal, cid, executor, spec, question, target, schedul
         timing=timing_facts(definition),
         preparation_facts=preparation_facts,
         notices=notices,
-        question=f"时间：{time_description(definition)}\n{details}\n"
+        details=review,
+        question=f"{description}\n"
         "确认后到期自动执行以上变更；目标状态变化时停止并通知你，不擅自改写计划。",
     )

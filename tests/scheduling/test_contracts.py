@@ -71,8 +71,9 @@ def test_optional_schedule_semantics_are_visible_on_the_actual_tool_properties()
 
     schema = convert_to_openai_tool(prepare_category_create)
     schedule = schema["function"]["parameters"]["properties"]["schedule"]
-    properties = next(branch["properties"] for branch in schedule["anyOf"]
-                      if "properties" in branch)
+    properties = next(
+        branch["properties"] for branch in schedule["anyOf"] if "properties" in branch
+    )
     assert "date/time" in properties["run_at"]["description"].lower()
     assert "after approval" in properties["delay_seconds"]["description"].lower()
 
@@ -119,7 +120,9 @@ def test_real_preparation_signs_definition_without_creating_schedule(monkeypatch
     assert grant["specs"][0]["tool"] == "create_automation"
     args = grant["specs"][0]["args"]
     assert args["definition"]["delay_seconds"] == 60
-    assert "不会携带当前聊天历史" in card["q"]
+    assert {row["label"]: row["value"] for row in card["details"]["fields"]}["时间"]
+    assert card["details"]["sections"] == [{"label": "任务内容", "text": "喝水", "format": "plain"}]
+    assert "到期将提醒内容发送给你本人" in card["notices"][0]["text"]
     assert card["token"] not in result.reply
     assert confirm.verify(card["token"], 8, 42) is None
     assert confirm.verify(card["token"], 7, 43) is None
@@ -385,24 +388,36 @@ def test_background_task_identity_is_owner_bound_and_separate_from_chat():
 def test_ui_list_uses_active_backend_filter_and_server_side_cron_time():
     from unittest.mock import Mock
 
-    recurring = {'status': 'ACTIVE', 'context': {'schedule_id': IDENT,
-        'definition': definition().model_copy(update={'delay_seconds': None,
-            'cron': '0 * * * *'}).model_dump(mode='json')}}
-    once = SimpleNamespace(status='SUCCESS', output={'status':'completed'},
-        attributes={'schedule_id': 'sc_'+'b'*32,
-        'definition': definition().model_dump(mode='json'), 'start_at': NOW.isoformat()})
+    recurring = {
+        "status": "ACTIVE",
+        "context": {
+            "schedule_id": IDENT,
+            "definition": definition()
+            .model_copy(update={"delay_seconds": None, "cron": "0 * * * *"})
+            .model_dump(mode="json"),
+        },
+    }
+    once = SimpleNamespace(
+        status="SUCCESS",
+        output={"status": "completed"},
+        attributes={
+            "schedule_id": "sc_" + "b" * 32,
+            "definition": definition().model_dump(mode="json"),
+            "start_at": NOW.isoformat(),
+        },
+    )
     client = SimpleNamespace(list_workflows=Mock(return_value=[once]))
     backend = SimpleNamespace(client=client, recurring_schedules=lambda owner: [recurring])
     service = ScheduleService(backend, lambda uid: ADMIN, now=lambda: NOW)
     normal = service.list(ADMIN)
-    assert 'instruction' not in normal['items'][0]
+    assert "instruction" not in normal["items"][0]
     result = service.list(ADMIN, 20, 0, True)
-    assert len(result['items']) == 1 and result['items'][0]['status'] == 'active'
-    item = result['items'][0]
-    assert item['instruction'] == '喝水' and len(item['version']) == 64
-    due = datetime.fromisoformat(item['next_run_at']).astimezone(timezone.utc)
+    assert len(result["items"]) == 1 and result["items"][0]["status"] == "active"
+    item = result["items"][0]
+    assert item["instruction"] == "喝水" and len(item["version"]) == 64
+    due = datetime.fromisoformat(item["next_run_at"]).astimezone(timezone.utc)
     assert due == NOW + timedelta(hours=1)
-    assert client.list_workflows.call_args.kwargs['attributes'] == {'cancelled': False}
+    assert client.list_workflows.call_args.kwargs["attributes"] == {"cancelled": False}
 
 
 def test_scheduled_publication_approval_freezes_exact_content_and_does_not_publish(monkeypatch):
@@ -411,8 +426,12 @@ def test_scheduled_publication_approval_freezes_exact_content_and_does_not_publi
     monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     service = ScheduleService(None, lambda _: ADMIN, now=lambda: NOW)
     result = tools(service, True)["prepare_automation"].invoke(
-        {"title": "测试公告", "instruction": " 保留原文\n😀 ",
-         "action": "publish_announcement", "delay_seconds": 300},
+        {
+            "title": "测试公告",
+            "instruction": " 保留原文\n😀 ",
+            "action": "publish_announcement",
+            "delay_seconds": 300,
+        },
         config=config(principal=ADMIN),
     )
     card = result.execution["pending_confirm"]
@@ -420,15 +439,22 @@ def test_scheduled_publication_approval_freezes_exact_content_and_does_not_publi
     frozen = grant["specs"][0]["args"]["definition"]
     assert frozen["action"] == "publish_announcement" and frozen["delay_seconds"] == 300
     assert frozen["title"] == "测试公告" and frozen["instruction"] == " 保留原文\n😀 "
-    assert "发布时的全部用户" in card["q"] and "无需再次确认" in card["q"]
+    assert (
+        "发布时的全部用户" in card["notices"][0]["text"]
+        and "无需再次确认" in card["notices"][0]["text"]
+    )
+    assert card["details"]["sections"] == [
+        {"label": "公告正文", "text": " 保留原文\n😀 ", "format": "markdown"}
+    ]
     assert not result.execution.get("receipts")
 
 
 @pytest.mark.parametrize("title,content", [("bad\n", "body"), ("title", "bad\x01")])
 def test_scheduled_publication_uses_same_content_validation_as_interactive_posts(title, content):
     with pytest.raises(ValidationError):
-        Definition(title=title, instruction=content,
-                   action="publish_announcement", delay_seconds=300)
+        Definition(
+            title=title, instruction=content, action="publish_announcement", delay_seconds=300
+        )
 
 
 def test_scheduled_publication_checks_bound_receipt_and_never_calls_model(monkeypatch):
@@ -436,8 +462,12 @@ def test_scheduled_publication_checks_bound_receipt_and_never_calls_model(monkey
 
     monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
     title, text = "测试公告", " 原文\n😀 "
-    receipt = {"announcementId": 54, "notificationCount": 2,
-               "payloadHash": fingerprint([title, text]), "replayed": False}
+    receipt = {
+        "announcementId": 54,
+        "notificationCount": 2,
+        "payloadHash": fingerprint([title, text]),
+        "replayed": False,
+    }
     sent = []
 
     def handler(request):
@@ -462,15 +492,21 @@ def test_scheduled_publication_worker_rechecks_pause_and_executes_frozen_payload
 
     from agent.scheduling.worker import WorkerActions
 
-    value = Definition(title="公告", action="publish_announcement",
-                       instruction="正文", delay_seconds=300)
+    value = Definition(
+        title="公告", action="publish_announcement", instruction="正文", delay_seconds=300
+    )
     row = SimpleNamespace(attributes={"paused": True, "cancelled": False})
     backend = SimpleNamespace(once=lambda *_: row)
-    host = SimpleNamespace(actor=lambda _: ADMIN,
-                           publish_announcement=Mock(return_value={"status": "completed"}))
+    host = SimpleNamespace(
+        actor=lambda _: ADMIN, publish_announcement=Mock(return_value={"status": "completed"})
+    )
     worker = WorkerActions(backend, host, None)
-    payload = {"owner_id": 7, "schedule_id": IDENT, "definition": value.model_dump(mode="json"),
-               "start_at": datetime.now(timezone.utc).isoformat()}
+    payload = {
+        "owner_id": 7,
+        "schedule_id": IDENT,
+        "definition": value.model_dump(mode="json"),
+        "start_at": datetime.now(timezone.utc).isoformat(),
+    }
     assert worker.perform(payload, "run")["status"] == "blocked"
     host.publish_announcement.assert_not_called()
     row.attributes["paused"] = False

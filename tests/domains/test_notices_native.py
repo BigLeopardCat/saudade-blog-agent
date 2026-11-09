@@ -11,6 +11,7 @@ from _own_support import config
 from agent import confirm
 from agent.domains.notices import preparation, targets, transactions
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
+from agent.products.blog.confirmation import public_card
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from eval.fixtures.ledger import Ledger
@@ -97,8 +98,14 @@ def test_full_text_readonly_preparation_and_exactly_one_send(notices, tmp_path, 
     signed = grant(prepared)
     assert signed and notices["writes"] == 0 and len(notices["requests"]) == 1
     assert set(signed["specs"][0]["args"]) == {"version", "intent"}
-    question = prepared.execution["pending_confirm"]["q"]
-    assert "正文：\n\n 原文\n保持😀\t " in question
+    card = public_card(prepared.execution)
+    assert card["details"]["sections"] == [
+        {"label": "正文", "text": " 原文\n保持😀\t ", "format": "markdown"}]
+    assert card["details"]["fields"] == [
+        {"label": "收件人编号", "value": "11"},
+        {"label": "收件人账号", "value": "测试账号"},
+        {"label": "标题", "value": targets.DEFAULT_TITLE},
+    ]
     store = Ledger(str(tmp_path / "notice.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=store)

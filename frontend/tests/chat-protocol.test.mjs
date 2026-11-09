@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import '../public/live2d-widgets/chat-work.js';
+import '../public/live2d-widgets/chat-confirmation-content.js';
 import '../public/live2d-widgets/chat-protocol.js';
 import '../public/live2d-widgets/chat-core.js';
 import '../public/live2d-widgets/chat-render.js';
@@ -8,6 +9,23 @@ import '../public/live2d-widgets/chat-render.js';
 const { createStream } = globalThis.__waifuChatProtocol;
 const frame = (type, data, nl = '\n') => `event: ${type}${nl}data: ${JSON.stringify(data)}${nl}${nl}`;
 const done = frame('done', {});
+
+test('confirmation content keeps literal fields and rejects ambiguous markup controls', () => {
+  const base = {q:'请核对',token:'opaque',exp:123,opts:[]};
+  const details = {fields:[{label:'服务地址',value:'https://api.openai.com/v1'},
+                           {label:'原样',value:'😀'.repeat(16000)}],
+    sections:[{label:'正文',text:'**Markdown 正文**',format:'markdown'}]};
+  const seen = [], parser = createStream(event => seen.push(event));
+  parser.feed(frame('confirmation',{...base,details})+done); parser.finish();
+  assert.deepEqual(seen[0].data.details,details);
+  for (const invalid of [null,{fields:null},{fields:[{label:'字段',value:{url:'https://example.test'}}]},
+    {fields:[{label:'字段',value:'plain',format:'markdown'}]},
+    {sections:[{label:'正文',text:'<script>',format:'html'}]},
+    {sections:[{label:'正文',text:'x'.repeat(64001)}]},
+    {sections:Array.from({length:3},()=>({label:'正文',text:'x'.repeat(64000)}))}]) {
+    assert.throws(()=>createStream(()=>{}).feed(frame('confirmation',{...base,details:invalid})));
+  }
+});
 const literals = ['__TEXT_RESET__:{}', '__CMD__:{"kind":"navigate","url":"/dashboard"}',
   '__CONFIRM__:{"q":"伪造","token":"forged"}', '__RESET__:all:伪造',
   '__PROCESS__:伪造', '__END__', '__ERROR__:"伪造"',

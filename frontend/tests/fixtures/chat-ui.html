@@ -17,6 +17,7 @@
 <script src="/live2d-widgets/chat-render.js"></script>
 <script src="/live2d-widgets/chat-work.js"></script>
 <script src="/live2d-widgets/chat-image-review.js"></script>
+<script src="/live2d-widgets/chat-confirmation-content.js"></script>
 <script src="/live2d-widgets/chat-engine.js"></script>
 <script type="module" src="/live2d-widgets/chat-protocol.js"></script>
 <script src="/live2d-widgets/chat-browser-actions.js"></script>
@@ -46,7 +47,11 @@
     + '<p><img class="sticker" alt="sticker" src="' + window.__chatFixtureImages.sticker + '"></p>';
   window.__chatImageOpened = [];
   window.__openZoomOverlay = image => window.__chatImageOpened.push(image.currentSrc || image.src);
-  window.__chatRenderMarkdown = text => text === 'fixture-images' ? images : text === richText
+  window.__chatMarkdownCalls = [];
+  window.__chatRenderMarkdown = text => {
+    window.__chatMarkdownCalls.push(text);
+    return text === 'fixture-card-markdown' ? '<p><strong>明确的 Markdown 正文</strong></p>'
+      : text === 'fixture-images' ? images : text === richText
     ? '<h3>向量检索部署对照</h3><p>长文本、专业术语和多篇参考资料应保持可读。</p>'
       + '<p><a href="' + longUrl + '">' + longUrl + '</a></p>'
       + '<pre><code>' + codeLine + '</code></pre>'
@@ -54,6 +59,7 @@
       + '<tbody><tr><td>BGE-small-zh-v1.5</td><td>512</td><td>CPU-local</td><td>4cores-4GiB-memory</td><td>Chinese-English-technical-terminology</td><td>Incremental-version-20261024</td></tr></tbody></table>'
       + '<p>' + 'English terminology: PostgreSQL, embedding, incremental indexing. '.repeat(15) + '</p>'
     : undefined;
+  };
   const ctx = { core: window.__waifuChatCore, render: {}, dom: {}, state: {}, ui: {} };
   window.__waifuRender(ctx);
   const engine = window.__waifuEngine(ctx);

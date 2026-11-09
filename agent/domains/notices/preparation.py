@@ -21,7 +21,7 @@ WORKFLOW = "notice_send"
 
 
 def quoted(value):
-    # Reversible quotation prevents original text from becoming a legacy command frame.
+    # Receipts retain an unambiguous quoted account identifier.
     return json.dumps(value, ensure_ascii=False).replace(":", r"\u003a").replace("：", r"\uff1a")
 
 
@@ -38,10 +38,6 @@ def _prepare(target, title, content, config, schedule=None):
         return plan
     recipient = plan["recipient"]
     target_text = f"发送个人通知给账号 #{recipient['id']} {quoted(recipient['username'])}"
-    question = (
-        f"{target_text}\n标题：{quoted(plan['title'])}\n正文：\n\n{plan['content']}"
-        "\n\n发送后没有撤回入口。确认发送？"
-    )
     principal, cid = bound_context(config)
     check_cancelled(config)
     return proposal(
@@ -50,7 +46,13 @@ def _prepare(target, title, content, config, schedule=None):
         WORKFLOW,
         {"tool": TOOL, "args": {"version": plan["version"], "intent": request}},
         executor="notices",
-        question=question,
+        question="请核对收件人和完整通知内容。",
+        details={"fields": [
+            {"label": "收件人编号", "value": str(recipient["id"])},
+            {"label": "收件人账号", "value": recipient["username"]},
+            {"label": "标题", "value": plan["title"]},
+        ], "sections": [{"label": "正文", "text": plan["content"], "format": "markdown"}]},
+        notices=[{"kind": "warning", "text": "发送后没有撤回入口。"}],
         target=target_text,
         schedule=schedule,
     )

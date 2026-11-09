@@ -154,8 +154,8 @@ def prepare_article_summary(
                     "previous_summary_sha256": hashlib.sha256(
                         saved["description"].encode()).hexdigest(),
                     "request_id": runtime.tool_call_id}}, executor="editor_summary",
-                question=("确认替换当前草稿的摘要？\n\n" + description if description
-                          else "确认清空当前草稿的摘要？"),
+                question="确认替换当前草稿的摘要？" if description else "确认清空当前草稿的摘要？",
+                details={"sections": [{"label": "新摘要", "text": description}]},
                 target="更新当前编辑草稿的摘要", payload={"description": description})
         break
     raise ToolException("请先读取当前编辑草稿，并使用读取回执中的编辑器标识和版本。")

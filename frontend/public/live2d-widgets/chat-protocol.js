@@ -22,6 +22,7 @@ const decode = ({ event, data }) => {
   }
   if (event === 'confirmation' && object(value)
       && typeof value.q === 'string' && value.q && typeof value.token === 'string' && value.token
+      && (value.details === undefined || globalThis.__waifuConfirmationContent?.valid(value.details))
       && Array.isArray(value.opts) && Number.isFinite(value.exp)) {
     return { type: event, data: value };
   }

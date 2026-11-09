@@ -18,14 +18,9 @@ from tools.result import invalid_args
 Identifier = targets.Identifier
 
 
-def _literal(value):
-    # Gallery text is data inside a confirmation, never active Markdown/HTML.
-    return "".join("\\" + char if char in "\\`*_{}[]<>()#!|" else char for char in value)
-
-
-def _question(request, current):
+def _review(request, current):
     ids = current["matchedIds"]
-    names = "、".join(_literal(row["displayName"] or f"图片 #{row['imageId']}")
+    names = "、".join((row["displayName"] or f"图片 #{row['imageId']}")
                      for row in current["preview"])
     selection = f"图库图片（{len(ids)} 张）：" + names
     if current["previewTruncated"]:
@@ -34,7 +29,7 @@ def _question(request, current):
     action = request["action"]
     if action == "move":
         name = current["destination"]["name"] if current["destination"] else "未分类"
-        change = "移动到「" + _literal(name) + f"」（目录 #{request['folderId']}）。"
+        change = "移动到「" + name + f"」（目录 #{request['folderId']}）。"
     elif action == "favorite":
         change = "设为收藏。" if request["isFavorite"] else "取消收藏。"
     elif action == "delete":
@@ -45,16 +40,22 @@ def _question(request, current):
             fields = []
             for key, value in item["changes"].items():
                 if key == "displayName":
-                    fields.append("名称：" + _literal(value))
+                    fields.append("名称：" + value)
                 elif key == "description":
-                    fields.append("描述：" + (_literal(value) if value else "（清空）"))
+                    fields.append("描述：" + (value if value else "（清空）"))
                 elif key == "folderId":
                     fields.append(f"目录编号：{value}")
                 else:
                     fields.append("收藏" if value else "取消收藏")
             changes.append(f"图片 #{item['imageId']}：" + "；".join(fields))
         change = "\n\n".join(changes)
-    return selection + "\n\n" + change
+    question = f"确认修改这 {len(ids)} 张图片？"
+    if current["previewTruncated"]:
+        question += "名称仅预览前 10 张；完整编号和变更见下方。"
+    return question, {"sections": [
+        {"label": "所选图片", "text": selection, "format": "plain"},
+        {"label": "变更内容", "text": change, "format": "plain"},
+    ]}
 
 
 @tool(return_direct=True)
@@ -90,11 +91,12 @@ def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig)
     observed("gallery_images", current,
              ("version", "expiresAt", "matchedIds", "preview", "previewTruncated", "destination"))
     principal, cid = bound_context(config)
+    question, details = _review(request, current)
     return proposal(
         principal, cid, "gallery_images",
         {"tool": "manage_gallery_images", "args": {
             "version": current["version"], "expiresAt": current["expiresAt"], "intent": request}},
-        executor="gallery", question=_question(request, current),
+        executor="gallery", question=question, details=details,
         target=f"图库图片（{len(current['matchedIds'])} 张）",
         notices=[{"kind": "warning", "text":
                   "从图库移除并排队清理存储文件；已有引用会阻止整批删除。"}]

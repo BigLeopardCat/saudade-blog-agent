@@ -171,7 +171,7 @@
         0
       ],
       "agent/domains/announcements/preparation.py": [
-        2,
+        11,
         0
       ],
       "agent/domains/announcements/targets.py": [
@@ -207,7 +207,7 @@
         0
       ],
       "agent/domains/article_editor.py": [
-        0,
+        1,
         0
       ],
       "agent/domains/article_metadata.py": [
@@ -263,7 +263,7 @@
         0
       ],
       "agent/domains/automations/preparation.py": [
-        0,
+        11,
         0
       ],
       "agent/domains/automations/presentation.py": [
@@ -335,7 +335,7 @@
         0
       ],
       "agent/domains/gallery/preparation.py": [
-        1,
+        3,
         0
       ],
       "agent/domains/gallery/reads.py": [
@@ -363,7 +363,7 @@
         0
       ],
       "agent/domains/image_generation/tools.py": [
-        1,
+        6,
         0
       ],
       "agent/domains/image_generation/transactions.py": [
@@ -395,7 +395,7 @@
         0
       ],
       "agent/domains/moderation_actions/preparation.py": [
-        3,
+        9,
         0
       ],
       "agent/domains/moderation_actions/targets.py": [
@@ -411,7 +411,7 @@
         0
       ],
       "agent/domains/notices/preparation.py": [
-        0,
+        5,
         0
       ],
       "agent/domains/notices/targets.py": [
@@ -507,7 +507,7 @@
         0
       ],
       "agent/domains/talks.py": [
-        1,
+        4,
         0
       ],
       "agent/domains/todos/__init__.py": [
@@ -523,7 +523,7 @@
         0
       ],
       "agent/domains/todos/preparation.py": [
-        5,
+        8,
         0
       ],
       "agent/domains/todos/targets.py": [
@@ -875,7 +875,7 @@
         0
       ],
       "agent/scheduling/effects.py": [
-        7,
+        8,
         0
       ],
       "agent/scheduling/errors.py": [
@@ -968,7 +968,7 @@
       ]
     },
     "total": [
-      322,
+      368,
       0
     ]
   },
