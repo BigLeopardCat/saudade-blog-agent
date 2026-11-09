@@ -69,6 +69,20 @@ def test_different_chapters_keep_their_own_relevant_excerpts_and_locations():
     assert "section=s1 " in wire and "section=s2 " in wire
 
 
+def test_candidate_versions_stay_with_their_document_and_do_not_mutate_evidence():
+    first = ranked("bm25")
+    first["document_revision"] = "a" * 64
+    second = {**deepcopy(first), "id": 2, "document_revision": "b" * 64}
+    before = deepcopy([first, second])
+    meta = {"retrieval": {"route": "lexical"}}
+    text = search_text(meta, candidate_text(1, first) + "\n" + candidate_text(2, second))
+    shown = render_search_result([first, second], text, meta, len(text) - 1)
+    assert shown.kind == "ok" and shown.data == [first]
+    assert "revision=" + "a" * 64 in shown.text
+    assert "revision=" + "b" * 64 not in shown.text
+    assert [first, second] == before
+
+
 def test_excerpt_offsets_are_exact_for_deep_unicode_crlf_sources():
     body = "👩🏽‍💻 é\r\n" * 200 + "按 API_TOKEN 读取回执。\r\n" + "无关说明。" * 100
     chunk = {"type": "note", "id": 1, "title": "材料", "section": "配置", "section_id": "s7",

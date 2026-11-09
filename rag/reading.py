@@ -18,9 +18,7 @@ def _source_hint(hit, label, ident, match):
     hint = f"命中节={label}"
     if not ident or not hit.get("document_revision"):
         return hint
-    hint += f" section={ident} revision={hit['document_revision']}"
-    if hit.get("section_schema"):
-        hint += f" section_schema={hit['section_schema']}"
+    hint += f" section={ident}"
     offset, end = match.get("offset"), match.get("end")
     if type(offset) is int and offset >= 0:
         hint += f" offset={offset}"
@@ -43,6 +41,11 @@ def _source_hint(hit, label, ident, match):
 def candidate_text(index, hit):
     title = hit["title"][:24].replace("\n", " ").replace("\r", " ")
     text = f"{index}. type={hit['type']} id={hit['id']} rank={index} title={title}"
+    # One document version applies to every locator in this complete candidate entry.
+    if hit.get("document_revision"):
+        text += f" revision={hit['document_revision']}"
+        if hit.get("section_schema"):
+            text += f" section_schema={hit['section_schema']}"
     identifiers = hit.get("section_ids") or []
     sections = list(zip(hit.get("sections") or [], identifiers))
     matches = hit.get("matches") or []

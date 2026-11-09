@@ -84,7 +84,8 @@ def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negati
     if kind == "ok":
         expected = index._lexical_ranked(query, 8)
         assert result.data == expected and result.data[0]["matches"]
-        assert "section=s1 revision=" in str(result) and len(requests) == 1
+        assert "section=s1 " in str(result) and "revision=" in str(result)
+        assert len(requests) == 1
     else:
         assert not result.data and not requests
         assert "不能据此判断无相关文章" in str(result)

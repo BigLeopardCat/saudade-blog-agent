@@ -29,7 +29,8 @@ DOMAIN_DESCRIPTIONS = {
     "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
-    "own_activity": "Read your own 河灯/留言 entries and review status, or conversation messages.",
+    "own_activity": "Find entries you posted: personal 河灯/留言 and review status "
+    "(list_my_board), or your chat history. Personal records are not article/RAG searches.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
     "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "

@@ -10,7 +10,7 @@ from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
-from rag import DEFAULT_TOP_K
+from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import candidate_text, search_text
 from tools import base as _base
 from tools.result import (
@@ -227,13 +227,16 @@ def _rag_meta(route, corpus, top_k, article_id=None):
 @tool
 def rag_search(
     query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
-    top_k: Annotated[StrictInt, Field(ge=1, le=64), "返回候选文档数量，默认 8"] = DEFAULT_TOP_K,
+    top_k: Annotated[
+        StrictInt, Field(ge=1, le=MAX_TOP_K), "返回候选文档数量，默认 8"
+    ] = DEFAULT_TOP_K,
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)] | None = None,
 ) -> str | ToolResult:
     """Locate public article passages for factual questions, including a known article.
     Set article_id for a known source; results contain version-bound section and character
-    ranges for get_article_detail. Candidates are not body reads. For title/tag discovery
-    use search_notes; announcements, guestbook and talks use public_activity.
+    ranges for get_article_detail. Each candidate's revision/section_schema applies to all
+    its section ranges. Candidates are not body reads. For title/tag discovery use search_notes;
+    public announcements/guestbook/talks use public_activity; your own entries use own_activity.
     """
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled

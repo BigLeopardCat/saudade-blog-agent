@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 
 from config.settings import settings
-from rag import DEFAULT_TOP_K
+from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.chunks import split as split_chunks
 from rag.corpus import corpus_revision
 from rag.corpus import fetch as fetch_corpus
@@ -277,8 +277,8 @@ class RagIndex:
     def search(self, query: str, top_k: int = DEFAULT_TOP_K, *,
                article_id: int | None = None) -> list[dict] | None:
         """Rank lexical candidates and fuse only corpus-aligned vector candidates."""
-        if type(top_k) is not int or not 1 <= top_k <= 50:
-            raise ValueError("top_k must be an integer between 1 and 50")
+        if type(top_k) is not int or not 1 <= top_k <= MAX_TOP_K:
+            raise ValueError(f"top_k must be an integer between 1 and {MAX_TOP_K}")
         candidates = candidate_limit(top_k)
         lex = self._lexical_ranked(query, candidates, article_id=article_id)
         if lex is None:
