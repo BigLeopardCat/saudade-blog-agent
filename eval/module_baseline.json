@@ -4,7 +4,7 @@
     "top_defs": 80
   },
   "eval/golden_evaluation.py": {
-    "lines": 1349,
+    "lines": 1344,
     "top_defs": 40
   },
   "scripts/build_word_graph.py": {

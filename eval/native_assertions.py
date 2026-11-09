@@ -23,6 +23,21 @@ def command_matches(expected, actual):
     return expected in actual
 
 
+def forbidden_call_failures(gold, result, forbidden):
+    """Include requested calls that interrupted before a completed result existed."""
+    if not gold.get("no_tool_calls") and not forbidden:
+        return []
+    attempted = list(dict.fromkeys([*result.get("tool_calls", []), *(
+        event["name"] for event in (result.get("native_events") or [])
+        if event.get("node") == "native" and event.get("event") == "tool_requested"
+        and event.get("name")
+    )]))
+    failures = ([f"不应调用任何工具（已请求或调用：{attempted}）"]
+                if gold.get("no_tool_calls") and attempted else [])
+    return failures + [f"不应调用工具 {name}（已请求或调用：{attempted}）"
+                       for name in forbidden if name in attempted]
+
+
 def contains(actual, expected):
     """Match declared object fields while preserving list length and order."""
     if isinstance(expected, dict):

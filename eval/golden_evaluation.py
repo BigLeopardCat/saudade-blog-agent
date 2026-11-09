@@ -42,7 +42,7 @@ from eval.corpus_provenance import (
 )
 from eval.golden_runtime import ensure_agent
 from eval.native_assertions import check as check_native
-from eval.native_assertions import command_matches
+from eval.native_assertions import command_matches, forbidden_call_failures
 
 # Derive the identity-denial assertion from the current tool boundary receipt.
 from tools.base import _NO_IDENTITY_WRITE  # noqa: E402
@@ -1058,18 +1058,8 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             f"未调用任一检索工具 {_any_of}（已调用：{result['tool_calls']}）"
         )
 
-    # Negative call constraints include requests interrupted before a result exists.
-    attempted = list(dict.fromkeys([*result["tool_calls"], *(
-        event["name"] for event in result.get("native_events", [])
-        if event.get("node") == "native" and event.get("event") == "tool_requested"
-        and event.get("name")
-    )]))
-    if gold.get("no_tool_calls") and attempted:
-        fails.append(f"不应调用任何工具（已请求或调用：{attempted}）")
-    # Expand scope sentinels during judgment, using the current tool registry.
-    for t in expand_token_list(gold.get("forbid_tool_calls") or []):
-        if t in attempted:
-            fails.append(f"不应调用工具 {t}（已请求或调用：{attempted}）")
+    fails += forbidden_call_failures(
+        gold, result, expand_token_list(gold.get("forbid_tool_calls") or []))
     # Check receipt presence and counts independently.
     fails += _exec_claim_fails(gold, result)
     # Preparation rounds must prove zero backend mutations, not merely omit named tools.

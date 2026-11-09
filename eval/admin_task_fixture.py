@@ -14,6 +14,18 @@ from eval.own_fixtures import SECRET
 from tools import base
 
 
+def _eligibility(request, state):
+    """Only the fixture's ordinary-account demotion is a supported eligibility read."""
+    if (request.method == "GET" and request.url.path == "/api/protected/account-actions/eligibility"
+            and dict(request.url.params) == {
+                "accountId": "20", "action": "set_role", "role": "zako"}
+            and state["caller_role"] == "admin"
+            and state["accounts"][20]["role"] in {"user", "zako"}):
+        return {"accountId": 20, "action": "set_role", "role": "zako", "allowed": True,
+                "reasonCode": None, "message": "当前操作者可以准备此账号操作"}
+    return None
+
+
 @contextmanager
 def backend():
     state = {"caller_role": "admin", "requests": [], "unsupported_reads": [], "writes": [],
@@ -61,15 +73,9 @@ def backend():
                     | {"frozen": False, "muted": False, "quotaUsed": 0, "quotaLimit": 500}
                     for row in sorted(rows, key=lambda row: row["id"])[(page-1)*size:page*size]]
             return httpx.Response(200, json={"code": 200, "data": rows, "total": total})
-        # This fixture models only the ordinary account's requested demotion.
-        if (request.method == "GET" and path == "/api/protected/account-actions/eligibility"
-                and dict(request.url.params) == {
-                    "accountId": "20", "action": "set_role", "role": "zako"}
-                and state["caller_role"] == "admin"
-                and state["accounts"][20]["role"] in {"user", "zako"}):
-            return httpx.Response(200, json={"code": 200, "data": {
-                "accountId": 20, "action": "set_role", "role": "zako", "allowed": True,
-                "reasonCode": None, "message": "当前操作者可以准备此账号操作"}})
+        eligibility = _eligibility(request, state)
+        if eligibility is not None:
+            return httpx.Response(200, json={"code": 200, "data": eligibility})
         notice = path.startswith("/api/protected/notice-actions")
         if request.method != "POST" or path not in {
                 "/api/protected/notice-actions", "/api/protected/notice-actions/prepare",
