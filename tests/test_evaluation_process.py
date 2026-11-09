@@ -96,3 +96,17 @@ def test_explicit_moderation_still_requires_eligibility_evidence(case_id):
     case = next(row for row in online_baseline.load_suite() if row["id"] == case_id)
     failures = native_assertions.check(case["gold"], {"native_events": []})
     assert any("get_account_action_eligibility" in failure for failure in failures)
+
+
+@pytest.mark.parametrize("aggregate,complete,stats,passed", [
+    (True, False, False, True), (False, True, True, True),
+    (False, False, True, False), (False, True, False, False),
+])
+def test_rankings_accept_aggregate_or_complete_enumeration(aggregate, complete, stats, passed):
+    case = next(row for row in online_baseline.load_suite() if row["id"] == "admin_traffic")
+    calls = [{"name": "get_note_stats"}] if aggregate else [
+        {"name": "list_notes", "result": json.dumps({"hasMore": not complete})}]
+    if stats:
+        calls.append({"name": "get_article_stats", "args": {"article_id": 7}})
+    events = [{"node": "native", "event": "call", "kind": "ok", **call} for call in calls]
+    assert (not native_assertions.check(case["gold"], {"native_events": events})) is passed
