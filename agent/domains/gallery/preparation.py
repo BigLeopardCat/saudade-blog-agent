@@ -18,7 +18,7 @@ from tools.result import invalid_args
 Identifier = targets.Identifier
 
 
-def _question(request, current):
+def _review(request, current):
     ids = current["matchedIds"]
     names = "、".join((row["displayName"] or f"图片 #{row['imageId']}")
                      for row in current["preview"])
@@ -49,7 +49,13 @@ def _question(request, current):
                     fields.append("收藏" if value else "取消收藏")
             changes.append(f"图片 #{item['imageId']}：" + "；".join(fields))
         change = "\n\n".join(changes)
-    return selection + "\n\n" + change
+    question = f"确认修改这 {len(ids)} 张图片？"
+    if current["previewTruncated"]:
+        question += "名称仅预览前 10 张；完整编号和变更见下方。"
+    return question, {"sections": [
+        {"label": "所选图片", "text": selection, "format": "plain"},
+        {"label": "变更内容", "text": change, "format": "plain"},
+    ]}
 
 
 @tool(return_direct=True)
@@ -85,11 +91,12 @@ def prepare_gallery_images(intent: image_actions.Intent, config: RunnableConfig)
     observed("gallery_images", current,
              ("version", "expiresAt", "matchedIds", "preview", "previewTruncated", "destination"))
     principal, cid = bound_context(config)
+    question, details = _review(request, current)
     return proposal(
         principal, cid, "gallery_images",
         {"tool": "manage_gallery_images", "args": {
             "version": current["version"], "expiresAt": current["expiresAt"], "intent": request}},
-        executor="gallery", question=_question(request, current),
+        executor="gallery", question=question, details=details,
         target=f"图库图片（{len(current['matchedIds'])} 张）",
         notices=[{"kind": "warning", "text":
                   "从图库移除并排队清理存储文件；已有引用会阻止整批删除。"}]

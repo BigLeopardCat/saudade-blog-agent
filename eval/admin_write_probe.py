@@ -324,11 +324,7 @@ def step3_unknown_id(rep: Report, uid: int, role: str) -> None:
     print(f"        真实执行的工具：{tools or '（无）'}")
 
 
-# 可回滚靶子的状态：**公开面完全看不到**的那种。
-#   draft：`is_public=false` 且 status=draft，两个公开列表端点都滤掉；
-#   private：`is_public=false`，同样滤掉（`get_top_notes` 也要求 IsPublic=1，
-#            所以"临时置顶一篇私密文章"不会在首页露面）。
-# 公开（public）**不可**当靶子：中途崩溃就是线上可见的改动。
+# Probe targets must stay invisible in public lists, including after a crash.
 _SAFE_TARGET_STATUS = ("draft", "private")
 
 

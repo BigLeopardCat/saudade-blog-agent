@@ -13,8 +13,10 @@ from _own_support import config
 from pydantic import ValidationError
 
 from agent import confirm
+from agent.contracts.events import confirmation_text
 from agent.domains.gallery import image_actions, preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.confirmation import public_card
 from agent.runtime.turns import AgentCancelled
 from eval.fixtures.ledger import Ledger
 from tools import base
@@ -94,6 +96,8 @@ def test_one_readonly_preparation_then_one_atomic_request_and_durable_replay(
     assert grant["specs"][0]["args"]["intent"] == canonical
     assert backend["effects"] == 0 and len(backend["requests"]) == 1
     assert "https://evil.invalid)" not in prepared.reply
+    preview = public_card(prepared.execution)["details"]["sections"][0]
+    assert preview["format"] == "plain" and "[图片](https://evil.invalid)" in preview["text"]
     if len(image_actions.parse(intent).identifiers()) > 10:
         assert "仅预览前 10 张" in prepared.reply and "100" in prepared.reply
     with closing(Ledger(str(tmp_path / "ledger.db"))) as ledger:
@@ -234,7 +238,8 @@ def test_utf8_intent_budget_still_fits_the_signed_confirmation(backend):
     prepared, grant = approve(intent)
     assert len(prepared.execution["pending_confirm"]["token"]) < confirm.MAX_TOKEN_CHARS
     assert grant["specs"][0]["args"]["intent"] == intent
-    assert "猫" * 2000 in prepared.reply and backend["effects"] == 0
+    assert "猫" * 2000 in confirmation_text(public_card(prepared.execution))
+    assert backend["effects"] == 0
 
 
 @pytest.mark.parametrize("tamper", [False, True])
