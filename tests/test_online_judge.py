@@ -485,3 +485,24 @@ def test_judge_reasoning_controls_reach_the_provider_and_are_recorded(monkeypatc
     assert options['reasoning_effort'] == effort
     assert options['max_tokens'] == (700 if effort == 'none' else 4096)
     assert 'test-only' not in json.dumps(options) and 'headers' not in options
+
+
+def test_batch_card_controls_come_from_captured_ui_not_signed_action_count(tmp_path):
+    token = secrets.token_urlsafe()
+    options = [{"label": "确认执行", "value": "yes", "kind": "primary"},
+               {"label": "文章23", "value": "pick:0", "kind": "choice"},
+               {"label": "文章54", "value": "pick:1", "kind": "choice"}]
+    case = recorded(tmp_path, confirm_payloads=[{"specs": [
+        {"tool": "delete_articles", "args": {"items": [{"id": 23}]}},
+        {"tool": "delete_articles", "args": {"items": [{"id": 54}]}}]}],
+        http_events=[{"event": "confirmation", "data": {
+            "q": "确认整批删除？", "token": token, "opts": options}}])
+    rounds = case["result"]["rounds"]
+    material = online_judge.material(case, rounds)
+    current = json.loads(material)["turns"][0]
+    assert current["confirmation_controls"] == [{"options": options}]
+    assert len(current["proposed_actions_not_facts"]) == 2
+    assert current["execution_receipts"] == [] and token not in material
+    rounds[0]["http_events"] = []
+    current = json.loads(online_judge.material(case, rounds))["turns"][0]
+    assert current["confirmation_controls"] == []

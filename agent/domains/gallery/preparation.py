@@ -176,5 +176,4 @@ def tools(read_tools):
     return {
         **read_tools,
         prepare_gallery_images.name: prepare_gallery_images,
-        prepare_article_cover.name: prepare_article_cover,
     }

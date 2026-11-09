@@ -146,6 +146,8 @@ def list_admin_board(config: RunnableConfig, status: Status | None = None,
     total是筛选后的准确匹配总数，零条即可回答该筛选下无记录；只查全局审核分布用get_moderation_status。
     查询某条留言或匿名留言是谁发的，用 item_id 读取 publisher 的账号编号、用户名及昵称。
     displayName 是自由留名，可留空或与账号不同，不能用来认定发表账号。
+    publisher不含账号角色；编号、用户名和昵称不证明站长身份或操作资格。
+    涉及冻结、禁言等账号操作时，用get_account_action_eligibility核对该账号，再补问缺失参数。
     status 是最终审核状态，ai_result 是独立的AI判定。提供 item_id 单独读取内容。
     """
     return _page("board", config, status, keyword, page, limit, item_id, ai_result=ai_result)

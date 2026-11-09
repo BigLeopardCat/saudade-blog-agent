@@ -53,7 +53,9 @@ def test_metadata_discovery_reads_once_without_preparing_a_mutation(monkeypatch)
             "admin_gallery_management": management},
             middleware=(BlogToolMiddleware,)).run([HumanMessage(content="读图片11的完整描述。")])
     assert result.reply == "已读取完整描述。" and len(requests) == 1
-    assert {"prepare_article_cover", "prepare_gallery_images"} <= management.keys()
+    assert "prepare_gallery_images" in management
+    assert "prepare_article_cover" not in management
+    assert "prepare_article_cover" in domains["admin_article_management"]
     assert all(not menu.intersection(management) for menu in menus)
     assert domain.keys() <= menus[-1]
     assert "load_admin_gallery_management_info_tools" in menus[-1]
