@@ -36,7 +36,6 @@
     };
     let currentAsk = null, restoring = null, revision = 0;
     const owners = new Map();
-    // Obsolete card caches held signed grants; recovery now queries the server.
     try { for (const key of Object.keys(localStorage))
       if (key.startsWith('chat_ask_')) localStorage.removeItem(key); } catch (_) {}
     const actor = () => {
@@ -69,6 +68,7 @@
         article_ids_to_refresh: ask.article_ids_to_refresh,
         selected: Array.isArray(ask.selected) ? ask.selected : old?.selected,
         anchor_id: anchor?.dataset.mid || ask.anchor_id || old?.anchor_id,
+        anchor_turn_id: ask.anchor_turn_id || old?.anchor_turn_id || ctx.state.activeRound?.turnId,
         ts: old?.ts || Date.now() };
       view.records = [...view.records.filter(item => item.id !== row.id), row].slice(-64);
       view.active = ask.id;
@@ -83,9 +83,10 @@
       if (direct && messages.contains(direct)) return direct;
       const row = read(ask.convId).records.find(item => item.id === ask.id);
       const id = ask.anchor_id || row?.anchor_id;
-      if (!id) return null;
+      const turn = ask.anchor_turn_id || row?.anchor_turn_id;
+      const item = turn && ctx.state.items.find(item => item.type === 'agent' && item.turn_id === turn);
       const anchor = [...messages.querySelectorAll('.chat-msg.agent')]
-        .find(item => item.dataset.mid === id);
+        .find(node => (id && node.dataset.mid === id) || (item && node.dataset.mid === item.id));
       if (anchor) owners.set(ask.id, anchor);
       return anchor || null;
     };
@@ -347,7 +348,7 @@
       const ttl = Number.isFinite(data.server_time) ? (data.exp - data.server_time) * 1000 : null;
       const deadline = ttl === null ? undefined : performance.now() + Math.max(0, ttl);
       const previous = currentAsk?.id === data.id ? currentAsk.expiresAt : undefined;
-      currentAsk = { ...data, convId, anchor_id: row?.anchor_id,
+      currentAsk = { ...data, convId, anchor_id: row?.anchor_id, anchor_turn_id: row?.anchor_turn_id,
         selected: currentAsk?.id === data.id ? currentAsk.selected : row?.selected,
         expiresAt: Number.isFinite(previous) && Number.isFinite(deadline)
           ? Math.min(previous, deadline) : deadline };

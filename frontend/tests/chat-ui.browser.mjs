@@ -195,7 +195,7 @@ const server = createServer(async (req, res) => {
             card.image_review={job_id:job,version:'a'.repeat(64),prompt:'**原样提示词**\n```不是代码控件```',
               references:[{image_id:11,name:'竖版参考图',url:'/api/public/image-generation/'+job+'/preview?token=fixture'}]};
             steeringHistory=[{id:801000,role:'user',content:body.message,time:Date.now(),images:[],turn_id:body.turn_id},
-              {id:801001,role:'assistant',content:'离线测试回复：已收到你的消息。',time:Date.now(),images:[],parent_turn_id:body.turn_id}];
+              {id:801001,role:'assistant',content:'离线测试回复：已收到你的消息。',time:Date.now(),images:[],turn_id:body.turn_id}];
           }
           if (mode === 'confirmation-malformed') card.details={sections:[{label:'正文',text:'<script>',format:'html'}]};
           if (mode !== 'confirmation-replay') {
