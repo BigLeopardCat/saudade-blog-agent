@@ -89,7 +89,8 @@ def _inspect(text, *, final):
             blocked |= bool(_CONTROL.search(fragment))
             opening = fragment.rfind("<")
             if opening >= 0 and _partial_tag(fragment[opening:]):
-                blocked |= final
+                # A final lone angle bracket can be prose or a kaomoji, not a tag.
+                blocked |= final and len(fragment) - opening > 1
                 pending |= not final
     unclosed = env.get("unclosed_code", ())
     for tail in unclosed:
