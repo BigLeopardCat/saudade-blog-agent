@@ -120,3 +120,29 @@ def test_overview_rejects_unowned_or_incomplete_evidence(monkeypatch, fault):
         data.update(notifications=2, total=2)
     monkeypatch.setattr(base, "_own_get", lambda *args: data)
     assert own_reads.get_inbox_overview.invoke({}, config=config()).kind == "unavailable"
+
+
+def test_inbox_discovery_loads_authorized_overview_before_one_read(mailbox):
+    from langchain_core.messages import AIMessage, HumanMessage
+    from langgraph.checkpoint.memory import InMemorySaver
+    from test_confirmation_continuation import Model, call
+
+    from agent.products.blog.application import BlogApplication
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    model = Model(
+        AIMessage(content="", tool_calls=[call("load_inbox_info_tools", "load")]),
+        AIMessage(content="", tool_calls=[call("get_inbox_overview", "read", mode="counts_only")]),
+        AIMessage(content="共有4条未读。"),
+    )
+    runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                           application=BlogApplication(), model_factory=lambda **_: model)
+    result = list(runtime.stream_events({"messages": [HumanMessage(content="只查未读数量")]},
+                                        config()))[-1]
+    assert result.reply == "共有4条未读。"
+    assert all(t["function"]["name"] != "get_inbox_overview" for t in model.menus[0])
+    assert any(t["function"]["name"] == "get_inbox_overview" for t in model.menus[1])
+    assert model.menus[1] == model.menus[2]
+    assert len(mailbox["requests"]) == 1
+    assert mailbox["requests"][0].url.path.endswith("/notifications/summary")

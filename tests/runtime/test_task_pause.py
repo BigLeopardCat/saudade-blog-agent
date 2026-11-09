@@ -22,7 +22,8 @@ def test_model_can_defer_and_resume_real_checkpoint_without_turning_it_into_a_to
     actor = Principal(7, 'admin', 'assertion')
     cfg = {'configurable': {'principal': actor, 'user_id': 7, 'conversation_id': 42,
                             'thread_id': 'conv_42', 'task_inputs': True}}
-    before = Model(AIMessage(content='', tool_calls=[
+    before = Model(AIMessage(content='', tool_calls=[call('load_task_control_info_tools', 'load')]),
+                   AIMessage(content='', tool_calls=[
         call('pause_task', 'hold', instruction='给用户讲零知识证明')]))
 
     def runtime(model):
@@ -34,7 +35,9 @@ def test_model_can_defer_and_resume_real_checkpoint_without_turning_it_into_a_to
                                       'task_id': 'held-task'}, cfg))
     result = events[-1]
     assert result.execution['paused_task']['instruction'] == '给用户讲零知识证明'
-    assert len(before.prompts) == 1
+    assert len(before.prompts) == 2
+    assert all(t["function"]["name"] != "pause_task" for t in before.menus[0])
+    assert any(t["function"]["name"] == "pause_task" for t in before.menus[1])
     assert first.get_state(cfg, subgraphs=True).interrupts
     assert list_paused(first, actor)['items'][0]['task_id'] == 'held-task'
     assert any(getattr(event, 'data', {}).get('phase') == 'paused' for event in events)
@@ -53,7 +56,8 @@ def test_paused_checkpoint_cannot_be_resumed_by_another_role_and_can_be_deleted(
     actor = Principal(7, 'admin', 'assertion')
     cfg = {'configurable': {'principal': actor, 'user_id': 7, 'conversation_id': 42,
                             'thread_id': 'conv_42', 'task_inputs': True}}
-    model = Model(AIMessage(content='', tool_calls=[
+    model = Model(AIMessage(content='', tool_calls=[call('load_task_control_info_tools', 'load')]),
+                  AIMessage(content='', tool_calls=[
         call('pause_task', 'hold', instruction='新增分类')]))
     selected = AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
                             model_factory=lambda **_: model)
@@ -62,7 +66,7 @@ def test_paused_checkpoint_cannot_be_resumed_by_another_role_and_can_be_deleted(
     foreign = {'configurable': {**cfg['configurable'], 'principal': replace(actor, role='user')}}
     denied = list(selected.stream_events({'resume_task': 'held-task'}, foreign))[-1]
     assert denied.execution['blocked']
-    assert len(model.prompts) == 1
+    assert len(model.prompts) == 2
     cancel_paused(selected, actor, 42, 'held-task')
     assert list_paused(selected, actor)['items'] == []
 

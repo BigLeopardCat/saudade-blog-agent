@@ -103,3 +103,4 @@ python -m eval.task_metrics --dir /path/to/traces --out /tmp/tasks.json
 模型请求的 `request_layout` 记录 SDK 输入指纹，`wire_request` 记录实际 HTTP JSON
 和会话路由头的指纹；两者均不保存消息、推理文本或凭据。超过 1 MiB 或不支持的
 请求体显式记录 `wire_request_unavailable`，不影响发送，也不用于证明前缀稳定。
+缓存诊断优先使用实际 HTTP 的 `wire_request`（包括真实会话头）；仅旧 trace 缺少 wire 事件时回退 SDK 布局并标明来源。显式观测失败计入未观测调用及其消耗，不用 SDK 外观替代实际前缀证据。

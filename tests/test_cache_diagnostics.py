@@ -153,3 +153,28 @@ def test_old_or_malformed_trace_metadata_does_not_invent_source_labels():
         doc = {**document(["a"]), "input": meta}
         row = request_cohorts([("a", doc)])[0]
         assert row["source"] == row["build"] == "unknown"
+
+
+def test_wire_layout_overrides_sdk_shape_and_actual_session_affinity():
+    before, after = document(["sdk-same"]), document(["sdk-same"])
+    for doc, text in ((before, "wire-a"), (after, "wire-b")):
+        sdk = doc["events"][0]
+        doc["events"].insert(1, {**sdk, "event": "wire_request", "messages": [text]})
+    rows = diagnose([("a", before), ("b", after)])["calls"]
+    assert rows[1]["change"] == "message_prefix_changed"
+    assert all(row["layout_source"] == "wire" for row in rows)
+    after["events"][1]["session"] = None
+    rows = diagnose([("a", before), ("b", after)])["calls"]
+    assert not rows[1]["cross_request_comparable"]
+    assert {row["cohort"] for row in request_cohorts([("b", after)])} == {"unclassified"}
+
+
+def test_unavailable_wire_is_not_replaced_with_apparent_sdk_stability():
+    before, after = document(["same"]), document(["same"])
+    after["events"].insert(1, {"event": "wire_request_unavailable"})
+    got = diagnose([("a", before), ("b", after)])
+    assert got["calls"][1]["change"] == "unobserved"
+    assert got["calls"][1]["layout_source"] == "unavailable"
+    assert not got["calls"][1]["cross_request_comparable"]
+    assert got["groups"]["unobserved"]["in"] == 100
+    assert {row["cohort"] for row in request_cohorts([("b", after)])} == {"unclassified"}

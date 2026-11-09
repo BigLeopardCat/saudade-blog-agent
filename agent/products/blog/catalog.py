@@ -6,6 +6,10 @@ from agent.role_labels import role_cn
 
 # Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {
+    "inbox": "Read your unread notices and messages together: counts and recent headers; "
+    "no read-state changes. Details and actions use notifications/messages.",
+    "task_control": "Save and pause the current unfinished task for later explicit resume; "
+    "not remembering facts, business to-dos or timed reminders.",
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
     "then approve gallery storage.",
     "admin_talks": "Publish or schedule 说说, edit or permanently delete administrator posts; "
@@ -68,9 +72,7 @@ _BROWSER_ACTIONS = ("navigate_page", "set_page_appearance")
 def initial_tools(tools, domains):
     # These operations remain authorized by the domain builder and again on invocation.
     browser = domains.get("site") or {}
-    accounts = domains.get("admin_accounts") or {}
     return {
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
-        **{name: accounts[name] for name in ("list_accounts",) if name in accounts},
     }

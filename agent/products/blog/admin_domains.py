@@ -63,10 +63,7 @@ def domains(config, can_prepare, reads):
     if editor_tools:
         selected["article_editor"] = editor_tools
     if can_prepare and available(config):
-        selected["admin_account_actions"] = {
-            name: tool for name, tool in reads.get("admin_accounts", {}).items()
-            if name == "get_account_action_eligibility"
-        }
+        selected["admin_account_actions"] = dict(reads.get("admin_accounts", {}))
         for name, preparation in _PREPARATIONS:
             current = selected.setdefault(name, {})
             current.update(preparation.tools(current))
