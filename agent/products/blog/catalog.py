@@ -23,13 +23,14 @@ DOMAIN_DESCRIPTIONS = {
     "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
     "entries. Public display names are not account identities.",
     "utilities": "Read the current time.",
-    "task_planning": "Private checklist for complex work (3+ actions) or explicit plans; "
-    "not chat, memory or business reminders.",
+    "task_planning": "Track the agent's execution steps for complex work (3+ actions) or "
+    "explicit task plans; not user to-dos, reminders or chat history.",
     "devices": "List accessible devices and control authorized OLED displays.",
     "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
-    "own_activity": "Read your own 河灯/留言 entries and review status, or conversation messages.",
+    "own_activity": "Read current-conversation chat history (聊天记录), or your own "
+    "河灯/留言 and review status.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
     "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "
