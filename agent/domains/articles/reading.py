@@ -57,6 +57,25 @@ class DisplayMetadata(BaseModel):
     carouselZoom: Annotated[StrictFloat, Field(ge=1, le=4, allow_inf_nan=False)] | None = None
 
 
+class MetadataPage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    view: Literal["metadata"]
+    type: Kind
+    id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
+    title: Annotated[StrictStr, Field(max_length=255)]
+    contentRevision: Digest
+    sectionSchema: StrictStr
+    readComplete: StrictBool
+    source: None
+    metadata: dict
+
+    @model_validator(mode="after")
+    def no_body_evidence(self):
+        if self.readComplete or self.sectionSchema != sections.PARSER_VERSION:
+            raise ValueError("metadata cannot establish a body read")
+        return self
+
+
 class Page(BaseModel):
     view: Literal["body", "outline"]
     type: Kind
@@ -121,12 +140,45 @@ class Page(BaseModel):
         return self
 
 
+def _article_metadata(metadata):
+    data = {}
+    data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
+    try:
+        references = tag_references(metadata.get("tags"))
+    except ValueError:
+        references = None
+    # Metadata is descriptive; the body and source coordinates remain independently verified.
+    data.update(
+        {
+            key: metadata[key]
+            for key in (
+                "status",
+                "isPublic",
+                "isTop",
+                "categoryId",
+                "categoryName",
+                "createdAt",
+                "updatedAt",
+                "tags",
+                "tagsTruncated",
+            )
+            if key in metadata
+        }
+    )
+    data["tags"] = references
+    if references is None:
+        data.pop("tagsTruncated", None)
+    return data
+
+
 def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):
-    page = Page.model_validate(value)
+    page = (MetadataPage if view == "metadata" else Page).model_validate(value)
     if (
         (page.type, page.id, page.view) != (kind, identifier, view)
-        or (page.readOffset if view == "body" else page.sectionsOffset) != offset
-        or len(page.content) > limit
+        or view == "metadata" and bool(section or offset)
+        or isinstance(page, Page) and (
+            (page.readOffset if view == "body" else page.sectionsOffset) != offset
+            or len(page.content) > limit)
         or revision
         and page.contentRevision != revision
         or section_schema
@@ -146,38 +198,14 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     if kind == "note" and view == "outline":
         data.update(noteId=page.id, noteTitle=page.title)
     elif kind == "note":
-        metadata = page.metadata
-        data.update(DisplayMetadata.model_validate(metadata).model_dump(exclude_unset=True))
-        try:
-            references = tag_references(metadata.get("tags"))
-        except ValueError:
-            references = None
-        # Metadata is descriptive; the body and source coordinates remain independently verified.
-        data.update(
-            {
-                key: metadata[key]
-                for key in (
-                    "status",
-                    "isPublic",
-                    "isTop",
-                    "categoryId",
-                    "categoryName",
-                    "createdAt",
-                    "updatedAt",
-                    "tags",
-                    "tagsTruncated",
-                )
-                if key in metadata
-            }
-        )
-        data["tags"] = references
-        if references is None:
-            data.pop("tagsTruncated", None)
+        data.update(_article_metadata(page.metadata))
         data.update(
             noteId=page.id,
             noteTitle=page.title,
-            **{"sectionText" if section else "noteContent": page.content},
+            **({"sectionText" if section else "noteContent": page.content}
+               if view == "body" else {}),
         )
     else:
-        data.update(id=page.id, title=page.title, content=page.content)
+        data.update(id=page.id, title=page.title,
+                    **({"content": page.content} if isinstance(page, Page) else {}))
     return data

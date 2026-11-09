@@ -334,3 +334,11 @@ def test_domain_catalog_still_validates_read_scope(monkeypatch):
     monkeypatch.setitem(authz.TOOL_SCOPE, "list_accounts", authz.SCOPE_READ_PUBLIC)
     with pytest.raises(RuntimeError, match="Read tools must remain"):
         read_tools.account_tools()
+
+
+def test_account_role_counts_describe_only_the_returned_page(backend):
+    backend["accounts"][0]["role"] = "zako"
+    value = catalog.list_accounts.invoke({"page": 1, "limit": 2}, config=config()).data
+    assert value["returned_summary"] == {"scope": "returned_items", "count": 2,
+        "role_counts": [{"role": "zako", "count": 1}, {"role": "user", "count": 1}]}
+    assert value["total"] > 2

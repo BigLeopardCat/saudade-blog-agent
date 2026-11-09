@@ -76,6 +76,17 @@ def _outline_page(article_id, title, content, revision, available, offset):
     }
 
 
+def _directory_view(view, article_id, title, content, current, available, offset, section):
+    if view == "metadata":
+        if section or offset:
+            raise ValueError("metadata does not select body ranges")
+        return {"view": "metadata", "noteKey": article_id, "noteTitle": title,
+                "contentRevision": current, "readComplete": False, "source": None}
+    if view == "outline" and not section:
+        return _outline_page(article_id, title, content, current, available, offset)
+    raise ValueError("invalid directory view")
+
+
 def article_page(
     data: dict,
     article_id: int,
@@ -93,10 +104,9 @@ def article_page(
         raise RevisionChanged("读取版本不一致，请从头重新读取以获取当前目录")
     rows = outline(content, title)
     available = _directory(rows)
-    if view not in {"body", "outline"} or view == "outline" and section:
-        raise ValueError("invalid document view")
-    if view == "outline":
-        return _outline_page(article_id, title, content, current, available, offset)
+    if view != "body":
+        return _directory_view(
+            view, article_id, title, content, current, available, offset, section)
     selected_id = ""
     out = {**data, "noteKey": article_id, "noteTitle": title}
     if section:
@@ -184,6 +194,8 @@ def document_page(kind, identifier, title, content, params=None, metadata=None):
     """Emit the public HTTP read protocol from a finite synthetic document."""
     params = params or {}
     section = params.get("section", "")
+    if params.get("view") == "metadata" and "limit" in params:
+        raise ValueError("metadata does not select body ranges")
     value = article_page(
         {"noteTitle": title, "noteContent": content},
         identifier,
@@ -197,6 +209,10 @@ def document_page(kind, identifier, title, content, params=None, metadata=None):
     source = value.get("source")
     if source:
         source = {**source, "type": kind}
+    if value["view"] == "metadata":
+        return {"view": "metadata", "type": kind, "id": identifier, "title": title,
+                "metadata": metadata or {}, "contentRevision": value["contentRevision"],
+                "sectionSchema": sections.PARSER_VERSION, "readComplete": False, "source": None}
     return {
         "view": value["view"], "type": kind,
         "id": identifier,

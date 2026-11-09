@@ -82,8 +82,10 @@ def article_backend():
                  "contentRevision": doc["revision"]} for ref in refs]}
         elif (request.method == "GET" and request.url.path
               == f"/api/public/documents/note/{ARTICLE_ID}/read"):
-            data = document_page("note", ARTICLE_ID, doc["title"], body, request.url.params)
-            state["body_reads"].append(len(data["content"]))
+            data = document_page("note", ARTICLE_ID, doc["title"], body, request.url.params,
+                                 {"authorName": "合成作者", "description": "已保存的摘要。",
+                                  "authorNameTruncated": False, "descriptionTruncated": False})
+            state["body_reads"].append(len(data.get("content", "")))
         else:
             state["unsupported_reads"].append(request.url.path)
             return httpx.Response(404)
@@ -216,7 +218,38 @@ def partial_write_replay(turn, state):
     _check(done, max_model_calls=2, max_tool_calls={"list_notifications": 1})
 
 
-CASES = [("efficiency_scoped_article", article_backend, scoped_article),
+def article_metadata(turn, state):
+    result = turn(f"只读取文章{ARTICLE_ID}的公开元信息，按JSON对象给出authorName、description、"
+                  "authorNameTruncated、descriptionTruncated。不要读取正文或另写摘要。")
+    value = json.loads(result["text"].strip().removeprefix("```json").removesuffix("```").strip())
+    _require(value == {"authorName": "合成作者", "description": "已保存的摘要。",
+                       "authorNameTruncated": False, "descriptionTruncated": False},
+             "metadata was not preserved verbatim")
+    _require(len(state["requests"]) == 1 and not sum(state["body_reads"]),
+             "metadata required discovery or exposed body content")
+    _check(result, max_model_calls=2, forbid_business_write=True)
+    _evidence(state, [result])
+
+
+def article_deferred_read(turn, state):
+    first = turn(f"能查文章{ARTICLE_ID}里关于“{QUERY}”的原始说明吗？先不要读取，只说能否查。")
+    _check(first, max_model_calls=1, forbid_business_write=True)
+    _require(not state["requests"] and not first["tool_calls"], "user deferred all reading")
+    started = False
+
+    def followup(message):
+        nonlocal started
+        if not started:
+            started = True
+            message = "去查吧，只读相关段落就好。"
+        return turn(message)
+
+    scoped_article(followup, state)
+
+
+CASES = [("efficiency_article_metadata", article_backend, article_metadata),
+         ("efficiency_deferred_read", article_backend, article_deferred_read),
+         ("efficiency_scoped_article", article_backend, scoped_article),
          ("efficiency_expanded_search", activity_backend, expanded_search),
          ("efficiency_gallery_reuse", gallery_contracts.backend, gallery_reuse),
          ("efficiency_partial_write_replay", partial_backend, partial_write_replay)]

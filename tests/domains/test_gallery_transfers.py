@@ -30,6 +30,9 @@ def image(identifier=72):
 @pytest.mark.parametrize("mode", ["move", "copy"])
 def test_approval_queues_one_job_without_claiming_completion_and_replay_never_resubmits(
         monkeypatch, tmp_path, mode):
+    from agent.runtime import tool_evidence
+    observations = []
+    monkeypatch.setattr(tool_evidence, "record", lambda node, event, **kw: observations.append(kw))
     requests = []
     intent = {"mode": mode, "imageIds": [72], "folderId": 0, "storage": "local"}
 
@@ -48,6 +51,10 @@ def test_approval_queues_one_job_without_claiming_completion_and_replay_never_re
         monkeypatch.setattr(base, "_client", client)
         prepared = transfers.prepare_gallery_transfer.invoke({"intent": intent}, config=admin())
         assert len(requests) == 1
+        assert all(row["complete"] for row in observations)
+        assert observations[0]["facts"] == {"folderId": 0, "name": "未分类"}
+        assert observations[1]["facts"]["images"] == [{
+            "imageKey": 72, "displayName": "封面", "folderId": 0, "storage": "local"}]
         grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
         assert grant and grant["workflow"] == "gallery_transfer"
         assert confirm.verify(prepared.execution["pending_confirm"]["token"], 8, 42) is None

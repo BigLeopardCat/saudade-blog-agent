@@ -188,7 +188,7 @@ class ArticleEvidence:
     def _observe_metadata(self, ident: int, data: dict) -> None:
         """Verified metadata permits a source link without recording body evidence."""
         source = data.get("source")
-        outline = (data.get("view") == "outline" and type(data.get("noteId")) is int
+        outline = (data.get("view") in {"outline", "metadata"} and type(data.get("noteId")) is int
                    and data["noteId"] == ident
                    and isinstance(data.get("contentRevision"), str)
                    and re.fullmatch(r"[0-9a-f]{64}", data["contentRevision"]))

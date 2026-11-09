@@ -6,7 +6,10 @@ from agent import confirm
 from agent.domains.notifications.preparation import prepare_notification_read
 
 
-def test_one_hundred_long_titles_form_one_complete_read_only_approval(notifications):
+def test_one_hundred_long_titles_form_one_complete_read_only_approval(notifications, monkeypatch):
+    from agent.runtime import tool_evidence
+    events = []
+    monkeypatch.setattr(tool_evidence, "record", lambda node, event, **kw: events.append(kw))
     notifications["items"] = [{"id": key, "isRead": False,
                                "title": f"通知{key}\n" + "内容" * 50} for key in range(1, 101)]
     result = prepare_notification_read.invoke({"scope": "all_unread"}, config=config())
@@ -18,6 +21,10 @@ def test_one_hundred_long_titles_form_one_complete_read_only_approval(notificati
     assert "- #1《" in card["q"] and "- #100《" in card["q"]
     assert "之后新到" in card["q"] and "内容" * 21 not in card["q"]
     assert all(request.method == "GET" for request in notifications["requests"])
+    assert events and all(event["complete"] for event in events)
+    items = [item for event in events for item in event["facts"].get("items", [])]
+    assert [item["id"] for item in items] == list(range(1, 101))
+    assert all(item["title"] and len(item["title"]) <= 41 for item in items)
 
 
 def test_all_unread_outside_recent_window_is_rejected_without_noop_or_approval(notifications):

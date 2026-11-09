@@ -63,7 +63,9 @@ def runtime(model):
     )
 
 
-def test_model_tool_message_has_public_display_fields_without_identity_or_extra_http(tmp_path):
+@pytest.mark.parametrize("view", ["body", "metadata"])
+def test_model_tool_message_has_public_display_fields_without_identity_or_extra_http(
+        tmp_path, view):
     reply = json.dumps(
         {
             "authorName": DISPLAY["authorName"],
@@ -81,7 +83,7 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
                 {
                     "name": "get_article_detail",
                     "id": "read",
-                    "args": {"article_id": 23, "max_chars": 1},
+                    "args": {"article_id": 23, "max_chars": 1, "view": view},
                 }
             ],
         ),
@@ -115,7 +117,17 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
     assert len(state["requests"]) == 1 and not state["unsupported_reads"]
     assert state["requests"][0].url.path == "/api/public/documents/note/23/read"
     assert not {"userId", "username", "email"}.intersection(shown)
-    assert shown["source"]["offset"] == 0 and shown["source"]["end"] == 1
+    if view == "metadata":
+        assert shown["source"] is None and "noteContent" not in shown
+        assert not {"totalChars", "sections", "sectionCount"}.intersection(shown)
+        assert "limit" not in state["requests"][0].url.params
+        proof = ArticleEvidence()
+        proof.observe("get_article_detail", {"article_id": 23}, ok("", data=shown))
+        assert not proof.documents and 23 in proof.candidates
+        text, visible = render_article_result(shown, "", 40)
+        assert visible is None and not text.startswith("{")
+    else:
+        assert shown["source"]["offset"] == 0 and shown["source"]["end"] == 1
     assert not shown["readComplete"]
     case = next(
         json.loads(line)
@@ -168,9 +180,10 @@ def test_excerpt_keeps_metadata_and_does_not_drop_a_summary_identical_to_the_bod
         {"coverFit": "invented"},
     ],
 )
-def test_unverified_display_metadata_never_reaches_the_model(fields):
+@pytest.mark.parametrize("view", ["body", "metadata"])
+def test_unverified_display_metadata_never_reaches_the_model(fields, view):
     with backend(rows(**fields)):
-        result = get_article_detail.invoke({"article_id": 23})
+        result = get_article_detail.invoke({"article_id": 23, "view": view})
     assert result.kind == "unavailable" and result.data is None
 
 

@@ -162,7 +162,9 @@ def assert_waiting_exchange(prompt):
     assert prepared["approval"] == "required"
     assert prepared["tool_execution"] == "disabled_until_decision"
     assert deferred == {"status": "not_executed", "reason": "awaiting_prior_confirmation",
-        "executed": False, "available_in_catalog": True, "waiting_for_call_id": "favorite",
+        "executed": False, "prepared": False, "target_verified": False,
+        "approval": "not_requested_for_this_operation",
+        "available_in_catalog": True, "waiting_for_call_id": "favorite",
         "continuation": "resume_after_prior_approval_and_verified_result"}
 
 
