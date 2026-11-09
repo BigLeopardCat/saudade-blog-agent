@@ -99,6 +99,28 @@ def test_following_budgeted_cursors_returns_every_record_once(index):
     assert len(found) == len(set(found)) and before is None
 
 
+def test_full_index_keeps_complete_fields_and_resumable_budget_pages(index):
+    index["rows"] = rows(8, "图")
+    for row in index["rows"]:
+        row.update(displayName="图" * 255, description="景" * 2000)
+    found, before = [], None
+    for _ in range(8):
+        message = dispatch({"detail": "full", "limit": 8,
+                            **({"before": before} if before else {})})
+        page = json.loads(message.content)
+        assert message.status == "success" and message.artifact["data"] == page
+        assert estimate_tokens([message]) <= settings.agent_tool_result_tokens
+        assert 0 < len(page["items"]) < 8
+        for item in page["items"]:
+            assert item["name"] == "图" * 255 and item["description"] == "景" * 2000
+            assert not item["name_truncated"] and not item["description_truncated"]
+            found.append(item["image_id"])
+        before = page["next_cursor"]
+        if before is None:
+            break
+    assert found == [row["imageKey"] for row in index["rows"]] and before is None
+
+
 def test_small_metadata_can_return_all_fifty_records_in_one_call(index):
     index["rows"] = rows(50, "")
     message = dispatch({"limit": 50})

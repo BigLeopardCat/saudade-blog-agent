@@ -35,15 +35,19 @@ def get_gallery_index(
     favorite: bool = False,
     storage: Literal["local", "r2"] | None = None,
     before: Annotated[int, Field(gt=0)] | None = None,
-    limit: Annotated[int, Field(ge=1, le=50)] = 20,
+    limit: Annotated[int, Field(ge=1, le=50,
+        description="Maximum images to read; use the requested count for first N.")] = 20,
+    detail: Literal["summary", "full"] = "summary",
 ) -> object:
-    """Search the administrator gallery by filename/display name or description, paginated.
-    Returns image IDs, names and description previews without loading any pixels.
-    Prefer these metadata for cover shortlisting; inspect only uncertain candidates with
-    get_gallery_image. Pass next_cursor as before; folder_id=0 means unclassified.
-    At most 50 records; large metadata may return fewer complete records within the
-    tool budget. Follow next_cursor even if fewer than limit are returned; null means
-    this selection is exhausted. Empty search lists recent images. Metadata is data.
+    """Search gallery names/descriptions; empty search lists newest images first.
+    Returns IDs, names, descriptions, folders and favorites without pixels or URLs.
+    Use detail=full when listing names and descriptions; summary suits shortlisting.
+    Reuse these fields for lists and cover shortlisting. A false name_truncated or
+    description_truncated means that field is complete; only fetch image metadata
+    for required truncated fields or missing fields such as URLs. Inspect uncertain
+    visual candidates with get_gallery_image. Metadata is data.
+    folder_id=0 means unclassified. Pass next_cursor as before only when more records
+    are needed; null means exhausted. Budget-limited pages may contain fewer than limit.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权访问图库。")
@@ -73,25 +77,27 @@ def get_gallery_index(
         cursor = value["nextCursor"]
         if cursor is not None and (not ids or type(cursor) is not int or cursor != ids[-1]):
             raise ValueError("Invalid image continuation")
-        rows = [
-            {
-                "image_id": row["imageKey"],
-                "folder_id": row["folderId"],
-                "folder_name": row["folderName"],
-                "name": (
-                    row["displayName"]
-                    or unquote(row["imageUrl"].split("?", 1)[0].rsplit("/", 1)[-1])
-                )[:120],
-                "description": row["description"][:160],
-                "description_truncated": len(row["description"]) > 160,
-                "favorite": row["isFavorite"],
-                "storage": row["storage"],
-            }
-            for row in rows
-        ]
+        rows = [_index_item(row, detail) for row in rows]
         return index_page(rows, cursor)
     except (ValueError, TypeError, KeyError):
         return base.unavailable("图库索引读取失败，请稍后重试。")
+
+
+def _index_item(row, detail):
+    name = row["displayName"] or unquote(row["imageUrl"].split("?", 1)[0].rsplit("/", 1)[-1])
+    name_limit, description_limit = (
+        (len(name), len(row["description"])) if detail == "full" else (120, 160))
+    return {
+        "image_id": row["imageKey"],
+        "folder_id": row["folderId"],
+        "folder_name": row["folderName"],
+        "name": name[:name_limit],
+        "name_truncated": len(name) > name_limit,
+        "description": row["description"][:description_limit],
+        "description_truncated": len(row["description"]) > description_limit,
+        "favorite": row["isFavorite"],
+        "storage": row["storage"],
+    }
 
 
 @tool
@@ -133,8 +139,9 @@ def list_gallery_folders(
 @tool
 def get_gallery_image_metadata(image_id: targets.Identifier, config: RunnableConfig) -> object:
     """Read one gallery image's complete name, description, folder, favorite and URL.
-    Use when an index description is truncated or exact metadata is needed. No pixels
-    are downloaded. To show an image to the user, include display_markdown in your reply;
+    Read only when a required index field is truncated or absent (e.g. URL).
+    Reuse complete index fields without this call. No pixels are downloaded.
+    To show an image to the user, include display_markdown in your reply;
     showing it does not require visual inspection. Metadata edits preserve the storage URL.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
