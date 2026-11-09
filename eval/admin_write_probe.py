@@ -1012,10 +1012,7 @@ def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
     return d2
 
 
-# 公告这一腿的认人方式同 ⑭：**请求前快照、请求后差分**（`_ann_snapshot` / `_ann_created`）。
-# 公告是对**全体访客可见**的东西，所以这里的清理最要紧——旧口径按标题里的时间戳 token
-# 认人，标题被 planner 转写坏了（掉字/剥下划线）时既报假 FAIL、兜底也认不出，残留就留在
-# 首页上了。差分把这条盲区整个拿掉：本轮新出现的行一律按 id 清。
+# 公告公开可见；按请求前后快照差分取得新增编号，用于精确清理本轮测试数据。
 
 
 def _ann_confirm(rep: Report, uid: int, role: str, conv_id: int, msg: str,
