@@ -112,7 +112,7 @@ def _page(kind, config, status, keyword, page, limit, item_id, **filters):
 def get_moderation_status(config: RunnableConfig) -> object:
     """一次查询全部河灯留言及未删除文章评论的审核总数、最终状态和AI判定分布，只取计数。
 
-    汇总问题用本工具，无需遍历记录或逐个状态查列表。AI判定与最终状态是独立维度，
+    总数、待审数或其他状态计数用本工具，不读取正文；无需逐个状态查列表。AI判定与最终状态是独立维度，
     未经过AI不等于人工已审核。需要具体记录再用 list_admin_board/list_admin_comments。
     """
     if not _allowed(config):
@@ -143,7 +143,8 @@ def list_admin_board(config: RunnableConfig, status: Status | None = None,
                      page: Page = 1, limit: Limit = 5, item_id: Identifier | None = None) -> object:
     """分页查看河灯留言，默认5条、最多10条，返回总数与内容节选。
 
-    total是筛选后的准确匹配总数，零条即可回答该筛选下无记录；只查全局审核分布用get_moderation_status。
+    只求总数、待审数或其他审核状态数量，用get_moderation_status，不读本列表。
+    本工具用于具体记录或汇总不支持的筛选；total是准确匹配总数，零条表示本次筛选无记录。
     查询某条留言或匿名留言是谁发的，用 item_id 读取 publisher 的账号编号、用户名及昵称。
     displayName 是自由留名，可留空或与账号不同，不能用来认定发表账号。
     publisher不含账号角色；编号、用户名和昵称不证明站长身份或操作资格。
@@ -160,7 +161,8 @@ def list_admin_comments(config: RunnableConfig, status: Status | None = None,
                         item_id: Identifier | None = None) -> object:
     """分页查看文章评论，默认5条、最多10条；可按审核状态、正文或账号关键词、文章编号筛选。
 
-    total是筛选后的准确匹配总数，零条即可回答该筛选下无记录；只查全局审核分布用get_moderation_status。
+    只求总数、待审数或其他审核状态数量，用get_moderation_status，不读本列表。
+    本工具用于具体记录或汇总不支持的筛选；total是准确匹配总数，零条表示本次筛选无记录。
     返回总数、内容节选和软删除标记；评论与河灯留言不同。提供 item_id 单独读取内容。
     """
     return _page("comments", config, status, keyword, page, limit, item_id, note_id=article_id)

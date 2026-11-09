@@ -54,8 +54,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_categories": "Category dictionary; prepare or schedule creation, editing and deletion.",
     "admin_work_queue": "用户待办 (business to-dos), quota applications/reset, including "
     "batch deletion. Known account IDs can reset directly; not private planning.",
-    "admin_moderation": "Identify anonymous 河灯/留言 publishers with list_admin_board; "
-    "guestbook/comment counts, records and confirmed moderation/deletion.",
+    "admin_moderation": "Guestbook/comment counts (get_moderation_status, no body reads), "
+    "records, anonymous publishers (list_admin_board), confirmed moderation/deletion.",
     "admin_reports": "Article view/like/favorite rankings and totals (get_note_stats), "
     "period reports, user statistics and server health.",
     "site": "Author profile, social links, site map and page controls.",
