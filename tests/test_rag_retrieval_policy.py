@@ -106,3 +106,32 @@ def test_background_thread_start_failure_does_not_block_later_refresh(monkeypatc
     with pytest.raises(RuntimeError, match="cannot start"):
         index.refresh_async()
     assert not index._refresh_lock.locked()
+
+
+@pytest.mark.parametrize("source_available", [True, False])
+def test_first_query_after_idle_expiry_refreshes_before_declaring_unavailable(
+        monkeypatch, source_available):
+    calls = []
+    now = 10_000.0
+    monkeypatch.setattr("rag.search.time.time", lambda: now)
+
+    def corpus():
+        calls.append(now)
+        if not source_available and len(calls) > 1:
+            raise RuntimeError("source down")
+        return [{"type": "note", "id": 1, "title": "needle", "content": "needle"}]
+
+    index = RagIndex(corpus_loader=corpus, vector_warmer=lambda chunks: None)
+    index.build()
+    now += REFRESH_TTL * 2 + 1
+    monkeypatch.setattr(index, "refresh_async", lambda: pytest.fail("no usable stale snapshot"))
+    result = index.search("needle", article_id=1)
+    assert len(calls) == 2
+    if source_available:
+        assert result[0]["id"] == 1
+        assert not index.status()["stale"]
+    else:
+        assert result is None
+        assert index.status()["error"] == "RuntimeError"
+        assert index.search("needle", article_id=1) is None
+        assert len(calls) == 2  # A failed refresh still observes the retry backoff.

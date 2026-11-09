@@ -78,3 +78,17 @@ def test_write_scope_sentinel_is_enforced_by_the_shared_assertion_entry():
     result = response()
     result["tool_calls"] = [tool]
     assert golden.check_case(sample, result)
+
+
+def test_interrupted_tool_request_still_violates_negative_call_constraints():
+    result = response()
+    result["native_events"] = [{"node": "native", "event": "tool_requested",
+                                "name": "pause_task", "call_id": "pause", "round": 1}]
+    for gold in ({"no_tool_calls": True}, {"forbid_tool_calls": ["pause_task"]}):
+        failures = golden.check_gold(gold, result)
+        assert len(failures) == 1 and "pause_task" in failures[0]
+    # A request without a result still cannot satisfy a completed-call requirement.
+    assert golden.check_gold({"require_tool_calls": ["pause_task"]}, result)
+    assert not golden.check_gold({"forbid_tool_calls": ["search_notes"]}, result)
+    result["native_events"] = []
+    assert not golden.check_gold({"no_tool_calls": True}, result)

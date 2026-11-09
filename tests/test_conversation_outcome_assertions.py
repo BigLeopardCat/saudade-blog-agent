@@ -70,3 +70,13 @@ def test_online_cases_use_result_and_scope_contracts():
     assert cases["pending_cancel"]["rounds"][1]["gold"]["require_revoked_operation"]
     assert cases["isolation_new_session"]["gold"]["require_current_conversation_history"]
     assert cases["isolation_new_session"]["gold"]["text_not_contains"] == ["薄荷星云"]
+
+
+def test_composite_cancellation_accepts_text_only_with_proven_revocation():
+    cases = {case["id"]: case for case in load_suite("eval/golden/native_requests.jsonl")}
+    case = cases["notice_then_role_cancel"]
+    assert case["decision_expectations"][1]["allow_text"] is True
+    gold = case["rounds"][1]["gold"]
+    assert gold["require_revoked_operation"] is True
+    assert check(gold, {"native_events": []})
+    assert not check(gold, {"native_events": [FEEDBACK, PHASE]})

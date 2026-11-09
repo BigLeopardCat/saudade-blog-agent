@@ -1058,13 +1058,18 @@ def check_gold(gold: dict, result: dict, *, docs=None, user_input: str = "",
             f"未调用任一检索工具 {_any_of}（已调用：{result['tool_calls']}）"
         )
 
-    # Check execution memory across conversation rounds.
-    if gold.get("no_tool_calls") and result["tool_calls"]:
-        fails.append(f"不应调用任何工具（已调用：{result['tool_calls']}）")
+    # Negative call constraints include requests interrupted before a result exists.
+    attempted = list(dict.fromkeys([*result["tool_calls"], *(
+        event["name"] for event in result.get("native_events", [])
+        if event.get("node") == "native" and event.get("event") == "tool_requested"
+        and event.get("name")
+    )]))
+    if gold.get("no_tool_calls") and attempted:
+        fails.append(f"不应调用任何工具（已请求或调用：{attempted}）")
     # Expand scope sentinels during judgment, using the current tool registry.
     for t in expand_token_list(gold.get("forbid_tool_calls") or []):
-        if t in result["tool_calls"]:
-            fails.append(f"不应调用工具 {t}（已调用：{result['tool_calls']}）")
+        if t in attempted:
+            fails.append(f"不应调用工具 {t}（已请求或调用：{attempted}）")
     # Check receipt presence and counts independently.
     fails += _exec_claim_fails(gold, result)
     # Preparation rounds must prove zero backend mutations, not merely omit named tools.
