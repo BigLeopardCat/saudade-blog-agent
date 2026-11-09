@@ -1375,7 +1375,7 @@
       };
       ['br', 'tl', 'tr', 'bl'].forEach(makeResizeHandle);
 
-      ctx.ui.canDetachRun = () => !!ctx.state.activeRound?.backgroundAccepted;
+      ctx.ui.canDetachRun = () => ctx.state.isSending && !!ctx.state.activeRound?.backgroundAccepted;
       ctx.ui.detachRun = () => {
         if (!ctx.ui.canDetachRun()) return false;
         const previous = ctx.state.activeRound;

@@ -177,7 +177,8 @@
     const doDelete = async (id) => {
       const tk = getToken();
       if (!tk) return;
-      if (ctx.state.isSending || ctx.state.streamCtrl || ctx.ui.backgroundStatus?.(id)) {
+      if (ctx.state.isSending || ctx.state.streamCtrl
+          || Object.keys(ctx.state.remoteRounds || {}).length || ctx.ui.backgroundStatus?.(id)) {
         ctx.ui.notify?.('请先停止该会话的任务，再删除会话', 'info');
         return;
       }
