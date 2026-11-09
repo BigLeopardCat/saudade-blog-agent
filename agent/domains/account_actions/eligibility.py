@@ -62,8 +62,9 @@ def get_account_action_eligibility(
     """Check the backend's current permission for an exact account ID and operation.
     Requires no mute duration and never prepares or executes a change. For set_role,
     specify the proposed role; other actions omit role. allowed=true is eligibility,
-    not approval. If muting is allowed but no duration is known, ask for the duration
-    before preparation. A catalog miss does not establish that an account is absent;
+    not approval. If muting is allowed but no duration is known, ask for it before
+    preparation; no profile lookup is needed unless the user also requested account details.
+    A catalog miss does not establish that an account is absent;
     this endpoint also checks known IDs excluded from account listings.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):

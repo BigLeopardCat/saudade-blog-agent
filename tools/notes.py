@@ -96,7 +96,8 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
 
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
     返回本次查询范围和候选元数据；未命中仅表示本次公开文章关键词查询没有匹配，
-    不证明其他主题、其他查询或非公开文章不存在。解读正文需用 get_article_detail。
+    不证明其他主题、其他查询或非公开文章不存在。searchedFields是查询覆盖字段，
+    不是每条结果的命中位置；正文重点需用 get_article_detail 核实。
     """
     if not keyword.strip():
         return invalid_args("搜索关键词不能为空；浏览公开文章请使用文章目录。")
@@ -107,7 +108,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     if slim is None:
         return unavailable("文章搜索未返回可核对的结果，本次不能判断是否有匹配。")
     value = {"resource": "articles", "scope": "public_articles_keyword_matches",
-             "query": keyword, "matchFields": ["title", "body", "tags"],
+             "query": keyword, "searchedFields": ["title", "body", "tags"],
              "items": slim, "returnedCount": len(slim)}
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return ok(text, data=value) if slim else empty(text, data=value)
@@ -122,9 +123,9 @@ DOC_TYPE_CN = {
 }
 
 
-_ARTICLE_OFFSET_DESC = "Body character offset / outline item index; copy the matching next cursor."
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..24000，默认12000"
-_ARTICLE_REVISION_DESC = "照抄contentRevision；续读和小节ID读取必须带版本"
+_ARTICLE_OFFSET_DESC = "Body character offset or outline index; copy the next cursor."
+_ARTICLE_LIMIT_DESC = "本次最多读取字符数"
+_ARTICLE_REVISION_DESC = "Copy contentRevision for continuation or section reads."
 
 
 @tool
@@ -140,17 +141,15 @@ def get_article_detail(
     section_schema: Annotated[str, Field(max_length=128)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
-    """Read ORIGINAL public text at a located source range; this is not article discovery.
-    For author, existing description or display fields, use view='metadata' directly;
-    no search or body read is needed. Missing fields stay unknown, not false or empty.
-    For a question about BODY CONTENT in a known article, locate with rag_search(article_id=...)
-    and copy its section/revision/section_schema/offset/max_chars to read the matching passage.
-    To read or summarize the WHOLE document, omit section and follow nextOffset.
-    To browse headings without reading body, use view='outline' and nextSectionsOffset.
-    Both continuations require contentRevision AND sectionSchema. A section's end does not
-    establish a full-article read; never characterize omitted text from a partial read.
-    Pictures remain Markdown. Private/draft text uses
-    administrator read_current_article; counters use get_article_stats.
+    """Read public documents: body, outline or metadata; not discovery.
+    Use metadata directly for author, existing description or display fields; no search/body
+    needed. Missing fields remain unknown.
+    For specific body facts, locate with rag_search(article_id=...) then copy
+    section/revision/section_schema/offset/max_chars. For whole-document summaries,
+    omit section and follow nextOffset. Outline lists headings; follow nextSectionsOffset.
+    Continuations require contentRevision and sectionSchema. A section end is not document
+    completion; conclusions cover only read text. Images stay Markdown.
+    Private/draft body uses administrator read_current_article; counters use get_article_stats.
     """
     from urllib.parse import urlencode
 

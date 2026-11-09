@@ -237,3 +237,19 @@ def test_partial_approval_preserves_independent_decisions_and_business_versions(
                 blocked = json.loads(results[-1].content)
                 assert blocked["blocked"] and not blocked["receipts"]
             assert [item["content"] for item in business["notices"]] == ["请查看新的站内通知。"]
+
+
+def test_admin_fixture_eligibility_read_does_not_prepare_or_write():
+    from agent.domains.account_actions.eligibility import get_account_action_eligibility
+
+    with backend() as business:
+        result = get_account_action_eligibility.invoke(
+            {"account_id": 20, "action": "set_role", "role": "zako"}, admin_config())
+        assert result.kind == "ok" and result.data["allowed"] is True
+        assert not business["writes"] and not business["unsupported_reads"]
+        assert len(business["requests"]) == 1
+        assert business["requests"][0].method == "GET"
+        result = get_account_action_eligibility.invoke(
+            {"account_id": 21, "action": "set_role", "role": "zako"}, admin_config())
+        assert result.kind != "ok" and len(business["unsupported_reads"]) == 1
+        assert not business["writes"]

@@ -19,7 +19,9 @@ def pause_task(
 
     Record the complete unfinished instruction, then stop now. This is neither a dashboard
     to-do nor a timed schedule. Pending checklist items alone do not pause execution.
-    No confirmation or business write. Continue requires the user's explicit resume action.
+    Remembering facts, preferences or a reading order uses conversation context; it does
+    not suspend an unfinished task. No confirmation or business write. Continue requires
+    the user's explicit resume action.
     """
     task_id = (config.get("configurable") or {}).get("browser_task")
     if not task_id:

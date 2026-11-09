@@ -239,7 +239,9 @@ class RagIndex:
                         article_id: int | None = None) -> list[dict] | None:
         """Return raw-query BM25 candidates bounded by top_k; None means unavailable."""
         if self.is_stale() and time.time() - self._last_attempt > 30:
-            if self._last_build:
+            # Once the grace window is exhausted, refresh like a cold start:
+            # an async refresh would reject this query before its healthy result arrives.
+            if self._last_build and time.time() - self._last_build <= REFRESH_TTL * 2:
                 self.refresh_async()
             else:
                 self.warm()
@@ -280,7 +282,9 @@ class RagIndex:
         candidates = candidate_limit(top_k)
         lex = self._lexical_ranked(query, candidates, article_id=article_id)
         if lex is None:
-            _record("unavailable", None)
+            unavailable_reason = self._last_error or ("refresh_in_progress"
+                if self._build_lock.locked() else "snapshot_expired")
+            _record("unavailable", unavailable_reason)
             return None
         vec, reason, miss = self._vector_ranked(query, candidates, article_id=article_id)
         if not vec:

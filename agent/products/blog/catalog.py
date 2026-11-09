@@ -12,57 +12,49 @@ DOMAIN_DESCRIPTIONS = {
     "not guestbook moderation.",
     "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
     "and transfer status. No mutation preparation.",
-    "admin_gallery_management": "Prepare single/bulk gallery edits, moves/copies, favorites, "
-    "deletion, folders and article covers. Known article/image IDs go directly to preparation; "
-    "it verifies targets and provides cover layout previews. "
-    "Discover unknown IDs in admin_gallery.",
+    "admin_gallery_management": "Prepare gallery edits, transfers, favorites, deletion, folders "
+    "and covers. Known IDs go directly to verified preparation with cover previews; "
+    "find unknown IDs via admin_gallery.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
-    "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
-    "announcement publication. Other business changes use the relevant domain prepare tool "
-    "with schedule. Clock times use run_at; relative delays use delay_seconds after approval. "
-    "confirm lifecycle changes.",
+    "admin_automations": "Persistent reminders, scheduled read-only reports and approved "
+    "announcements. Other scheduled writes use their domain's prepare tool. "
+    "Relative delays start after approval.",
     "public_activity": "Search public announcements, guestbook and talks by keyword; read latest "
     "entries. Public display names are not account identities.",
     "utilities": "Read the current time.",
-    "task_planning": "Optional private checklist for complex work (3+ actions) "
-    "or explicit task plans. "
-    "Not for chat, memory, user to-dos or reminders.",
+    "task_planning": "Private checklist for complex work (3+ actions) or explicit plans; "
+    "not chat, memory or business reminders.",
     "devices": "List accessible devices and control authorized OLED displays.",
-    "public_catalog": "Public article lists, counters, pinned articles, categories "
+    "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
     "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
-    "admin_article_management": "Prepare article state/pinning, tags or permanent deletion "
-    "with impact review. Known article IDs can go directly to preparation.",
+    "admin_article_management": "Prepare article state, pinning, tags or permanent deletion "
+    "with impact review; known IDs need no prior lookup.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
     "Article-tag assignment: admin_article_management.",
-    "admin_accounts": "Read account metadata; check exact-ID operation eligibility without "
-    "a mute duration. Read-only checks, not mutation preparation.",
-    "admin_account_actions": "Check exact-ID eligibility (no mute duration needed); "
-    "prepare account freeze, mute or role changes. "
-    "Search ambiguous names in admin_accounts first. "
-    "Automatic notices are fixed status templates; custom messages use admin_notices. "
+    "admin_accounts": "Read account metadata and exact-ID operation eligibility; "
+    "no mute duration needed.",
+    "admin_account_actions": "Check eligibility without mute duration; prepare freeze, mute "
+    "or roles. Resolve ambiguous names first. System notices are fixed templates; "
+    "custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
     "also removes recipients' copies.",
-    "admin_categories": "Category dictionary and approved creation, editing or deletion; optional "
-    "schedule runs the frozen change automatically after approval.",
-    "admin_work_queue": "Quota applications/reset and user-facing to-dos/reminders, including "
-    "selectable batch deletion. Known account IDs can reset directly. "
-    "Business records, not private planning.",
-    "admin_moderation": "Guestbook/comment counts, review distributions and records. "
-    "Use get_moderation_status for counts without content. "
-    "Lists include excerpts and real publishers. "
-    "Confirmation only for moderation or deletion.",
-    "admin_reports": "Server health, user statistics and article traffic reports.",
+    "admin_categories": "Category dictionary; confirmed creation, editing and deletion.",
+    "admin_work_queue": "Quota applications/reset and business to-dos/reminders, including "
+    "batch deletion. Known account IDs can reset directly; not private planning.",
+    "admin_moderation": "Guestbook/comment counts (get_moderation_status), records and "
+    "verified publishers; confirmed moderation/deletion.",
+    "admin_reports": "Server health and administrator-wide user/traffic statistics and rankings.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",
-    "notifications": "本人通知条目、未读清单、已读和删除；包含个人通知与公告副本。"
-    "清空本人列表保留全站公告原文和其他人的通知。",
+    "notifications": "Your notices/unread, read-state and deletion, including announcement "
+    "copies; deletion preserves global originals and others' copies.",
     "messages": "Your inbox summaries/body and read-state approval; reading does not mark read.",
 }
 
