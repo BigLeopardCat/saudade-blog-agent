@@ -56,12 +56,14 @@ def test_business_unavailability_and_semantic_failure_allow_user_correction(monk
     {"failure_source": "provider", "http_status": 401, "retryable": False},
     {"failure_source": "provider", "http_status": 400, "retryable": False,
      "provider_error_code": "insufficient_quota"},
+    {"failure_source": "transport", "end_reason": "client_disconnect"},
 ])
 @pytest.mark.parametrize("phase", ["poc", "full"])
 def test_captured_availability_failure_stops_paid_batch_and_keeps_partial_case(
         tmp_path, monkeypatch, facts, phase):
     trace = tmp_path / "trace.json"
-    trace.write_text(json.dumps({"events": [{"event": "llm_error", **facts}]}))
+    trace.write_text(json.dumps({"end_reason": facts.get("end_reason"),
+                                "events": [{"event": "llm_error", **facts}]}))
     attempted = []
     result = response("partial")
     result.update(error="opaque failure", trace=str(trace), round=1)
@@ -117,3 +119,22 @@ def test_application_and_business_errors_are_not_invented_provider_failures(
     path.write_text(json.dumps({"events": events}))
     assert online_baseline.model_availability_failure({
         "rounds": [{"trace": str(path), "error": error}]}) is None
+
+
+@pytest.mark.parametrize("end_reason,error,interrupted", [
+    ("client_disconnect", "opaque stream error", True),
+    ("client_disconnect", "", False),
+    ("producer_done", "client_disconnect", False),
+    (None, "与 Agent 的连接中断，回复可能不完整", False),
+])
+def test_stream_interruption_requires_trace_and_failed_round(
+        tmp_path, end_reason, error, interrupted):
+    path = tmp_path / "trace.json"
+    path.write_text(json.dumps({"end_reason": end_reason, "events": [
+        {"event": "llm_error", "error_type": "AgentCancelled"}]}))
+    failure = online_baseline.model_availability_failure({
+        "rounds": [{"trace": str(path), "error": error}]})
+    assert bool(failure) is interrupted
+    if failure:
+        assert failure["failure_source"] == "transport"
+        assert "http_status" not in failure and "provider_error_code" not in failure

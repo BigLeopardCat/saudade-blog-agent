@@ -204,11 +204,15 @@ def fixture_preflight(cases, transport, identities):
 
 
 def model_availability_failure(result):
-    """Require a failed round and terminal SDK failure facts, never response wording."""
+    """Require a failed stream or terminal SDK failure facts, never response wording."""
     for round_ in result.get("rounds", []):
         if not round_.get("error"):
             continue
         trace = load_trace(str(round_.get("trace", ""))) or {}
+        if trace.get("end_reason") == "client_disconnect":
+            return {"round": round_.get("round"), "trace": round_.get("trace"),
+                    "failure_source": "transport", "error_type": "AgentStreamInterrupted",
+                    "end_reason": "client_disconnect"}
         attempts = [event for event in trace.get("events", [])
                     if event.get("event") in {"llm_start", "llm_done", "llm_error"}]
         final = attempts[-1] if attempts else {}
