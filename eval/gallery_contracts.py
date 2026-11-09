@@ -1,6 +1,7 @@
 """Isolated gallery tasks with known complete selections and accepted image jobs."""
 
 import json
+import os
 import re
 import time
 from contextlib import contextmanager
@@ -11,6 +12,7 @@ import httpx
 from agent import confirm
 from eval.own_fixtures import SECRET
 from tools import base
+from utils.trace import GOLDEN_MATERIAL_LIMIT, TOOL_RESULT_LIMIT_ENV
 
 JOB_ID = "6b9e2bf1-56af-428c-8177-e3ad0641e036"
 ORGANIZE_REQUEST = ("帮我整理一下相册：先查清所有未分类图片，全部移到“文章封面”目录，"
@@ -70,7 +72,9 @@ def backend():
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client, \
             patch.object(base, "_client", client), \
-            patch.object(confirm.settings, "confirmation_secret", SECRET):
+            patch.object(confirm.settings, "confirmation_secret", SECRET), \
+            patch.dict(os.environ, {TOOL_RESULT_LIMIT_ENV: str(GOLDEN_MATERIAL_LIMIT)}):
+        # Complete synthetic observations are required to verify the selected image set.
         yield state
 
 

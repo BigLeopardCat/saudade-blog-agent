@@ -84,6 +84,40 @@ def test_index_is_compact_and_has_no_pixels_or_storage_tokens(gallery):
     assert not gallery["writes"]
 
 
+@pytest.mark.parametrize("name_length,description_length", [(0, 0), (120, 160), (121, 161)])
+@pytest.mark.parametrize("filename_fallback", [False, True])
+def test_index_marks_only_truncated_fields(
+        gallery, name_length, description_length, filename_fallback):
+    from urllib.parse import quote
+
+    name, description = "图" * name_length, "景" * description_length
+    gallery["row"].update(displayName=None if filename_fallback else name,
+                          description=description,
+                          imageUrl="https://images.example/" + quote(name) + "?access=private")
+    result = reads.get_gallery_index.invoke({"limit": 1}, config=admin())
+    item = result.data["items"][0]
+    assert item["name"] == name[:120]
+    assert item["name_truncated"] == (name_length > 120)
+    assert item["description"] == description[:160]
+    assert item["description_truncated"] == (description_length > 160)
+    assert result.data["next_cursor"] is None
+    assert "private" not in str(result)
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+
+
+def test_full_index_reuses_backend_metadata_in_one_read(gallery):
+    gallery["row"]["displayName"] = "图" * 255
+    gallery["row"]["description"] = "景" * 2000
+    result = reads.get_gallery_index.invoke({"detail": "full", "limit": 1}, config=admin())
+    item = result.data["items"][0]
+    assert item["name"] == gallery["row"]["displayName"]
+    assert item["description"] == gallery["row"]["description"]
+    assert not item["name_truncated"] and not item["description_truncated"]
+    assert "imageUrl" not in str(result) and "version" not in str(result)
+    assert len(gallery["requests"]) == 1 and not gallery["writes"]
+    assert "detail" not in gallery["requests"][0].url.params
+
+
 def test_full_metadata_reads_one_authoritative_image_without_pixels_or_writes(gallery):
     result = reads.get_gallery_image_metadata.invoke({"image_id": 11}, config=admin())
     assert result.data == json.loads(str(result))
