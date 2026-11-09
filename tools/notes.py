@@ -122,9 +122,9 @@ DOC_TYPE_CN = {
 }
 
 
-_ARTICLE_OFFSET_DESC = "Body character offset / outline item index; copy the matching next cursor."
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数，1..24000，默认12000"
-_ARTICLE_REVISION_DESC = "照抄contentRevision；续读和小节ID读取必须带版本"
+_ARTICLE_OFFSET_DESC = "Body character offset or outline index; copy the next cursor."
+_ARTICLE_LIMIT_DESC = "本次最多读取字符数"
+_ARTICLE_REVISION_DESC = "Copy contentRevision for continuation or section reads."
 
 
 @tool
@@ -140,17 +140,15 @@ def get_article_detail(
     section_schema: Annotated[str, Field(max_length=128)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
-    """Read ORIGINAL public text at a located source range; this is not article discovery.
-    For author, existing description or display fields, use view='metadata' directly;
-    no search or body read is needed. Missing fields stay unknown, not false or empty.
-    For a question about BODY CONTENT in a known article, locate with rag_search(article_id=...)
-    and copy its section/revision/section_schema/offset/max_chars to read the matching passage.
-    To read or summarize the WHOLE document, omit section and follow nextOffset.
-    To browse headings without reading body, use view='outline' and nextSectionsOffset.
-    Both continuations require contentRevision AND sectionSchema. A section's end does not
-    establish a full-article read; never characterize omitted text from a partial read.
-    Pictures remain Markdown. Private/draft text uses
-    administrator read_current_article; counters use get_article_stats.
+    """Read public documents: body, outline or metadata; not discovery.
+    Use metadata directly for author, existing description or display fields; no search/body
+    needed. Missing fields remain unknown.
+    For specific body facts, locate with rag_search(article_id=...) then copy
+    section/revision/section_schema/offset/max_chars. For whole-document summaries,
+    omit section and follow nextOffset. Outline lists headings; follow nextSectionsOffset.
+    Continuations require contentRevision and sectionSchema. A section end is not document
+    completion; conclusions cover only read text. Images stay Markdown.
+    Private/draft body uses administrator read_current_article; counters use get_article_stats.
     """
     from urllib.parse import urlencode
 
