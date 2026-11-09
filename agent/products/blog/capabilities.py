@@ -46,12 +46,7 @@ class ToolCatalog:
         self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
 
     def initial_tools(self, own_enabled):
-        tools = dict(self.read_tools)
-        if own_enabled:
-            tools[pause_task.name] = pause_task
-        if own_enabled and "get_inbox_overview" in self.own_read_tools:
-            tools["get_inbox_overview"] = self.own_read_tools["get_inbox_overview"]
-        return tools
+        return dict(self.read_tools)
 
     def domains(self, config, can_prepare):
         cfg = (config or {}).get("configurable") or {}
@@ -67,6 +62,7 @@ class ToolCatalog:
         if own_reads_enabled(cfg.get("principal")):
             domains.update(own_domains(self.own_read_tools))
             domains["task_planning"] = task_planning.tools()
+            domains["task_control"] = {pause_task.name: pause_task}
         if can_prepare and favorite_preparation.available(config):
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)

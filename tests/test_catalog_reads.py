@@ -252,10 +252,10 @@ def test_account_lookup_keeps_facts_and_bounds_unused_preparations(
     for message in ("查一下account_1，核对身份。", "还记得刚才的账号吗？"):
         list(runtime.stream_events({"messages": [HumanMessage(content=message)]}, cfg))
     assert len(backend["requests"]) == 1
-    assert "list_accounts" in model.used_menus[0]
+    assert "list_accounts" not in model.used_menus[0]
     assert "prepare_account_role" not in model.used_menus[0]
     assert all({"list_accounts", "prepare_account_role"} <= menu for menu in model.used_menus[1:3])
-    assert "list_accounts" in model.used_menus[-1]
+    assert ("list_accounts" in model.used_menus[-1]) is retains_domain
     assert "load_admin_account_actions_info_tools" in model.used_menus[-1]
     assert ("prepare_account_role" in model.used_menus[-1]) is retains_domain
     if retains_domain:
@@ -272,14 +272,14 @@ def test_account_lookup_keeps_facts_and_bounds_unused_preparations(
 
 
 @pytest.mark.parametrize("role", ["user", "zako", "admin", "superadmin"])
-def test_candidate_read_is_initial_only_when_the_catalog_authorizes_it(role):
+def test_candidate_read_is_discoverable_only_when_the_catalog_authorizes_it(role):
     from agent.products.blog.application import BlogApplication
     from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 
     cfg = config(role)
     initial, domains = BlogApplication().tools(
         cfg, CheckpointConversationStore(None).load(cfg), None, None, True)
-    assert ("list_accounts" in initial) == (role in {"admin", "superadmin"})
+    assert "list_accounts" not in initial
     assert not {"prepare_account_role", "prepare_account_freeze"} & initial.keys()
     assert ("admin_accounts" in domains) == (role in {"admin", "superadmin"})
 

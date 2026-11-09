@@ -96,7 +96,8 @@ def own_tools() -> dict:
 
 
 def own_domains(tools: dict) -> dict:
-    names = {"favorites": "list_my_favorites", "notifications": "list_notifications",
+    names = {"inbox": "get_inbox_overview", "favorites": "list_my_favorites",
+             "notifications": "list_notifications",
              "messages": "list_my_messages"}
     domains = {domain: {name: tools[name]} for domain, name in names.items() if name in tools}
     activity = {name: tools[name] for name in ("list_my_board", "get_chat_history")
