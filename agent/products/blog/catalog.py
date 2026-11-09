@@ -26,7 +26,7 @@ DOMAIN_DESCRIPTIONS = {
     "task_planning": "Private checklist for complex work (3+ actions) or explicit plans; "
     "not chat, memory or business reminders.",
     "devices": "List accessible devices and control authorized OLED displays.",
-    "public_catalog": "Public article lists, counters, pinned articles, categories "
+    "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
     "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
@@ -50,7 +50,7 @@ DOMAIN_DESCRIPTIONS = {
     "batch deletion. Known account IDs can reset directly; not private planning.",
     "admin_moderation": "Guestbook/comment counts (get_moderation_status), records and "
     "verified publishers; confirmed moderation/deletion.",
-    "admin_reports": "Server health, user statistics and article traffic reports.",
+    "admin_reports": "Server health and administrator-wide user/traffic statistics and rankings.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",
     "notifications": "Your notices/unread, read-state and deletion, including announcement "
