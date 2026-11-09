@@ -55,15 +55,19 @@ def site(tmp_path):
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
             self.end_headers()
-            self.wfile.write(b'event: text\ndata: "started"\n\n')
-            self.wfile.flush()
-            if payload["message"] == "wait":
-                release.wait(40)
             try:
+                self.wfile.write(b'event: text\ndata: "started"\n\n')
+                self.wfile.flush()
+                deadline = time.monotonic() + 40
+                while payload["message"] == "wait" and not release.wait(0.1):
+                    if time.monotonic() > deadline:
+                        break
+                    self.wfile.write(b': ping\n\n')
+                    self.wfile.flush()
                 self.wfile.write(b'event: done\ndata: {}\n\n')
                 self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):
-                pass
+                payload["disconnected"] = True
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Host)
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -80,7 +84,7 @@ def site(tmp_path):
             env={**os.environ, "SAUDADE_IGNORE_ENV_FILE": "1", "PYTHONPATH": "."})
         processes.append(process)
         eventually(lambda: ready.exists() or process.poll() is not None)
-        assert process.poll() is None, log.name
+        assert process.poll() is None, Path(log.name).read_text()
 
     backend = None
     try:
@@ -151,4 +155,5 @@ def test_explicit_cancel_is_distinct_from_reader_detach(site):
     eventually(lambda: bool(requests))
     assert runs.cancel(USER, identifier)["status"] == "CANCELLED"
     assert runs.owned(USER, identifier).status == "CANCELLED"
+    eventually(lambda: requests[0].get("disconnected"))
     assert len(requests) == 1

@@ -91,14 +91,16 @@ CLASSES = [
     ),
     dict(
         key="agent-scheduling-store", cleanup_api="DBOSClient.delete_workflows",
-        label="DBOS plans and execution results", store=STORE_PG,
+        label="DBOS plans, chat runs and execution streams", store=STORE_PG,
         status="managed", owner="agent/scheduling/retention.py",
         owner_ref="agent/scheduling/retention.py", retention="Terminal runs older than 30 days",
         why="Public DBOS APIs delete terminal execution trees. Live and paused plans remain; "
-            "child executions must be terminal. Nightly cleanup is disabled with scheduling.",
+            "child executions must be terminal. Chat streams expire without deleting task checkpoints. "
+            "Nightly cleanup is disabled with scheduling.",
         rule=None, dsn_env="SCHEDULING_DSN",
         tables=["saudade_automations.workflow_status", "saudade_automations.operation_outputs",
-                "saudade_automations.schedules"],
+                "saudade_automations.schedules", "saudade_automations.streams",
+                "saudade_automations.workflow_events"],
     ),
     dict(
         key="agent-checkpoint-store",

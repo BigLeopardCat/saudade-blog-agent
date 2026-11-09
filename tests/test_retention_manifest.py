@@ -58,7 +58,10 @@ def _pg_checks() -> None:
         if c.get("cleanup_api") == "DBOSClient.delete_workflows":
             # Library-owned tables are cleaned through the public client, not handwritten SQL.
             import ast
-            calls = [node for node in ast.walk(ast.parse(src))
+            tree_cleanup = next(node for node in ast.parse(src).body
+                                if isinstance(node, ast.FunctionDef) and node.name == "collect")
+            calls = [node for node in ast.walk(tree_cleanup)]
+            calls = [node for node in calls
                      if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                      and node.func.attr == "delete_workflows"]
             check(f"⑥ {c['key']} 使用框架公开接口删除完整执行树",
