@@ -88,7 +88,7 @@ export async function assertBackgroundRuns(page, fixture) {
   await idle();
   assert.ok((await page.locator('#chat-messages').innerText()).includes('乙会话的独立结果'));
   assert.ok(!(await page.locator('#chat-messages').innerText()).includes('甲会话的独立结果'));
-  if (!(await page.locator('#chat-panel').evaluate(el => el.classList.contains('conv-open'))))
+  if (!(await page.evaluate(() => window.__chatTest.ctx.dom.chatPanel.classList.contains('conv-open'))))
     await page.locator('#conv-toggle-btn').click();
   await page.locator(`.conv-row[data-id="${first.cid}"]`).click();
   await page.waitForFunction(() => document.getElementById('chat-messages').textContent.includes('甲会话的独立结果'));
