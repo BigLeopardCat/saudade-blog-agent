@@ -595,7 +595,7 @@
         0
       ],
       "agent/products/blog/catalog.py": [
-        0,
+        3,
         0
       ],
       "agent/products/blog/confirmation.py": [
@@ -968,7 +968,7 @@
       ]
     },
     "total": [
-      317,
+      320,
       0
     ]
   },
@@ -1469,5 +1469,8 @@
       151,
       279
     ]
+  },
+  "metric_notes": {
+    "agent/products/blog/catalog.py": "三处中文为站点功能的正式名称（河灯/留言），只展示给模型作工具发现描述；不对用户文本作关键词匹配，也不决定权限或操作。"
   }
 }

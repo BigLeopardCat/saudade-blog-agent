@@ -20,7 +20,7 @@ DOMAIN_DESCRIPTIONS = {
     "admin_automations": "Persistent reminders, scheduled read-only reports and approved "
     "announcements. Other scheduled writes use their domain's prepare tool. "
     "Relative delays start after approval.",
-    "public_activity": "Search public announcements, guestbook and talks by keyword; read latest "
+    "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
     "entries. Public display names are not account identities.",
     "utilities": "Read the current time.",
     "task_planning": "Private checklist for complex work (3+ actions) or explicit plans; "
@@ -29,7 +29,7 @@ DOMAIN_DESCRIPTIONS = {
     "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",
-    "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
+    "own_activity": "Read your own 河灯/留言 entries and review status, or conversation messages.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
     "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "
@@ -49,9 +49,10 @@ DOMAIN_DESCRIPTIONS = {
     "admin_categories": "Category dictionary; confirmed creation, editing and deletion.",
     "admin_work_queue": "Quota applications/reset and business to-dos/reminders, including "
     "batch deletion. Known account IDs can reset directly; not private planning.",
-    "admin_moderation": "Guestbook/comment counts (get_moderation_status), records and "
-    "verified publishers; confirmed moderation/deletion.",
-    "admin_reports": "Server health and administrator-wide user/traffic statistics and rankings.",
+    "admin_moderation": "Identify anonymous 河灯/留言 publishers with list_admin_board; "
+    "guestbook/comment counts, records and confirmed moderation/deletion.",
+    "admin_reports": "Article view/like/favorite rankings and totals (get_note_stats), "
+    "period reports, user statistics and server health.",
     "site": "Author profile, social links, site map and page controls.",
     "favorites": "Your favorites and confirmed additions/removals.",
     "notifications": "Your notices/unread, read-state and deletion, including announcement "

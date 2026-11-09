@@ -111,6 +111,8 @@ def search_public_activity(keywords: Keywords, page: Page = 1, limit: Limit = 5)
     """一次提交1至8个扩写关键词，批量检索公开公告、河灯留言和说说的完整正文。
 
     keywords按任一词命中，不区分大小写，重复词自动去重；不是语义搜索。
+    多来源和同义词合并为一次查询，已有关键词计数无需重复查询。
+    零命中仅支持本次关键词未匹配，不能断言从未讨论该主题。
     total/counts是去重并集，keywordCounts是各词计数，词间可能重叠不能相加。
     matchedKeywordIndices是命中词在keywords中的0起始位置；分页节选有明确截断标志。
     本工具只返回带截断标志的节选，不代表已读取全文。
