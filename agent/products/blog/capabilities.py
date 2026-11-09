@@ -46,7 +46,7 @@ class ToolCatalog:
         self.queue_read_tools = queue_tools() if queue_read_tools is None else queue_read_tools
 
     def initial_tools(self, own_enabled):
-        tools = {**self.read_tools, **task_planning.tools()}
+        tools = dict(self.read_tools)
         if own_enabled:
             tools[pause_task.name] = pause_task
         if own_enabled and "get_inbox_overview" in self.own_read_tools:
@@ -61,11 +61,12 @@ class ToolCatalog:
             "admin_reports": self.admin_read_tools,
             "admin_moderation": self.moderation_read_tools,
             "admin_catalog": self.catalog_read_tools,
-            "admin_account_actions": self.account_read_tools,
+            "admin_accounts": self.account_read_tools,
             "admin_work_queue": self.queue_read_tools,
         }))
         if own_reads_enabled(cfg.get("principal")):
             domains.update(own_domains(self.own_read_tools))
+            domains["task_planning"] = task_planning.tools()
         if can_prepare and favorite_preparation.available(config):
             domains["favorites"] = favorite_preparation.tools(self.own_read_tools)
             domains["notifications"] = notification_preparation.tools(self.own_read_tools)

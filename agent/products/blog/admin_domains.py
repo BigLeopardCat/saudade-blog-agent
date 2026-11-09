@@ -25,14 +25,14 @@ from agent.products.blog.read_tools import scoped_reads_enabled
 
 _PREPARATIONS = (
     ("admin_account_actions", accounts),
-    ("admin_gallery", gallery_preparation),
-    ("admin_gallery", gallery_folders),
-    ("admin_gallery", gallery_transfers),
+    ("admin_gallery_management", gallery_preparation),
+    ("admin_gallery_management", gallery_folders),
+    ("admin_gallery_management", gallery_transfers),
     ("admin_talks", talks),
-    ("admin_catalog", article_deletions),
+    ("admin_article_management", article_deletions),
     ("admin_image_generation", image_generation),
-    ("admin_catalog", articles),
-    ("admin_catalog", article_tags),
+    ("admin_article_management", articles),
+    ("admin_article_management", article_tags),
     ("admin_categories", categories),
     ("admin_tags", tags),
     ("admin_announcements", announcements),
@@ -63,6 +63,10 @@ def domains(config, can_prepare, reads):
     if editor_tools:
         selected["article_editor"] = editor_tools
     if can_prepare and available(config):
+        selected["admin_account_actions"] = {
+            name: tool for name, tool in reads.get("admin_accounts", {}).items()
+            if name == "get_account_action_eligibility"
+        }
         for name, preparation in _PREPARATIONS:
             current = selected.setdefault(name, {})
             current.update(preparation.tools(current))

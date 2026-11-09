@@ -66,3 +66,27 @@ def test_model_created_pending_todo_does_not_force_two_more_calls_or_duplicate_s
                    for row in saver.list(None))
         assert all("Runtime completion review" not in json.dumps(call["messages"])
                    for call in calls)
+
+
+def test_optional_planning_schema_and_instructions_load_only_when_requested():
+    from agent.runtime.task_planning import SYSTEM_PROMPT
+
+    pending = [{"content": name, "status": "pending"} for name in ("查询", "比较", "准备")]
+    with model_replies(
+            {"content": "你好。"},
+            {"tool_calls": [call("load_task_planning_info_tools", "discover")]},
+            {"tool_calls": [call("write_todos", "plan", todos=pending)]},
+            {"content": "清单已记录，尚未执行。"},
+    ) as (model, calls):
+        runtime = selected(model, InMemorySaver())
+        request(runtime, "你好")
+        request(runtime, "为查询、比较、准备三个步骤列执行清单，先不执行。")
+        def names(row):
+            return {item["function"]["name"] for item in row["tools"]}
+
+        assert "write_todos" not in names(calls[0])
+        assert "load_task_planning_info_tools" in names(calls[0])
+        assert SYSTEM_PROMPT not in str(calls[0]["messages"])
+        assert "write_todos" in names(calls[2])
+        assert SYSTEM_PROMPT in str(calls[2]["messages"])
+        assert len(calls) == 4

@@ -79,12 +79,12 @@ def test_admin_menu_visibility_follows_verified_authority(role, source, uid, vis
     assert ("admin_moderation" in domains) is visible
     assert ("admin_work_queue" in domains) is visible
     assert ("admin_catalog" in domains) is visible
-    assert ("admin_account_actions" in domains) is visible
+    assert ("admin_accounts" in domains) is visible
     if visible:
         assert set(domains["admin_moderation"]) == {
             "get_moderation_status", "list_admin_board", "list_admin_comments"}
         assert set(domains["admin_reports"]) == ADMIN_READ_TOOLS
-        assert set(domains["admin_account_actions"]) == {
+        assert set(domains["admin_accounts"]) == {
             "list_accounts", "get_account_action_eligibility"}
 
 
@@ -206,3 +206,26 @@ def test_real_statistics_tool_uses_actor_identity_and_preserves_api_failure(monk
     assert result.kind == ("ok" if status == 200 else "unavailable")
     if status == 200:
         assert "用户总数 0" in str(result)
+
+
+@pytest.mark.parametrize("read_domain,management_domain", [
+    ("admin_catalog", "admin_article_management"),
+    ("admin_accounts", "admin_account_actions"),
+])
+def test_read_discovery_excludes_preparation_schemas(read_domain, management_domain):
+    cfg = config(user_id=7, conversation_id=42, thread_id="conv_42")
+    domains = ToolCatalog().domains(cfg, True)
+    assert domains[management_domain]
+    model = Model([
+        AIMessage(content="", tool_calls=[{
+            "name": f"load_{read_domain}_info_tools", "args": {}, "id": "load"}]),
+        AIMessage(content="读取工具已加载，尚未查询。"),
+    ])
+    result = ToolSession(model, cfg, {}, domains).run([HumanMessage(content="加载查询工具")])
+    menus = [{item["function"]["name"] for item in menu} for menu in model.menus]
+    assert result.reply == "读取工具已加载，尚未查询。"
+    assert domains[read_domain].keys() <= menus[-1]
+    preparations = {name for name in domains[management_domain] if name.startswith("prepare_")}
+    assert preparations
+    assert all(not menu.intersection(preparations) for menu in menus)
+    assert f"load_{management_domain}_info_tools" in menus[-1]

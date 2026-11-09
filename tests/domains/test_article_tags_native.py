@@ -182,7 +182,7 @@ def test_native_runtime_preparation_confirmation_and_replay(tags, monkeypatch, t
         monkeypatch,
         tmp_path,
         admin_config(),
-        "admin_catalog",
+        "admin_article_management",
         "prepare_article_tags",
         {"article_id": 11, "add": ["测试"]},
     )

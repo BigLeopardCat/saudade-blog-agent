@@ -194,7 +194,9 @@ def test_direct_tool_refuses_unverified_or_mismatched_actor(backend, cfg):
 
 
 @pytest.mark.parametrize("allowed", [True, False])
-def test_framework_loads_the_tool_and_preserves_policy_facts_without_a_card(backend, allowed):
+@pytest.mark.parametrize("domain", ["admin_accounts", "admin_account_actions"])
+def test_framework_loads_the_tool_and_preserves_policy_facts_without_a_card(
+        backend, allowed, domain):
     if not allowed:
         backend.update(
             allowed=False, reasonCode="target_superadmin", message="不能禁言超级管理员账号"
@@ -210,7 +212,7 @@ def test_framework_loads_the_tool_and_preserves_policy_facts_without_a_card(back
             AIMessage(
                 content="",
                 tool_calls=[
-                    {"name": "load_admin_account_actions_info_tools", "args": {}, "id": "load"}
+                    {"name": f"load_{domain}_info_tools", "args": {}, "id": "load"}
                 ],
             ),
             AIMessage(
@@ -244,7 +246,7 @@ def test_framework_loads_the_tool_and_preserves_policy_facts_without_a_card(back
     cfg = admin_config()
     initial, domains = runtime.application.tools(cfg, runtime.store.load(cfg), None, None, True)
     assert "get_account_action_eligibility" not in initial
-    assert "get_account_action_eligibility" in domains["admin_account_actions"]
+    assert "get_account_action_eligibility" in domains[domain]
     events = list(
         runtime.stream_events({"messages": [HumanMessage(content=f"禁言账号{target}。")]}, cfg)
     )
