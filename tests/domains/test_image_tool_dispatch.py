@@ -52,7 +52,7 @@ class Model:
             "action": "favorite", "imageIds": [11, 12], "isFavorite": False}}),
         ("admin_gallery_management", "prepare_gallery_images", {"intent": {
             "action": "delete", "imageIds": [11, 12]}}),
-        ("admin_gallery_management", "prepare_article_cover", {"article_id": 3, "image_id": 11}),
+        ("admin_article_management", "prepare_article_cover", {"article_id": 3, "image_id": 11}),
     ],
 )
 def test_discovered_preparations_reach_approval_through_the_real_tool_chain(

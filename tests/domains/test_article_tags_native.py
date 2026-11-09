@@ -194,3 +194,20 @@ def test_worst_case_confirmation_stays_within_transport_budget(tags):
     result = prepare(add=names)
     token = result.execution["pending_confirm"]["token"]
     assert len(token) < 4000 and grant(result) is not None
+
+
+def test_preparation_records_tag_resolution_without_claiming_creation(tags, monkeypatch):
+    from agent.runtime.tool_evidence import scope
+
+    events = []
+    monkeypatch.setattr("agent.runtime.tool_evidence.record",
+                        lambda node, event, **data: events.append(data))
+    with scope({"id": "tags"}, 1):
+        card = preparation.prepare_article_tags.invoke(
+            {"article_id": 11, "add": ["新标签"]}, config=admin_config())
+    assert card.execution["pending_confirm"] and not tags["writes"]
+    facts = events[0]["facts"]
+    assert facts["before"] == []
+    assert facts["resolved_tags"] == [{"id": None, "name": "新标签",
+                                       "level": 1, "parentId": None}]
+    assert "after" not in facts and "token" not in json.dumps(events)

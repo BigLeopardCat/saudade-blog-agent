@@ -85,9 +85,13 @@ def prepare(article_id, request, config):
     if isinstance(result, base.ToolResult):
         return result
     try:
-        return observed(
-            "article_tags", plan(result, article_id), ("id", "title", "before", "version")
-        )
+        current = plan(result, article_id)
+        # Backend resolution distinguishes existing tag IDs from missing tag names.
+        resolved = [{key: tag[key] for key in ("id", "name", "level", "parentId")}
+                    for tag in current["after"]]
+        observed("article_tags", {**current, "resolved_tags": resolved},
+                 ("id", "title", "before", "version", "resolved_tags"))
+        return current
     except (ValueError, TypeError):
         return base.unavailable("未能核对文章与标签变更，本次未生成或执行操作。")
 
