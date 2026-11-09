@@ -8,7 +8,7 @@ from agent.role_labels import role_cn
 DOMAIN_DESCRIPTIONS = {
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
     "then approve gallery storage.",
-    "admin_talks": "Publish, edit or permanently delete administrator posts; "
+    "admin_talks": "Publish or schedule 说说, edit or permanently delete administrator posts; "
     "not guestbook moderation.",
     "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
     "and transfer status. No mutation preparation.",
@@ -23,8 +23,8 @@ DOMAIN_DESCRIPTIONS = {
     "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
     "entries. Public display names are not account identities.",
     "utilities": "Read the current time.",
-    "task_planning": "Track the agent's execution steps for complex work (3+ actions) or "
-    "explicit task plans; not user to-dos, reminders or chat history.",
+    "task_planning": "Agent内部执行清单，不是用户待办或提醒。仅用于复杂任务（3步以上）"
+    "或用户明确要求的执行计划。",
     "devices": "List accessible devices and control authorized OLED displays.",
     "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
@@ -39,16 +39,16 @@ DOMAIN_DESCRIPTIONS = {
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
     "Article-tag assignment: admin_article_management.",
-    "admin_accounts": "Read account metadata and exact-ID operation eligibility; "
+    "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格); "
     "no mute duration needed.",
-    "admin_account_actions": "Check eligibility without mute duration; prepare freeze, mute "
-    "or roles. Resolve ambiguous names first. System notices are fixed templates; "
+    "admin_account_actions": "Prepare freeze, mute or role changes; eligibility-only queries "
+    "use admin_accounts. Resolve ambiguous names first. System notices are fixed templates; "
     "custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
     "also removes recipients' copies.",
-    "admin_categories": "Category dictionary; confirmed creation, editing and deletion.",
-    "admin_work_queue": "Quota applications/reset and business to-dos/reminders, including "
+    "admin_categories": "Category dictionary; prepare or schedule creation, editing and deletion.",
+    "admin_work_queue": "用户待办 (business to-dos), quota applications/reset, including "
     "batch deletion. Known account IDs can reset directly; not private planning.",
     "admin_moderation": "Identify anonymous 河灯/留言 publishers with list_admin_board; "
     "guestbook/comment counts, records and confirmed moderation/deletion.",
@@ -68,11 +68,9 @@ _BROWSER_ACTIONS = ("navigate_page", "set_page_appearance")
 def initial_tools(tools, domains):
     # These operations remain authorized by the domain builder and again on invocation.
     browser = domains.get("site") or {}
-    device = domains.get("devices") or {}
     accounts = domains.get("admin_accounts") or {}
     return {
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
-        **{name: device[name] for name in ("device_oled_display",) if name in device},
         **{name: accounts[name] for name in ("list_accounts",) if name in accounts},
     }
