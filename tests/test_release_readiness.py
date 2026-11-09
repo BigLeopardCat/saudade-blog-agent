@@ -248,3 +248,17 @@ def test_dispatch_rejections_are_reported_and_cannot_earn_first_action_credit(tm
     assert got["tool_process"]["totals"]["inactive_tool_requests"] == 1
     assert got["tool_process"]["rejected_rounds"][0]["case"] == "0"
     assert any(row["gate"] == "first_action" for row in got["failures"])
+
+
+def test_cache_population_uses_wire_identity_and_preserves_unobserved_usage():
+    sdk = {"event": "request_layout", "model": "m", "tools": "t", "messages": ["a"],
+           "session": "stable"}
+    wire = dict(sdk, event="wire_request")
+    done = {"event": "llm_done", "input": 100, "cache_read": 0, "output": 10}
+    doc = {"events": [sdk, wire, done, sdk, dict(wire, session="changed"), done,
+                      sdk, {"event": "wire_request_unavailable"}, done, sdk, done]}
+    rows = list(cache_population(doc))
+    assert [label for label, _ in rows] == [
+        "first_call", "changed_layout", "unknown_layout", "first_call"]
+    assert sum(row["input"] for _, row in rows) == 400
+    assert all("known_prefix_input" not in row for _, row in rows)

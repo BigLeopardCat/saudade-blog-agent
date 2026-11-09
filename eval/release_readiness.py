@@ -46,15 +46,19 @@ def distribution(values, minimum):
 def cache_population(doc):
     """Separate actual append-only calls from first calls and changed request layouts."""
     previous, current, previous_usage = None, None, None
+    previous_source, source = None, None
     for event in request_metrics.events_of(doc):
-        if event.get("event") == "request_layout":
-            current = event
+        if event.get("event") in ("request_layout", "wire_request"):
+            current, source = event, event["event"]
+        elif event.get("event") == "wire_request_unavailable":
+            current, source = None, None
         elif event.get("event") == "llm_done":
             label = "unknown_layout"
             if current:
                 label = "first_call" if previous is None else "changed_layout"
-                if previous and compare(previous, current)["change"] in (
-                        "same_payload", "append_only") and previous.get("messages"):
+                change = compare(previous, current)["change"]
+                if (previous and previous_source == source and previous.get("messages")
+                        and change in ("same_payload", "append_only")):
                     label = "stable_prefix"
             measured = dict(event)
             if label == "stable_prefix" and previous_usage:
@@ -67,6 +71,7 @@ def cache_population(doc):
             yield label, measured
             previous_usage = event
             previous, current = current, None
+            previous_source, source = source, None
 
 
 def _add_cache(row, event):
