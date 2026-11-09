@@ -8,6 +8,7 @@ import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
 import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
+import { assertConfirmationContent } from './chat-confirmation-content.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -44,6 +45,13 @@ const server = createServer(async (req, res) => {
       for await (const chunk of req) chunks.push(chunk);
       const body = chunks.length ? JSON.parse(Buffer.concat(chunks)) : {};
       requests.push({ method: req.method, path: url.pathname, body });
+      if (/^\/api\/public\/image-generation\/[0-9a-f-]+\/preview$/.test(url.pathname)) {
+        res.writeHead(200, {'Content-Type':'image/svg+xml'});
+        res.end('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="960">'
+          + '<rect width="240" height="480" fill="#f4aecb"/>'
+          + '<rect y="480" width="240" height="480" fill="#9d9fed"/>'
+          + '<rect y="930" width="240" height="30" fill="#504060"/></svg>'); return;
+      }
       if (url.pathname === '/api/chat/service/status') return json(res, {ready:serviceReady});
       if (url.pathname === '/api/chat/tasks') {
         const snapshot = structuredClone({...managedTasks,server_time:new Date().toISOString()});
@@ -162,7 +170,7 @@ const server = createServer(async (req, res) => {
           const card = mode === 'confirmation-replay' ? staleConfirmation : {
             id: next ? 'offline-next' : 'offline-ask', task_id: taskId,
             replay_safe: mode === 'confirmation-resumable',
-            q: mode === 'confirmation-images' ? 'fixture-images' : next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
+            q: next ? '第二项操作，等待独立批准。' : '将测试文章加入收藏？这会新增一条收藏记录。',
             notices: [{kind:'warning',text:'删除后不可恢复。'},
               {kind:'info',text:'确认后执行；修改需求直接在聊天里说。'}],
             token: next ? 'offline-next-confirmation' : 'offline-synthetic-confirmation',
@@ -175,6 +183,21 @@ const server = createServer(async (req, res) => {
               {value:'no',label:'取消'},
             ] : [{ value: 'yes', label: '确认收藏' }, { value: 'no', label: '取消' }],
           };
+          if (mode === 'confirmation-images') card.details = {
+            sections:[{label:'正文图片',text:'fixture-images',format:'markdown'}]};
+          if (mode === 'confirmation-structured') {
+            card.q='请核对这次请求。';
+            card.details={fields:[{label:'服务地址',value:'https://api.openai.com/v1'},
+              {label:'固定参考图',value:'1 张'},
+              {label:'名称',value:'**纯文本** <img onerror="alert(1)"> [原样](https://example.test)'}],
+              sections:[{label:'正文',text:'fixture-card-markdown',format:'markdown'}]};
+            const job='6b9e2bf1-56af-428c-8177-e3ad0641e036';
+            card.image_review={job_id:job,version:'a'.repeat(64),prompt:'**原样提示词**\n```不是代码控件```',
+              references:[{image_id:11,name:'竖版参考图',url:'/api/public/image-generation/'+job+'/preview?token=fixture'}]};
+            steeringHistory=[{id:801000,role:'user',content:body.message,time:Date.now(),images:[],turn_id:body.turn_id},
+              {id:801001,role:'assistant',content:'离线测试回复：已收到你的消息。',time:Date.now(),images:[],parent_turn_id:body.turn_id}];
+          }
+          if (mode === 'confirmation-malformed') card.details={sections:[{label:'正文',text:'<script>',format:'html'}]};
           if (mode !== 'confirmation-replay') {
             pendingConfirmation = card;
             if (!next) staleConfirmation = card;
@@ -666,9 +689,11 @@ try {
   }
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
-  await assertImageReview({page,origin});
+  await assertImageReview({page,origin,output});
   await assertCoverReview({page});
   await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
+    resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
+  await assertConfirmationContent({browser,origin,output,requests,setMode:mode=>{nextMode=mode;},
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();

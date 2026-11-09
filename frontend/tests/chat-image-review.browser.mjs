@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-export async function assertImageReview({page, origin}) {
+export async function assertImageReview({page, origin, output}) {
   const result = await page.evaluate(() => {
     const job = '6b9e2bf1-56af-428c-8177-e3ad0641e036';
     const preview = '/api/public/image-generation/' + job + '/preview?token=fixture';
@@ -9,8 +9,8 @@ export async function assertImageReview({page, origin}) {
       references: [{name:'参考图 <script>inert</script>', url: preview, image_id: 11}],
       result_url: preview};
     const root = document.createElement('div'); root.id='image-review-fixture';
-    root.style.cssText='position:fixed;top:80px;left:20px;z-index:2147483647;width:400px;background:white';
-    document.body.append(root);
+    root.style.cssText='position:relative;flex:none;width:min(400px,100%);background:var(--chat-paper,white)';
+    document.getElementById('chat-messages').append(root);
     const rendered=window.__waifuImageReview.render(root,value);
     const texts=[...root.querySelectorAll('figcaption')].map(node=>node.textContent);
     const safe = !root.querySelector('script, pre, code, [onerror]') && !window.__imageInjected;
@@ -38,6 +38,23 @@ export async function assertImageReview({page, origin}) {
   assert.equal(result.images.length,2); assert.match(result.texts[1],/<script>inert<\/script>/);
   assert.equal(result.rows,1); assert.equal(result.stage,'accepted'); assert.equal(result.status,'completed');
   assert.equal(result.text,'<actual> accepted'); assert.match(result.html,/&lt;actual&gt;/);
+  await page.waitForFunction(()=>[...document.querySelectorAll('#image-review-fixture img')]
+    .every(image=>image.complete && image.naturalHeight>0));
+  for(const width of [400,180]) {
+    await page.locator('#image-review-fixture').evaluate((root,width)=>{root.style.width=width+'px';},width);
+    const previews=await page.locator('#image-review-fixture .chat-image-preview').evaluateAll(frames=>
+      frames.map(frame=>{const image=frame.querySelector('img'),a=frame.getBoundingClientRect(),b=image.getBoundingClientRect();
+        return {top:b.top-a.top,bottom:a.bottom-b.bottom,left:b.left-a.left,right:a.right-b.right,
+          height:b.height,frameHeight:a.height,fit:getComputedStyle(image).objectFit};}));
+    for(const view of previews) {
+      assert.ok(view.height>0 && view.height<=view.frameHeight+1,JSON.stringify(view));
+      assert.ok(['top','bottom','left','right'].every(key=>view[key]>=-1),JSON.stringify(view));
+      assert.equal(view.fit,'contain');
+    }
+  }
+  await page.locator('#image-review-fixture').evaluate(root=>{root.style.width='min(400px,100%)';});
+  if(output) await page.locator('#image-review-fixture .chat-image-references')
+    .screenshot({path:output+'/image-generation-reference-complete.png'});
   await page.context().grantPermissions(['clipboard-read','clipboard-write'], {origin});
   await page.locator('#image-review-fixture .chat-image-prompt-copy').click({force:true});
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),result.expected);

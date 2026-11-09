@@ -98,6 +98,12 @@ def test_full_prompt_and_references_visible_before_any_paid_call(service, tmp_pa
     assert "```" not in card.reply and "token=" not in card.reply
     assert service["paid_calls"] == 0 and service["accepts"] == 0
     assert public_card(card.execution)["image_review"] == review
+    assert public_card(card.execution)["details"]["fields"] == [
+        {"label": "模型", "value": "fixture"}, {"label": "尺寸", "value": "1536x1024"},
+        {"label": "质量", "value": "high"}, {"label": "服务地址", "value": "https://images.test/v1"},
+        {"label": "固定参考图", "value": "2 张"},
+    ]
+    assert "https://" not in card.execution["pending_confirm"]["q"]
     signed = grant(card)
     assert signed["specs"][0]["args"] == {"job_id": ID, "version": "a" * 64}
     ledger = Ledger(str(tmp_path / "generation.sqlite3"))

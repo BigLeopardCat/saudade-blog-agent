@@ -11,6 +11,7 @@ from _own_support import config
 from pydantic import ValidationError
 
 from agent import confirm
+from agent.contracts.events import confirmation_text
 from agent.domains.moderation_actions import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.pending import PendingOperation
@@ -182,7 +183,7 @@ def test_preparation_is_zero_write_and_signs_exact_collection_version(
     if action != "delete":
         expected["verdict"] = action
     assert signed["specs"] == [{"tool": name, "args": expected}]
-    question = result.execution["pending_confirm"]["q"]
+    question = confirmation_text(result.execution["pending_confirm"])
     assert "真实正文" in question and "UID 8" in question and "真实发表账号" in question
     if resource == "comment":
         assert "真实文章" in question and "关联 2 条" in question

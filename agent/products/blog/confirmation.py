@@ -3,7 +3,7 @@
 import hashlib
 import time
 
-from agent.contracts.events import StreamEvent
+from agent.contracts.events import ConfirmationDetails, StreamEvent
 
 
 def presentation(result):
@@ -74,6 +74,8 @@ def public_card(execution):
     return {
         "id": identifier, "q": popup.get("q", ""),
         "notices": popup.get("notices", []),
+        **({"details": ConfirmationDetails.model_validate(popup["details"]).model_dump()}
+           if "details" in popup else {}),
         "opts": popup.get("opts") or [], "token": popup.get("token", ""),
         "exp": popup.get("exp") or 0, "server_time": int(time.time()),
         **({"task_id": execution["task_id"]} if execution.get("task_id") else {}),

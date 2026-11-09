@@ -16,7 +16,7 @@ from pathlib import Path
 from markdown_it import MarkdownIt
 from openai import OpenAIError
 
-from agent.contracts.events import ConfirmationNotice
+from agent.contracts.events import ConfirmationNotice, confirmation_text
 from eval import acceptance, semantic_judge
 from eval.online_transport import safe_result
 from utils import trace as trace_mod
@@ -268,7 +268,7 @@ def material(case, results):
                   if event.get("event") == "confirmation" and isinstance(event.get("data"), dict)
                   for notice in event["data"].get("notices", [])),
                 *result.get("confirmation_previews", []),
-                                                *(event["data"]["q"]
+                                                *(confirmation_text(event["data"])
                                                 for event in result.get("http_events", [])
                                                 if event.get("event") == "confirmation")],
             "assistant_reply_to_review": result["text"],

@@ -7,9 +7,12 @@ from types import SimpleNamespace
 
 import httpx
 import jwt
+import pytest
 import test_confirmation_continuation as continuation
 from _own_support import config
+from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.domains.favorites import preparation
 from agent.main import create_app
 from agent.products.blog.confirmation import cancel, public_card
 from config.settings import settings
@@ -17,13 +20,24 @@ from config.settings import settings
 backend = continuation.backend
 
 
+@pytest.mark.parametrize("structured", [False, True])
 def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocation(
-    backend, monkeypatch
+    backend, monkeypatch, structured
 ):
     state, _ = backend
-    selected = continuation.runtime(continuation.Model())
+    details = {"fields": [{"label": "文章", "value": "19"}], "sections": []}
+    if structured:
+        original = preparation.proposal
+
+        def propose(*args, **kwargs):
+            return original(*args, **kwargs, details=details)
+
+        monkeypatch.setattr(preparation, "proposal", propose)
+    saver = InMemorySaver()
+    selected = continuation.runtime(continuation.Model(), saver=saver)
     prepared, grant, _ = continuation.prepare(selected, continuation.FAVORITE)
     task = selected.store.load(config()).run["id"]
+    selected = continuation.runtime(continuation.Model(), saver=saver)
     application = create_app()
     application.state.runtime = selected
 
@@ -69,7 +83,9 @@ def test_current_card_is_readable_under_turn_lock_and_disappears_after_revocatio
                 "server_time",
                 "article_ids_to_refresh",
                 "notices",
-            }
+            } | ({"details"} if structured else set())
+            if structured:
+                assert body["confirmation"]["details"] == details
             assert body["confirmation"]["notices"] == (
                 prepared.execution["pending_confirm"]["notices"])
             assert body["confirmation"]["article_ids_to_refresh"] == [19]

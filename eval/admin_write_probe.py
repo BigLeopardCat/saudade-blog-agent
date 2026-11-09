@@ -17,6 +17,7 @@ import urllib.request
 import httpx
 from httpx_sse import connect_sse
 
+from agent.contracts.events import confirmation_text
 from eval.stream_protocol import EventStreamError, read_events
 
 # 8010 = agent 直连（快速问一轮，只看 executions 与文本）；
@@ -660,7 +661,7 @@ def step8_popup_write(rep: Report, uid: int, role: str, art_id: int, title: str)
         if payload is None:
             return
         # Approval questions must identify a target a human can recognize.
-        q = payload.get("q") or ""
+        q = confirmation_text(payload)
         st_cn = {"public": "公开", "private": "私密", "draft": "草稿"}.get(cur, cur)
         for want_s in (f"《{title[:20]}", f"现在：{st_cn}"):
             ok_q = want_s in q
@@ -827,7 +828,7 @@ def step11_tag_admin(rep: Report, uid: int, role: str, allow_delete: bool) -> No
                                "⑪", "tag_create")
         if payload is None:
             return
-        q = payload.get("q") or ""
+        q = confirmation_text(payload)
         ok_name = name in q
         ok_parent = "挂在「编程」下" in q
         rep.check(ok_parent,
@@ -1002,7 +1003,7 @@ def _drive_or_click(rep: Report, uid: int, role: str, conv_id: int,
         clean_end(rep, tag, d)
         return d
     payload, _raw = got[0]
-    q = (payload or {}).get("q") or ""
+    q = confirmation_text(payload or {})
     tok = (payload or {}).get("token") or ""
     print(f"  [WARN] 快道没命中、走了弹窗：{(d.get('reply') or '')[:80]}")
     rep.warn(f"{tag}：这句措辞没走命令快道（弹了确认框），已点确定走完——"
@@ -1067,7 +1068,7 @@ def step16_announcement(rep: Report, uid: int, role: str) -> None:
                              "⑯ 代发", "announcement_create")
         if first is None:
             return
-        q = (first[0].get("q") or "")
+        q = confirmation_text(first[0])
         rep.check("正文" in q and "维护" in q,
                   f"⑯ 问句里没有正文预览（主人等于盲签一条对全体访客可见的公告）：{q!r}")
         # Identify created announcements by snapshot difference, even if their titles changed.
@@ -1430,7 +1431,7 @@ def step17_auth_review(rep: Report, uid: int, role: str, allow_publish: bool = F
         if not payload:
             rep.fails.append("⑰ 确认帧不是合法 JSON")
             return
-        q = payload.get("q") or ""
+        q = confirmation_text(payload)
         tok = payload.get("token") or ""
         load = _token_payload(tok)
         specs = [s for s in (load.get("specs") or []) if isinstance(s, dict)]
@@ -1930,7 +1931,7 @@ def step18_ledger_zero_write(rep: Report, uid: int, role: str) -> None:
             if not payload:
                 rep.fails.append("⑱ 确认帧不是合法 JSON")
                 return
-            q = payload.get("q") or ""
+            q = confirmation_text(payload)
             tok = payload.get("token") or ""
             load = _token_payload(tok)
             specs = [s for s in (load.get("specs") or []) if isinstance(s, dict)]
@@ -2132,7 +2133,7 @@ def _acct_popup(rep: Report, uid: int, role: str, conv: int, intent: str, tag: s
     payload = _popup_token(rep, uid, role, conv, intent, tag, want_workflow)
     if payload is None:
         return None, ""
-    q = payload.get("q") or ""
+    q = confirmation_text(payload)
     for want in (name, "账号 id=", f"现在：{want_state}"):
         ok = want in q
         print(f"  [{'PASS' if ok else 'FAIL'}] {tag} 问句含 {want!r}")

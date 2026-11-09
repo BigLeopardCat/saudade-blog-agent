@@ -123,6 +123,7 @@
     ['chat-render', '__waifuRender'],
     ['chat-work', '__waifuWorkProgress'],
     ['chat-image-review', '__waifuImageReview'],
+    ['chat-confirmation-content', '__waifuConfirmationContent'],
     ['chat-engine', '__waifuEngine'],
     ['chat-protocol', '__waifuChatProtocol'],
     ['chat-browser-actions', '__waifuBrowserActions'],

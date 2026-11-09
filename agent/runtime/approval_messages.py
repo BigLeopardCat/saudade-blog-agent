@@ -49,6 +49,8 @@ def prepared(call, proposal, todos):
         "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
     }
     visible["notices"] = proposal["execution"]["pending_confirm"].get("notices", [])
+    if "details" in proposal["execution"]["pending_confirm"]:
+        visible["details"] = proposal["execution"]["pending_confirm"]["details"]
     facts = proposal["execution"]["pending_confirm"].get("preparation_facts")
     if facts is not None:
         visible["preparation_facts"] = facts

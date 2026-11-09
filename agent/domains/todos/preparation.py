@@ -87,7 +87,12 @@ def _prepare(action, text, item_id, date, config):
         spec,
         executor="todos",
         target=target,
-        question=target + "？",
+        question=label + "？",
+        details={"fields": [
+            *([{"label": "待办编号", "value": str(item_id)}] if item_id is not None else []),
+            {"label": "排期", "value": (args.get("date") if action in ("create", "reschedule")
+                                      else current.get("date")) or "未排期"},
+        ], "sections": [{"label": "待办内容", "text": args["text"]}]},
         notices=[{"kind": "warning", "text": "删除后不可恢复。"}] if action == "delete" else [],
     )
 

@@ -184,11 +184,12 @@ def prepare_talk_change(
     observed("talks", current, ("version", "before", "after"))
     row = current["after"] or current["before"]
     target = f"说说《{row['title']}》" + (f"（#{row['id']}）" if row["id"] else "")
-    question = target + (
-        "\n删除此说说？"
-        if action == "delete"
-        else "\n发布/更新后的完整正文：\n\n" + row["content"]
-    )
+    details = {"fields": [{"label": "标题", "value": row["title"]}], "sections": []}
+    if row["id"]:
+        details["fields"].append({"label": "说说编号", "value": str(row["id"])})
+    if action != "delete":
+        details["sections"].append({"label": "发布/更新后的完整正文",
+                                    "text": row["content"], "format": "markdown"})
     spec = {"tool": "change_talk", "args": {"version": current["version"], "intent": request}}
     if schedule is None and current["before"] == current["after"]:
         text = target + "内容已符合要求，无需修改。"
@@ -201,7 +202,8 @@ def prepare_talk_change(
         "talk_change",
         spec,
         executor="talks",
-        question=question,
+        question="确认删除此说说？" if action == "delete" else "请核对说说的标题和完整正文。",
+        details=details,
         target=target,
         schedule=schedule,
         notices=[{"kind": "warning", "text": "永久删除此说说，不影响河灯留言。"}]

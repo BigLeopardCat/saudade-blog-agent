@@ -19,6 +19,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from starlette.requests import Request
 
 from agent import checkpoint, confirm, delegation
+from agent.contracts.events import confirmation_text
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -253,7 +254,8 @@ def _sample(name, backend, contract, run_id, sample):
             rounds.append({"user_input": message, "text": result["text"],
                            "commands": result["commands"],
                            "confirm_payloads": result["confirm_payloads"],
-                           "confirmation_previews": [json.loads(frame.partition(":")[2])["q"]
+                           "confirmation_previews": [
+                               confirmation_text(json.loads(frame.partition(":")[2]))
                                for frame in result["frames"]
                                if frame.startswith("__CONFIRM__:")],
                            "exec_rows": result["exec_rows"],

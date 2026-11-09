@@ -115,25 +115,52 @@ def tools(service, can_prepare):
         definition.validate_creation(service.now())
         identifier = "sc_" + uuid.uuid4().hex
         args = {"schedule_id": identifier, "definition": definition.model_dump(mode="json")}
-        question = f"创建计划「{title}」\n时间：{time_description(definition)}\n任务：{instruction}"
+        details = {
+            "fields": [
+                {"label": "名称", "value": title},
+                {
+                    "label": "任务类型",
+                    "value": {
+                        "reminder": "提醒",
+                        "read_only_agent": "只读分析",
+                        "publish_announcement": "发布公告",
+                    }[action],
+                },
+                {"label": "时间", "value": time_description(definition)},
+            ],
+            "sections": [
+                {
+                    "label": "公告正文" if action == "publish_announcement" else "任务内容",
+                    "text": instruction,
+                    "format": "markdown" if action == "publish_announcement" else "plain",
+                }
+            ],
+        }
         if definition.condition and definition.expires_at is not None:
-            question += (
-                f"\n等待文章 #{definition.condition.article_id} 公开，"
-                f"截止 {definition.expires_at.isoformat()}。"
+            details["fields"].extend(
+                [
+                    {"label": "等待条件", "value": f"文章 #{definition.condition.article_id} 公开"},
+                    {"label": "截止时间", "value": definition.expires_at.isoformat()},
+                ]
             )
-        question += (
-            "\n到期自动公开发布以上标题和正文，并通知发布时的全部用户；无需再次确认。"
-            if action == "publish_announcement" else
-            "\n结果发送给你本人。后台分析仅使用读取工具，不执行页面操作或业务写入；"
-            "不会携带当前聊天历史。"
-        )
+        notice = {
+            "publish_announcement": (
+                "到期自动公开发布以上标题和正文，并通知发布时的全部用户；无需再次确认。"
+            ),
+            "reminder": "到期将提醒内容发送给你本人；无需再次确认。",
+            "read_only_agent": (
+                "到期启动独立只读任务，结果发送给你本人；不携带聊天历史，不执行页面操作或业务写入。"
+            ),
+        }[action]
         return proposal(
             actor,
             cid,
             "automation_create",
             {"tool": OPERATIONS["create"], "args": args},
             executor="automations",
-            question=question,
+            question="确认创建此计划？",
+            details=details,
+            notices=[{"kind": "info", "text": notice}],
             target=title,
             timing=timing_facts(definition),
         )

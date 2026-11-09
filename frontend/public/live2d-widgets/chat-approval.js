@@ -63,6 +63,7 @@
       const anchor = owners.get(ask.id);
       const row = { ...old, id: ask.id, task_id: ask.task_id, q: ask.q, exp: ask.exp,
         notices: ask.notices,
+        details: ask.details,
         image_review: ask.image_review,
         cover_review: ask.cover_review,
         article_ids_to_refresh: ask.article_ids_to_refresh,
@@ -104,6 +105,15 @@
       }
       if (section.childElementCount) container.appendChild(section);
     };
+    const renderCard = (container, ask) => {
+      const question = document.createElement('div');
+      question.className = 'chat-confirmation-question'; question.textContent = ask.q || '';
+      container.replaceChildren(question);
+      if (ask.details) window.__waifuConfirmationContent?.render(container, ask.details, applyMsg);
+      window.__waifuImageReview?.render(container, ask.image_review);
+      window.__waifuImageReview?.renderCover(container, ask.cover_review);
+      renderNotices(container, ask.notices);
+    };
     const renderRecord = (ask, note) => {
       const anchor = findAnchor(ask);
       if (!anchor) return;
@@ -113,10 +123,7 @@
       const record = document.createElement('details');
       record.className = 'chat-approval-result'; record.dataset.operationId = ask.id;
       const label = document.createElement('summary'); label.textContent = note;
-      const question = document.createElement('div'); applyMsg(question, ask.q || '');
-      window.__waifuImageReview?.render(question, ask.image_review);
-      window.__waifuImageReview?.renderCover(question, ask.cover_review);
-      renderNotices(question, ask.notices);
+      const question = document.createElement('div'); renderCard(question, ask);
       record.append(label, question); anchor.appendChild(record);
     };
     const restoreRecords = () => {
@@ -183,7 +190,7 @@
       if (ask.convId !== ctx.state.conv || currentAsk?.id !== ask.id) return;
       ctx.state.pendingAsk = ask;
       reportAskStage('settle', { id: askIdOf(), result: 'rollback', why });
-      askBox.dataset.askState = '';   // 抹掉状态 ⇒ syncAsk 的就位判据不成立，强制重建按钮
+      askBox.dataset.askState = '';
       syncAsk();
       setAskQuestion(ask.q, '（上一次没发出去：' + why + '，可以再点一次）');
     };
@@ -206,7 +213,7 @@
       reportConfirm('点了确定之后本轮以失败收尾（' + why + '）——卡片按"不确定"结算，不再放行重试');
       askSettle('没收到回复，不确定有没有生效；可以问我"刚才那件事办成了吗"', undefined, 'unknown', ask);
     };
-    const hideAsk = () => {                // 未点击的收场（用户改口打字说了别的）
+    const hideAsk = () => {
       const shown = askBox && askBox.classList.contains('active');
       ctx.state.pendingAsk = null;
       if (shown) askSettle('已收起卡片；这不会撤销操作。', undefined, 'dismiss');
@@ -223,13 +230,7 @@
     };
     const setAskQuestion = (q, note) => {
       if (!askQuestion) return;
-      try { applyMsg(askQuestion, String(q || '')); }
-      catch (e) { askQuestion.textContent = String(q || ''); }  // 渲染失败退回纯文本，绝不空着
-      const review = ctx.state.pendingAsk?.image_review || currentAsk?.image_review;
-      window.__waifuImageReview?.render(askQuestion, review);
-      const cover = ctx.state.pendingAsk?.cover_review || currentAsk?.cover_review;
-      window.__waifuImageReview?.renderCover(askQuestion, cover);
-      renderNotices(askQuestion, (ctx.state.pendingAsk || currentAsk)?.notices);
+      renderCard(askQuestion, {...(ctx.state.pendingAsk || currentAsk), q: String(q || '')});
       if (note) {
         const el = document.createElement('div');
         el.className = 'chat-ask-retry-note';
@@ -336,6 +337,7 @@
     };
 
     const receive = (data, convId, anchor, verified = false) => {
+      if (data.details !== undefined && !window.__waifuConfirmationContent?.valid(data.details)) return false;
       if (String(convId) !== String(ctx.state.conv)) return false;
       if (!verified && data.task_id && ctx.state.activeRound?.taskId
           && data.task_id !== ctx.state.activeRound.taskId) return false;

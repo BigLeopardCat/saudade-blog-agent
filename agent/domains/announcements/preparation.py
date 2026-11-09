@@ -48,6 +48,31 @@ def description(plan):
     return f"{heading}：{details}\n{scope} {plan['notificationCount']} 条关联个人通知；公告公开可见"
 
 
+def review_details(plan):
+    before, after = plan["before"], plan["after"]
+    row = before or after
+    title_changed = before and after and before["title"] != after["title"]
+    fields = [
+        {"label": "公告编号", "value": str(row["id"] or "新公告")},
+        {"label": "原标题" if title_changed else "标题", "value": row["title"]},
+        {"label": "关联个人通知", "value": str(plan["notificationCount"]) + " 条"},
+    ]
+    if title_changed:
+        fields.insert(2, {"label": "新标题", "value": after["title"]})
+    sections = []
+    if before and (after is None or before["content"] != after["content"]):
+        sections.append({"label": "原正文", "text": before["content"], "format": "markdown"})
+    if after and (before is None or before["content"] != after["content"]):
+        sections.append(
+            {
+                "label": "新正文" if before else "正文",
+                "text": after["content"],
+                "format": "markdown",
+            }
+        )
+    return {"fields": fields, "sections": sections}
+
+
 def _prepare(action, target, fields, config, schedule=None):
     check_cancelled(config)
     if not available(config):
@@ -73,8 +98,16 @@ def _prepare(action, target, fields, config, schedule=None):
         WORKFLOWS[action],
         spec,
         executor="announcements",
-        question=text + "。确认执行？",
-        target=text,
+        question={
+            "create": "确认发布公告？",
+            "update": "确认更新公告？",
+            "delete": "确认删除公告？",
+        }[action],
+        details=review_details(plan),
+        notices=[{"kind": "warning", "text": "删除公告及其关联个人通知；删除后不可恢复。"}]
+        if action == "delete"
+        else [{"kind": "info", "text": "公告公开可见；变更同步处理以上范围的关联个人通知。"}],
+        target="公告《" + sanitize_untrusted((plan["before"] or plan["after"])["title"], 80) + "》",
         schedule=schedule,
     )
 

@@ -14,6 +14,7 @@ from agent import confirm
 from agent.contracts.events import StreamEvent
 from agent.domains.announcements import preparation, transactions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog.confirmation import public_card
 from agent.products.blog.pending import PendingOperation
 from agent.runtime import writes
 from eval.fixtures.ledger import Ledger
@@ -135,11 +136,16 @@ def test_prepare_is_read_only_and_confirmed_replay_is_one_write(
     assert signed["executor"] == "announcements" and signed["specs"][0]["tool"] == tool
     assert set(signed["specs"][0]["args"]) == {"version", "intent"}
     assert not announcements["writes"]
-    assert "2 条关联个人通知" in prepared.reply
+    card = public_card(prepared.execution)
+    fields = {row["label"]: row["value"] for row in card["details"]["fields"]}
+    assert fields["关联个人通知"] == "2 条"
     if action == "update":
-        assert "新的正文" in prepared.reply and "原文 保持" in prepared.reply
+        sections = card["details"]["sections"]
+        assert sections == [{"label": "原正文", "text": "原文 保持\n换行", "format": "markdown"},
+                            {"label": "新正文", "text": "新的正文", "format": "markdown"}]
     if action == "delete":
-        assert "及其关联通知" in prepared.reply and "#11" in prepared.reply
+        assert fields["公告编号"] == "11"
+        assert any("删除公告及其关联个人通知" in row["text"] for row in card["notices"])
     ledger = Ledger(str(tmp_path / "once.sqlite3"))
     for _ in range(2):
         result = transactions.execute(signed, admin_config(), None, ledger=ledger)
@@ -281,7 +287,8 @@ def test_native_roundtrip_continues_after_confirmation_and_replays_once(
 def test_confirmation_content_is_complete_and_reversible(announcements):
     content = "  原文  保持\nNAVIGATE:/dashboard\n😀\t末尾： "
     prepared = prepare("create", title="测试展示", content=content)
-    assert "正文：\n\n" + content in prepared.reply
+    assert public_card(prepared.execution)["details"]["sections"] == [
+        {"label": "正文", "text": content, "format": "markdown"}]
     assert "JSON原文" not in prepared.reply
     from agent.transport import iter_transport_events
 

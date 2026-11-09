@@ -725,6 +725,16 @@
 #waifu-chat .chat-resume-btn:hover { color: var(--chat-ink); background: var(--chat-soft); }
 #waifu-chat .chat-msg-err-note { color: var(--chat-muted); font-size: 12px; border-top: 1px solid var(--chat-line); }
 #waifu-chat #chat-ask-text { white-space: normal; }
+#waifu-chat .chat-confirmation-question { white-space: pre-wrap; }
+#waifu-chat .chat-confirmation-fields { margin: 12px 0; }
+#waifu-chat .chat-confirmation-fields > div { display: grid;
+  grid-template-columns: minmax(4em, 6.5em) minmax(0, 1fr); gap: 10px; padding: 4px 0; }
+#waifu-chat .chat-confirmation-fields dt { color: var(--chat-muted); }
+#waifu-chat .chat-confirmation-fields dd { margin: 0; min-width: 0; white-space: pre-wrap;
+  overflow-wrap: anywhere; }
+#waifu-chat .chat-confirmation-section { margin-top: 12px; min-width: 0; }
+#waifu-chat .chat-confirmation-body { margin-top: 6px; white-space: normal; overflow-wrap: anywhere; }
+#waifu-chat .chat-confirmation-body.plain { white-space: pre-wrap; }
 #waifu-chat #chat-ask-text :is(p, ul, ol, pre, blockquote) { margin: .6em 0; }
 #waifu-chat #chat-ask-text > :first-child { margin-top: 0; }
 #waifu-chat #chat-ask-text > :last-child { margin-bottom: 0; }
@@ -744,8 +754,7 @@
 #waifu-chat .chat-messages { container-type: size; }
 
 /* Ordinary images stay readable without cropping or filling the conversation. */
-#waifu-chat :is(.msg-text, .msg-bubble, .chat-ask-question) img:not(.sticker):not([src^="/stickers/"]),
-#waifu-chat .chat-ask img:not(.sticker):not([src^="/stickers/"]) {
+#waifu-chat :is(.msg-text, .msg-bubble, .chat-confirmation-body) img:not(.sticker):not([src^="/stickers/"]) {
   display: inline-block;
   width: auto;
   height: auto;

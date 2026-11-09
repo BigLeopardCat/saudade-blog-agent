@@ -18,14 +18,9 @@ from tools.result import invalid_args
 Identifier = targets.Identifier
 
 
-def _literal(value):
-    # Gallery text is data inside a confirmation, never active Markdown/HTML.
-    return "".join("\\" + char if char in "\\`*_{}[]<>()#!|" else char for char in value)
-
-
 def _question(request, current):
     ids = current["matchedIds"]
-    names = "、".join(_literal(row["displayName"] or f"图片 #{row['imageId']}")
+    names = "、".join((row["displayName"] or f"图片 #{row['imageId']}")
                      for row in current["preview"])
     selection = f"图库图片（{len(ids)} 张）：" + names
     if current["previewTruncated"]:
@@ -34,7 +29,7 @@ def _question(request, current):
     action = request["action"]
     if action == "move":
         name = current["destination"]["name"] if current["destination"] else "未分类"
-        change = "移动到「" + _literal(name) + f"」（目录 #{request['folderId']}）。"
+        change = "移动到「" + name + f"」（目录 #{request['folderId']}）。"
     elif action == "favorite":
         change = "设为收藏。" if request["isFavorite"] else "取消收藏。"
     elif action == "delete":
@@ -45,9 +40,9 @@ def _question(request, current):
             fields = []
             for key, value in item["changes"].items():
                 if key == "displayName":
-                    fields.append("名称：" + _literal(value))
+                    fields.append("名称：" + value)
                 elif key == "description":
-                    fields.append("描述：" + (_literal(value) if value else "（清空）"))
+                    fields.append("描述：" + (value if value else "（清空）"))
                 elif key == "folderId":
                     fields.append(f"目录编号：{value}")
                 else:

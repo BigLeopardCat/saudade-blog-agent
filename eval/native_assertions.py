@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urljoin
 from zoneinfo import ZoneInfo
 
+from agent.contracts.events import confirmation_text
 from tools.base import SITE_BASE
 from utils.trace_io import load_trace
 
@@ -247,13 +248,13 @@ def _confirmation_preview(pattern, result):
     ]
     if isinstance(pattern, dict):
         # The interactive review renders these fields, not the signed execution arguments.
-        fields = {"q", "image_review", "cover_review", "notices"}
+        fields = {"q", "details", "image_review", "cover_review", "notices"}
         return bool(pattern) and set(pattern) <= fields and any(
             contains(preview, pattern) for preview in previews
         )
     return isinstance(pattern, str) and any(
         re.search(pattern, text)
-        for preview in previews for text in [preview.get("q", ""), *(
+        for preview in previews for text in [confirmation_text(preview), *(
             item["text"] for item in preview.get("notices", [])
             if isinstance(item, dict) and item.get("kind") in {"info", "warning"}
             and isinstance(item.get("text"), str))]
