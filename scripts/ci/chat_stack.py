@@ -505,12 +505,14 @@ http {{
         assert set(status["closed"]) == {"STACK_MAIN", "STACK_DROP"}
         # Exercise the new chain separately; the direct-stream drill above remains unchanged.
         from background_chat import verify as verify_background
+        from background_chat import wait_worker
 
         agent.terminate()
         agent.wait(timeout=10)
         background_env = {**agent_env, "SCHEDULING_ENABLED": "1", "AGENT_MAX_CONCURRENT": "4"}
         worker = child(stack, [sys.executable, "-m", "agent.scheduling.worker"], work,
                        background_env, out / "worker.log")
+        wait_worker(worker, agent_dsn)
         background_agent = child(stack, agent.args, work, background_env,
                                  out / "background-agent.log")
         wait_ready("http://127.0.0.1:18082/ready", background_agent)

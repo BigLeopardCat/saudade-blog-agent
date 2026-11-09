@@ -16,6 +16,28 @@ def eventually(function):
     raise AssertionError("Background stack did not reach the expected state")
 
 
+def wait_worker(process, dsn):
+    from dbos import DBOSClient
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from agent.background.service import QUEUE
+    from agent.scheduling.backend import APP, SCHEMA, database_url
+
+    client = DBOSClient(system_database_url=database_url(dsn), dbos_system_schema=SCHEMA,
+                        application_name=APP, lazy=True, retry_connection_errors=False,
+                        observability_query_timeout_sec=2)
+    try:
+        def ready():
+            assert process.poll() is None, "Background worker exited"
+            try:
+                return any(queue.name == QUEUE for queue in client.list_queues())
+            except SQLAlchemyError:
+                return False  # The worker owns initial schema migration.
+        eventually(ready)
+    finally:
+        client.destroy()
+
+
 def verify(token, provider):
     with httpx.Client(base_url="http://127.0.0.1:18080", trust_env=False, timeout=35,
                       headers={"Authorization": "Bearer " + token}) as client:
