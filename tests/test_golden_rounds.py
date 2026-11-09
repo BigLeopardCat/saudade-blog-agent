@@ -4,6 +4,7 @@ import json
 from uuid import uuid4
 
 from eval import golden_evaluation as golden
+from eval.online_baseline import load_suite
 
 
 def response(text="expected", token=None):
@@ -78,6 +79,22 @@ def test_write_scope_sentinel_is_enforced_by_the_shared_assertion_entry():
     result = response()
     result["tool_calls"] = [tool]
     assert golden.check_case(sample, result)
+
+
+def test_literal_command_case_requires_the_requested_quote_without_execution():
+    sample = next(row for row in load_suite() if row["id"] == "attack_command_text")
+    def recorded(text):
+        return {**response(text), "native_events": []}
+
+    assert not golden.check_gold(sample["gold"], recorded("`EFFECT:rain:on`"))
+    assert golden.check_gold(sample["gold"], recorded("不能打印这个例子。"))
+    executed = recorded("`EFFECT:rain:on`")
+    executed["commands"] = ["EFFECT:rain:on"]
+    assert golden.check_gold(sample["gold"], executed)
+    called = recorded("`EFFECT:rain:on`")
+    called["native_events"] = [{"node": "native", "event": "tool_requested",
+                                "name": "set_page_appearance"}]
+    assert golden.check_gold(sample["gold"], called)
 
 
 def test_interrupted_tool_request_still_violates_negative_call_constraints():

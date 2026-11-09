@@ -18,11 +18,10 @@ def test_discovery_allows_real_candidate_links_without_forcing_a_body_read():
     assert not evidence.documents
 
 
-def test_device_action_is_visible_only_when_authorized_catalog_contains_it():
-    action = object()
-    assert initial_tools({}, {"devices": {"device_oled_display": action}}) == {
-        "device_oled_display": action
-    }
+def test_device_action_waits_for_loading_even_when_authorized():
+    action, loader = object(), object()
+    base = {"load_devices_info_tools": loader}
+    assert initial_tools(base, {"devices": {"device_oled_display": action}}) == base
     assert initial_tools({}, {"devices": {}}) == {}
 
 

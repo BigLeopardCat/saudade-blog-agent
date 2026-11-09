@@ -14,6 +14,7 @@ from langchain_core.messages import (
     messages_from_dict,
 )
 from langchain_core.tools import ToolException
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from agent.domains import device_actions, device_reads
 from agent.principal import SOURCE_ASSERTION, SOURCE_BODY, Principal
@@ -204,3 +205,35 @@ def test_device_receipt_is_preserved_without_repeating_the_write(service):
         ],
         unverified,
     )
+
+
+def test_device_schema_loads_on_demand_before_one_authorized_delivery(service):
+    from agent.products.blog.catalog import initial_tools
+
+    menus = []
+    responses = iter([
+        AIMessage(content="", tool_calls=[{
+            "name": "load_devices_info_tools", "id": "load", "args": {}}]),
+        AIMessage(content="", tool_calls=[{
+            "name": device_actions.NAME, "id": "display", "args": {"text": "hello"}}]),
+        AIMessage(content="指令已下发，尚未收到设备确认。"),
+    ])
+
+    class Model:
+        def bind_tools(self, tools, **kwargs):
+            menus.append([convert_to_openai_tool(item) for item in tools])
+            return self
+
+        def invoke(self, prompt):
+            return next(responses)
+
+    domains = device_domain(config())
+    session = ToolSession(Model(), config(), initial_tools({}, domains), domains,
+                          middleware=(BlogToolMiddleware,))
+    result = session.run([HumanMessage(content="让设备显示hello")])
+    assert [item["function"]["name"] for item in menus[0]] == ["load_devices_info_tools"]
+    assert {item["function"]["name"] for item in menus[1]} == {
+        "load_devices_info_tools", "list_devices", device_actions.NAME}
+    assert menus[1] == menus[2]
+    assert len([request for request in service["requests"] if request.method == "PUT"]) == 1
+    assert result.execution["receipts"][0]["device_status"] == "queued"

@@ -71,5 +71,6 @@ def list_talks(page: Page = 1, limit: Limit = 5,
 
     displayName是自由留名，不是账号。列表正文240字；用item_id读取单条
     最多2000字，截断会显式标记。说说与河灯是独立内容来源。
+    近期概览用第一页并说明已读范围；仅按用户指定的数量或全量范围续读后页。
     """
     return _read("talks", "talk", page, limit, item_id)
