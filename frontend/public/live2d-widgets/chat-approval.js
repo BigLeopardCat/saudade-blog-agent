@@ -84,9 +84,10 @@
       const row = read(ask.convId).records.find(item => item.id === ask.id);
       const id = ask.anchor_id || row?.anchor_id;
       const turn = ask.anchor_turn_id || row?.anchor_turn_id;
-      const item = turn && ctx.state.items.find(item => item.type === 'agent' && item.turn_id === turn);
-      const anchor = [...messages.querySelectorAll('.chat-msg.agent')]
-        .find(node => (id && node.dataset.mid === id) || (item && node.dataset.mid === item.id));
+      const nodes = [...messages.querySelectorAll('.chat-msg.agent')];
+      const candidates = turn ? ctx.state.items.filter(item => item.type === 'agent' && item.turn_id === turn) : [];
+      const anchor = nodes.find(node => id && node.dataset.mid === id)
+        || (candidates.length === 1 && nodes.find(node => node.dataset.mid === candidates[0].id));
       if (anchor) owners.set(ask.id, anchor);
       return anchor || null;
     };

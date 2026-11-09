@@ -694,6 +694,8 @@ try {
   await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   await assertConfirmationContent({browser,origin,output,requests,setMode:mode=>{nextMode=mode;},
+    appendReply:()=>steeringHistory.push({id:801002,role:'assistant',content:'同一轮的后续回复。',
+      time:Date.now(),images:[],turn_id:steeringHistory[0].turn_id}),
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   passed('production boot initializes one stream controller after the engine is ready and restores an interrupted reply');
   await reset();

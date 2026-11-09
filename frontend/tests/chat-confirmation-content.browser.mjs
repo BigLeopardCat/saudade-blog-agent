@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-export async function assertConfirmationContent({browser,origin,output,requests,setMode,resetState}) {
+export async function assertConfirmationContent({browser,origin,output,requests,setMode,resetState,appendReply}) {
   resetState();
   const context=await browser.newContext({viewport:{width:1280,height:900}});
   const page=await context.newPage();
@@ -40,6 +40,20 @@ export async function assertConfirmationContent({browser,origin,output,requests,
     await check(restored);
     assert.equal(await page.locator('#chat-ask.active').count(),0);
     if(output) await restored.screenshot({path:output+'/structured-confirmation-history.png'});
+    appendReply();
+    const changeAnchor=async id=>page.evaluate(id=>{
+      const key=Object.keys(localStorage).find(key=>key.startsWith('saudade-chat-approvals:'));
+      const saved=JSON.parse(localStorage.getItem(key)); saved.records.at(-1).anchor_id=id;
+      localStorage.setItem(key,JSON.stringify(saved));
+    },id);
+    await changeAnchor('d801002');
+    await page.reload();
+    await page.locator('.chat-approval-result').waitFor();
+    assert.equal(await page.locator('.chat-approval-result').evaluate(node=>node.closest('.chat-msg').dataset.mid),'d801002');
+    await changeAnchor('missing-message');
+    await page.reload();
+    await page.waitForFunction(()=>window.__chatTest.ctx.state.items.filter(row=>row.type==='agent').length===2);
+    assert.equal(await page.locator('.chat-approval-result').count(),0);
     setMode('confirmation-malformed');
     await page.locator('#chat-input').fill('检查畸形卡片');
     await page.locator('#chat-send').click();
