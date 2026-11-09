@@ -168,7 +168,9 @@ def diagnose(documents, *, prices=None):
             groups[delta["change"]][field] += value
         incoming, cached = usage.count(event.get("input")), usage.count(event.get("cache_read"))
         known = incoming is not None and cached is not None and cached <= incoming
-        result.append({key: row[key] for key in ("trace", "index", "phase", "flags", "layout_source")} | delta | {
+        metadata = {key: row[key] for key in
+                    ("trace", "index", "phase", "flags", "layout_source")}
+        result.append(metadata | delta | {
             "cross_request_comparable": complete_identity,
             "input": incoming, "cache_read": cached if known else None,
             "uncached_input": incoming - cached if known else None,
