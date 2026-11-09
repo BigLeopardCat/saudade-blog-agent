@@ -282,9 +282,9 @@ class RagIndex:
         candidates = candidate_limit(top_k)
         lex = self._lexical_ranked(query, candidates, article_id=article_id)
         if lex is None:
-            reason = self._last_error or ("refresh_in_progress"
+            unavailable_reason = self._last_error or ("refresh_in_progress"
                 if self._build_lock.locked() else "snapshot_expired")
-            _record("unavailable", reason)
+            _record("unavailable", unavailable_reason)
             return None
         vec, reason, miss = self._vector_ranked(query, candidates, article_id=article_id)
         if not vec:

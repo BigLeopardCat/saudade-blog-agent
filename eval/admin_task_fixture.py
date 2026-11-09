@@ -61,6 +61,15 @@ def backend():
                     | {"frozen": False, "muted": False, "quotaUsed": 0, "quotaLimit": 500}
                     for row in sorted(rows, key=lambda row: row["id"])[(page-1)*size:page*size]]
             return httpx.Response(200, json={"code": 200, "data": rows, "total": total})
+        # This fixture models only the ordinary account's requested demotion.
+        if (request.method == "GET" and path == "/api/protected/account-actions/eligibility"
+                and dict(request.url.params) == {
+                    "accountId": "20", "action": "set_role", "role": "zako"}
+                and state["caller_role"] == "admin"
+                and state["accounts"][20]["role"] in {"user", "zako"}):
+            return httpx.Response(200, json={"code": 200, "data": {
+                "accountId": 20, "action": "set_role", "role": "zako", "allowed": True,
+                "reasonCode": None, "message": "当前操作者可以准备此账号操作"}})
         notice = path.startswith("/api/protected/notice-actions")
         if request.method != "POST" or path not in {
                 "/api/protected/notice-actions", "/api/protected/notice-actions/prepare",
