@@ -354,7 +354,16 @@ def _compaction_failures(gold, events):
 
 def _answer_failures(gold, result, calls):
     failures = []
+    invalid_json = False
+    if any(row.get("format") == "json" for row in gold.get("require_answer_value", [])):
+        try:
+            json.loads(result.get("text", ""))
+        except (ValueError, TypeError):
+            invalid_json = True
+            failures.append("回答不是要求的可直接解析JSON；不能据此判断字段值是否匹配")
     for wanted in gold.get("require_answer_value", []):
+        if invalid_json and wanted.get("format") == "json":
+            continue
         if not _answer_value(wanted, result, calls):
             failures.append(f"回答值不来自本轮实际读取结果：{wanted}")
     for wanted in gold.get("require_answer_list", []):

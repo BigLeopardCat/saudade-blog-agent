@@ -143,7 +143,7 @@ def get_article_detail(
 ) -> str | ToolResult:
     """Read public documents: body, outline or metadata; not discovery.
     Use metadata directly for author, existing description or display fields; no search/body
-    needed. Missing fields remain unknown.
+    needed. Missing fields remain unknown. source describes body ranges, not a URL; link by ID.
     For specific body facts, locate with rag_search(article_id=...) then copy
     section/revision/section_schema/offset/max_chars. For whole-document summaries,
     omit section and follow nextOffset. Outline lists headings; follow nextSectionsOffset.

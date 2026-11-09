@@ -290,3 +290,23 @@ def test_fenced_json_example_does_not_become_a_live_source_or_body_read():
     assert "/article/23" in output[len(literal) :]
     assert "/article/99" not in output[len(literal) :]
     assert evidence.snapshot() == before and 99 not in evidence.documents
+
+
+@pytest.mark.parametrize("suffix", ["", "\n额外说明"])
+def test_json_format_failure_is_not_mislabeled_as_four_fabricated_values(suffix):
+    values = {"authorName": None, "description": "摘要", "authorNameTruncated": False,
+              "descriptionTruncated": False}
+    gold = {"require_answer_value": [
+        {"tools": ["get_article_detail"], "path": [key], "format": "json",
+         "answer_path": [key]} for key in values]}
+    result = {"text": "```json\n" + json.dumps(values) + "\n```" + suffix,
+              "native_events": [{"node": "native", "event": "call",
+                                 "name": "get_article_detail", "kind": "ok", "args": {},
+                                 "result": json.dumps(values)}]}
+    failures = native_assertions.check(gold, result)
+    assert len(failures) == 1 and "JSON" in failures[0]
+    assert "回答值不来自" not in failures[0]
+    assert native_assertions.check(gold, {**result, "text": json.dumps(values)}) == []
+    mismatched = native_assertions.check(
+        gold, {**result, "text": json.dumps({**values, "description": "错误摘要"})})
+    assert len(mismatched) == 1 and "回答值不来自" in mismatched[0]

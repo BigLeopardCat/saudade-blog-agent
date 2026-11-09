@@ -29,7 +29,7 @@ DOMAIN_DESCRIPTIONS = {
     "utilities": "Read the current time.",
     "task_planning": "Agent内部执行清单，不是用户待办或提醒。仅用于复杂任务（3步以上）"
     "或用户明确要求的执行计划。",
-    "devices": "List accessible devices and control authorized OLED displays.",
+    "devices": "User-authorized OLED screens: list screens and change display content.",
     "public_catalog": "Public article lists, per-article counters, pinned articles, categories "
     "and hierarchical tags.",
     "conversation_images": "Inspect a referenced conversation image.",

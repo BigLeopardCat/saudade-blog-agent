@@ -341,3 +341,28 @@ def test_actual_blog_http_and_checkpoint_preserve_markdown_without_repair(
     replies = [message.content for message in stored.messages if isinstance(message, AIMessage)]
     assert replies == [text]
     assert model.invocations == 1
+
+
+@pytest.mark.parametrize("content", ["喵 >_<", "小于号是 <", "<"])
+@pytest.mark.parametrize("width", [1, 3, 1000])
+def test_final_lone_angle_is_delivered_without_an_extra_model_call(content, width):
+    class ProseModel(Model):
+        invocations = 0
+
+        def stream(self, *args, **kwargs):
+            self.invocations += 1
+            for index in range(0, len(content), width):
+                yield AIMessageChunk(content=content[index:index + width])
+
+    model = ProseModel()
+    session = ToolSession(model, {}, {}, {})
+    chunks = []
+    runner = session.stream([HumanMessage(content="按要求答复")])
+    with pytest.raises(StopIteration) as stopped:
+        while True:
+            item = next(runner)
+            assert not isinstance(item, ReplyReset)
+            chunks.append(item.content)
+    assert stopped.value.value.reply == content == "".join(chunks)
+    assert model.invocations == 1 and session.calls_used == 0
+    assert not has_control_text(content)
