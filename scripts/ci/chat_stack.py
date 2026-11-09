@@ -37,6 +37,7 @@ class Provider(ThreadingHTTPServer):
     def __init__(self):
         super().__init__(("127.0.0.1", 0), ProviderHandler)
         self.lock = threading.Lock()
+        self.background_release = threading.Event()
         self.entered, self.closed, self.calls = [], [], []
 
     def status(self):
@@ -67,11 +68,19 @@ class ProviderHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         history = json.dumps(body["messages"], ensure_ascii=False)
         marker = next(
-            (tag for tag in ("STACK_PROBE", "STACK_DROP", "STACK_MAIN") if tag in history), None
+            (tag for tag in ("STACK_BG_A", "STACK_BG_B", "STACK_BG_STOP",
+                             "STACK_PROBE", "STACK_DROP", "STACK_MAIN") if tag in history), None
         )
         assert marker, "Unexpected provider traffic; fixture must not answer unrelated requests"
         with self.server.lock:
             self.server.calls.append(marker)
+        if marker in {"STACK_BG_A", "STACK_BG_B"}:
+            with self.server.lock:
+                self.server.entered.append(marker)
+            if marker == "STACK_BG_A":
+                assert self.server.background_release.wait(30), "Background run was never released"
+            self.reply(body, {"content": marker + "_FINAL"})
+            return
         names = {row["function"]["name"] for row in body.get("tools", [])}
         completed_read = any(
             row.get("role") == "tool" and row.get("tool_call_id") == "clock"
@@ -494,10 +503,24 @@ http {{
         assert sum(event.get("event") == "jobs_drained" for event in events) >= 4
         status = provider.status()
         assert set(status["closed"]) == {"STACK_MAIN", "STACK_DROP"}
+        # Exercise the new chain separately; the direct-stream drill above remains unchanged.
+        from background_chat import verify as verify_background
+
+        agent.terminate()
+        agent.wait(timeout=10)
+        background_env = {**agent_env, "SCHEDULING_ENABLED": "1", "AGENT_MAX_CONCURRENT": "4"}
+        worker = child(stack, [sys.executable, "-m", "agent.scheduling.worker"], work,
+                       background_env, out / "worker.log")
+        background_agent = child(stack, agent.args, work, background_env,
+                                 out / "background-agent.log")
+        wait_ready("http://127.0.0.1:18082/ready", background_agent)
+        assert worker.poll() is None, "Background worker exited"
+        background = verify_background(token, provider)
         (out / "summary.json").write_text(
             json.dumps(
                 {
                     "browser": result,
+                    "background": background,
                     "provider": status,
                     "completed_read_calls": len(reads),
                     "persisted_main_terminal": True,
