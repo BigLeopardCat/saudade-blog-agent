@@ -176,7 +176,7 @@ def test_runtime_article_confirmation_and_replay_are_native(articles, monkeypatc
         monkeypatch,
         tmp_path,
         admin_config(),
-        "admin_catalog",
+        "admin_article_management",
         "prepare_article_state",
         {"article_id": 11, "status": "public"},
     )

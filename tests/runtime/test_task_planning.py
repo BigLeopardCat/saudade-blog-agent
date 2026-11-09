@@ -56,7 +56,8 @@ def test_standard_todo_state_survives_approval_reconstruction_and_resets_for_new
     assert not state["writes"]
     from agent.runtime.task_planning import SYSTEM_PROMPT
     assert SYSTEM_PROMPT in str(first_model.review_prompts)
-    assert first_model.review_prompts[0][0] == first_model.prompts[0][0]
+    assert SYSTEM_PROMPT not in str(first_model.prompts[0])
+    assert first_model.review_prompts[0][0] == first_model.prompts[1][0]
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     next_model = Model(AIMessage(content="", tool_calls=[call("inspect_plan", "inspect")]),
                        AIMessage(content="", tool_calls=[call("write_todos", "done", todos=[{
