@@ -14,7 +14,7 @@ from tools import base
 
 
 def test_metadata_discovery_reads_once_without_preparing_a_mutation(monkeypatch):
-    prompts, requests = [], []
+    prompts, requests, menus = [], [], []
     description = "完整描述" * 400
 
     def handle(request):
@@ -35,7 +35,8 @@ def test_metadata_discovery_reads_once_without_preparing_a_mutation(monkeypatch)
                 AIMessage(content="已读取完整描述。"),
             ])
 
-        def bind_tools(self, *args, **kwargs):
+        def bind_tools(self, schemas, **kwargs):
+            menus.append({item["function"]["name"] for item in schemas})
             return self
 
         def invoke(self, messages):
@@ -43,12 +44,19 @@ def test_metadata_discovery_reads_once_without_preparing_a_mutation(monkeypatch)
             return next(self.messages)
 
     cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
-    domain = ToolCatalog().domains(cfg, True)["admin_gallery"]
+    domains = ToolCatalog().domains(cfg, True)
+    domain = domains["admin_gallery"]
+    management = domains["admin_gallery_management"]
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
-        result = ToolSession(Model(), cfg, {}, {"admin_gallery": domain},
+        result = ToolSession(Model(), cfg, {}, {"admin_gallery": domain,
+            "admin_gallery_management": management},
             middleware=(BlogToolMiddleware,)).run([HumanMessage(content="读图片11的完整描述。")])
     assert result.reply == "已读取完整描述。" and len(requests) == 1
+    assert {"prepare_article_cover", "prepare_gallery_images"} <= management.keys()
+    assert all(not menu.intersection(management) for menu in menus)
+    assert domain.keys() <= menus[-1]
+    assert "load_admin_gallery_management_info_tools" in menus[-1]
     read = next(message for message in prompts[-1]
         if isinstance(message, ToolMessage) and message.name == "get_gallery_image_metadata")
     assert json.loads(read.content)["description"] == description

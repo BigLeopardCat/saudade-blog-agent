@@ -25,9 +25,9 @@ from agent.products.blog.read_tools import scoped_reads_enabled
 
 _PREPARATIONS = (
     ("admin_account_actions", accounts),
-    ("admin_gallery", gallery_preparation),
-    ("admin_gallery", gallery_folders),
-    ("admin_gallery", gallery_transfers),
+    ("admin_gallery_management", gallery_preparation),
+    ("admin_gallery_management", gallery_folders),
+    ("admin_gallery_management", gallery_transfers),
     ("admin_talks", talks),
     ("admin_catalog", article_deletions),
     ("admin_image_generation", image_generation),

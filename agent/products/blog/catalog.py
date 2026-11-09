@@ -10,9 +10,11 @@ DOMAIN_DESCRIPTIONS = {
     "then approve gallery storage.",
     "admin_talks": "Publish, edit or permanently delete administrator posts; "
     "not guestbook moderation.",
-    "admin_gallery": "Gallery images/folders and inspection; atomic single/bulk metadata, "
-    "move/favorite/delete and folder management. Prepare article covers directly from "
-    "article/image IDs; preparation verifies both targets and provides layout previews.",
+    "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
+    "and transfer status. No mutation preparation.",
+    "admin_gallery_management": "Prepare single/bulk gallery edits, moves/copies, favorites, "
+    "deletion, folders and article covers. Known article/image IDs go directly to preparation; "
+    "it verifies targets and provides cover layout previews. Discover unknown IDs in admin_gallery.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only analysis and approved "
