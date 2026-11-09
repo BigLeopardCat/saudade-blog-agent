@@ -13,7 +13,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
     "and transfer status. No mutation preparation.",
     "admin_gallery_management": "Prepare gallery edits, transfers, favorites, deletion "
-    "and folders. Known IDs go directly to preparation; article covers use admin_article_management.",
+    "and folders. Known IDs go directly to preparation; "
+    "article covers use admin_article_management.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only reports and approved "
@@ -31,8 +32,8 @@ DOMAIN_DESCRIPTIONS = {
     "own_activity": "Read your guestbook entries/status or this conversation's original messages.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
-    "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; cover preparation "
-    "includes layout previews.",
+    "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "
+    "cover preparation includes layout previews.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
