@@ -96,7 +96,8 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
 
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
     返回本次查询范围和候选元数据；未命中仅表示本次公开文章关键词查询没有匹配，
-    不证明其他主题、其他查询或非公开文章不存在。解读正文需用 get_article_detail。
+    不证明其他主题、其他查询或非公开文章不存在。searchedFields是查询覆盖字段，
+    不是每条结果的命中位置；正文重点需用 get_article_detail 核实。
     """
     if not keyword.strip():
         return invalid_args("搜索关键词不能为空；浏览公开文章请使用文章目录。")
@@ -107,7 +108,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     if slim is None:
         return unavailable("文章搜索未返回可核对的结果，本次不能判断是否有匹配。")
     value = {"resource": "articles", "scope": "public_articles_keyword_matches",
-             "query": keyword, "matchFields": ["title", "body", "tags"],
+             "query": keyword, "searchedFields": ["title", "body", "tags"],
              "items": slim, "returnedCount": len(slim)}
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return ok(text, data=value) if slim else empty(text, data=value)

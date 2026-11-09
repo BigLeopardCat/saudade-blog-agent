@@ -26,7 +26,7 @@ def test_empty_matches_preserve_the_actual_query_and_public_scope(monkeypatch):
     assert result.kind == "empty"
     assert json.loads(str(result)) == result.data == {
         "resource": "articles", "scope": "public_articles_keyword_matches",
-        "query": "巧克力蛋糕", "matchFields": ["title", "body", "tags"],
+        "query": "巧克力蛋糕", "searchedFields": ["title", "body", "tags"],
         "items": [], "returnedCount": 0}
 
 
