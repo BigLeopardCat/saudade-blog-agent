@@ -158,10 +158,7 @@ class Settings(BaseSettings):
     # Public host API used by tools and retrieval.
     blog_api_base: str = "http://127.0.0.1:3000/api/public"
 
-    # Corpus source for rebuilding the graph; it does not define the public site origin.
-    graph_api_base: str = "http://127.0.0.1:3000/api/public"
-
-    # Optional vector retrieval and graph embeddings share this configuration.
+    # Optional vector retrieval configuration.
     # Changing embedding space requires rebuilding stored vectors.
     rag_hybrid_enabled: bool = False       # RAG_HYBRID_ENABLED=1/true/yes/on
     embedding_api_key: str = ""            # EMBEDDING_API_KEY

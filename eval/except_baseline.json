@@ -5,7 +5,7 @@
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 29,
+  "total": 26,
   "by_file": {
     "agent/checkpoint.py": 1,
     "agent/confirm.py": 5,

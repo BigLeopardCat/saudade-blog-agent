@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 118,
+  "total": 100,
   "by_file": {
     "agent/hostinfo.py": 1,
     "eval/admin_write_probe.py": 29,
