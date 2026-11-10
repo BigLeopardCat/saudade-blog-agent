@@ -121,6 +121,8 @@ def describe(job):
 def prepare_gallery_transfer(intent: Intent, config: RunnableConfig) -> object:
     """Prepare one approval to move/copy 1-100 gallery images to a folder/storage.
     Use fixed imageIds from the user or gallery index and folderId (0=unclassified).
+    Known IDs and destination go directly here: preparation verifies source images/storage,
+    destination and versions. No prior image-metadata or folder lookup is needed.
     storage is local or r2; omit to retain each source provider. copy creates independent
     records/files; move preserves identity and updates published image references before
     source cleanup. For a folder-only move use prepare_gallery_images. Transfers run
