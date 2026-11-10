@@ -77,6 +77,25 @@ def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp
     assert (folder / "semantic_judge.py").read_bytes() == Path(semantic_judge.__file__).read_bytes()
 
 
+def test_calibration_validates_reply_only_samples_without_optional_cards():
+    from eval import judge_calibration
+
+    sample = {"id": "reply_only", "expected_issue": True,
+              "material": {"turns": [{"user_request": "只复述原文", "tool_observations": [],
+                                       "assistant_reply_to_review": "原文 :比耶:"}]}}
+    model = Model({"unsupported": [":比耶:"], "answered": False,
+                   "verdict": "suspect", "reason": "添加了原文以外的内容"})
+    result = judge_calibration.evaluate([sample], model)
+    assert result["measured"] == result["tp"] == 1
+    assert json.loads(model.messages[0][1]["content"]) == sample["material"]
+
+    model = Model({"unsupported": ["不存在的确认卡"], "answered": True,
+                   "verdict": "suspect", "reason": "引文不在当前输出中"})
+    invalid = judge_calibration.evaluate([sample], model)
+    assert invalid["unverified"] == 1 and invalid["measured"] == 0
+    assert "excerpts" in invalid["rows"][0]["error"]
+
+
 def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
     preview = "账号已经降级。\n确认发送？"
     canary = secrets.token_urlsafe(24)
