@@ -141,15 +141,15 @@ def get_article_detail(
     section_schema: Annotated[str, Field(max_length=128)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
-    """Read public documents: body, outline or metadata; not discovery.
-    Use metadata directly for author, existing description or display fields; no search/body
-    needed. Missing fields remain unknown. source describes body ranges, not a URL; link by ID.
-    For specific body facts, locate with rag_search(article_id=...) then copy
-    section/revision/section_schema/offset/max_chars. For whole-document summaries,
-    omit section and follow nextOffset. Outline lists headings; follow nextSectionsOffset.
-    Continuations require contentRevision and sectionSchema. A section end is not document
-    completion; conclusions cover only read text. Images stay Markdown.
-    Private/draft body uses administrator read_current_article; counters use get_article_stats.
+    """Read public body, outline or metadata; not discovery.
+    Author/description/display fields: metadata only; missing values stay unknown.
+    Body facts: prefer rag_search(article_id=...) unless matching version-bound sections
+    are known. Copy section/revision/section_schema/offset/max_chars; do not locate twice.
+    Whole summaries: omit section, follow nextOffset; outlines use nextSectionsOffset.
+    Section reads/continuations require contentRevision and sectionSchema. Section end
+    is not document end; conclusions cover read text only. Images remain Markdown.
+    source is a body range, not URL; link by ID. Private/draft body: read_current_article;
+    counters: get_article_stats.
     """
     from urllib.parse import urlencode
 

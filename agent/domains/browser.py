@@ -91,13 +91,12 @@ def _sent(command, receipts):
 def navigate_page(
     path: Path, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId]
 ) -> object:
-    """Change the current page when the user requests navigation, including opening
-    a chosen recommendation. Listing pages, explaining where something is, and
-    recommending articles are read-only tasks. Answer those from the available
-    paths or get_site_map without changing the page. Resolve article and category
-    paths from source links. No confirmation card. With browser feedback, waits
-    for completion or timeout in the same durable task. Status sent means queued;
-    only completed proves arrival.
+    """Navigate only when requested, including opening a selected recommendation.
+    Page listings, location help and recommendations are read-only tasks; use known
+    paths/get_site_map; do not navigate. Resolve article/category paths from source links.
+    No approval card.
+    Browser feedback waits for completion/timeout in this durable task.
+    sent means queued; only completed proves arrival.
     """
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
@@ -156,11 +155,10 @@ def set_page_appearance(
     rain: Mode | None = None,
     snow: Mode | None = None,
 ) -> object:
-    """Set the user's page theme or effects when requested. Pass on/off only for
-    requested settings; omit the rest. A switch such as rain to snow sets rain=off,
-    snow=on together. Commands set absolute states, so repeats do not toggle them.
-    With browser feedback, waits for observed settings before reporting completion.
-    Status sent means queued only; only completed proves application.
+    """Set requested theme/effects to on/off; omit other settings.
+    Switching rain to snow sets rain=off and snow=on. States are absolute; repeats
+    do not toggle. Browser feedback waits for observed settings.
+    sent means queued; only completed proves application.
     """
     effects = {
         name: mode
