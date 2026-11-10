@@ -83,7 +83,6 @@ _WATCHED_MODULES = (
     "agent.api.turns",
     "agent.authz",
     "agent.checkpoint",
-    "agent.hostinfo",
     "config.settings",
     "rag.search",
     "rag.vector_index",

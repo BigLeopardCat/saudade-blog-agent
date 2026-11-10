@@ -94,7 +94,7 @@ python -m eval.task_metrics --dir /path/to/traces --out /tmp/tasks.json
 日报默认统计全部服务流量，包含线上评测；`source=production` 表示服务通道，不等于真人流量。
 `daily_metrics` 和 `task_metrics` 可重复传入 `--evaluation-report`，按 canonical 报告中的精确请求 ID、构建及捕获摘要生成已知评测与排除视图。顶层总量和总成本保留，未标注流量不推断为真人；原始 trace 和报告不改写。运行服务的健康统计只展示含评测的全部请求范围，不读取私有评测报告。
 
-`TRACE_DIR` 是默认根，CLI 显式目录优先；`BLOG_ROOT` 仅供宿主日志诊断。无宿主日志或用量缺失时标记不可用，不补零。
+`TRACE_DIR` 是默认根，CLI 显式目录优先；宿主日志对账通过 `--log-dir`、`--monitor-dir` 显式指定目录。无宿主日志或用量缺失时标记不可用，不补零。
 
 ## 比较与发布
 

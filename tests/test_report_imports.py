@@ -21,12 +21,11 @@ if name == "agent.reports":
     assert module.sanitize_untrusted(" a\\nb ") == "a b"
 elif name == "agent.products.blog.prompt":
     assert callable(module.build_prompt)
-from agent.hostinfo import SERVICES
-print(json.dumps({"services": SERVICES, "tools_loaded": "tools" in sys.modules}))
+print(json.dumps({"tools_loaded": "tools" in sys.modules}))
 '''
 
 
-@pytest.mark.parametrize("name", ["agent.hostinfo", "agent.reports", "agent.products.blog.prompt"])
+@pytest.mark.parametrize("name", ["agent.reports", "agent.products.blog.prompt"])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_fresh_imports_keep_iot_configuration_without_registering_tools_for_diagnostics(
         tmp_path, name, enabled):
@@ -39,7 +38,5 @@ def test_fresh_imports_keep_iot_configuration_without_registering_tools_for_diag
     )
     assert result.returncode == 0, result.stderr
     value = json.loads(result.stdout)
-    assert value["services"] == ["saudade-rust", "saudade-agent"] + (
-        ["saudade-device"] if enabled else [])
-    if name in {"agent.hostinfo", "agent.reports"}:
+    if name == "agent.reports":
         assert value["tools_loaded"] is False

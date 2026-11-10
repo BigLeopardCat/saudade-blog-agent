@@ -8,9 +8,6 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import TypedDict
-
-from agent import hostinfo as H
 
 # Bound report text supplied to the model.
 MAX_REPORT_CHARS = 2400
@@ -43,123 +40,6 @@ def _cap(text: str) -> str:
 def _ts(now: datetime | None = None) -> str:
     return (now or datetime.now()).strftime("%Y-%m-%d %H:%M")
 
-
-
-class ServerStatusKw(TypedDict):
-    """Shared keyword arguments for the server-status renderer and tool result."""
-    cpu_pct: float | None
-    cores: int
-    load: tuple[float, float, float] | None
-    mem: dict
-    disks: list[dict]
-    uptime_s: float | None
-
-
-class ServiceHealthKw(TypedDict):
-    """Shared keyword arguments for the service-health renderer and tool result."""
-    services: list[tuple[str, dict]]
-    health: dict
-    traces: dict
-    sizes: list[dict]
-
-
-def render_server_status(*, cpu_pct: float | None, cores: int,
-                         load: tuple[float, float, float] | None,
-                         mem: dict, disks: list[dict],
-                         uptime_s: float | None,
-                         now: datetime | None = None) -> str:
-    lines = [f"服务器状态（{_ts(now)}）"]
-    if cpu_pct is None:
-        lines.append("- CPU：本次采样读不到（/proc/stat 不可读）")
-    else:
-        lines.append(f"- CPU：{cores} 核，使用率 {cpu_pct}%（0.25 秒采样）")
-    if load is None:
-        lines.append("- 负载：读不到")
-    else:
-        # 参考线按核数折算：loadavg 的"1.0"是单核满载，4 核机器上 4.0 才满载
-        lines.append(f"- 负载：1 分钟 {load[0]:.2f}／5 分钟 {load[1]:.2f}／15 分钟 {load[2]:.2f}"
-                     f"（{cores} 核，满载参考线 {cores}.0）")
-    if not mem or not mem.get("total_kb"):
-        lines.append("- 内存：读不到（/proc/meminfo 不可读）")
-    else:
-        lines.append(
-            f"- 内存：总 {H.format_kb(mem['total_kb'])}，已用 {H.format_kb(mem['used_kb'])}"
-            f"（{mem['pct']}%），可用 {H.format_kb(mem['avail_kb'])}")
-        if mem.get("swap_total_kb"):
-            lines.append(f"- Swap：总 {H.format_kb(mem['swap_total_kb'])}，"
-                         f"已用 {H.format_kb(mem['swap_used_kb'])}（{mem['swap_pct']}%）")
-        else:
-            lines.append("- Swap：未启用")
-    if not disks:
-        lines.append("- 磁盘：读不到")
-    for d in disks:
-        lines.append(f"- 磁盘 {d['path']}：总 {H.format_bytes(d['total'])}，"
-                     f"已用 {H.format_bytes(d['used'])}（{d['pct']}%），"
-                     f"可用 {H.format_bytes(d['free'])}")
-    lines.append(f"- 开机时长：{H.format_uptime(uptime_s)}")
-    return _cap("\n".join(lines))
-
-
-
-def render_service_health(*, services: list[tuple[str, dict]], health: dict,
-                          traces: dict, sizes: list[dict],
-                          now: datetime | None = None) -> str:
-    lines = [f"服务健康（{_ts(now)}）"]
-    for unit, info in services:
-        if not info:
-            # systemctl 查询失败/单元不存在——这是"读不到"，不是"服务挂了"，措辞要分清
-            lines.append(f"- {unit}：读不到状态（systemctl 查询失败或单元不存在）")
-            continue
-        state = f"{info.get('ActiveState', '?')}/{info.get('SubState', '?')}"
-        extra = f"，重启 {info.get('NRestarts', 0)} 次"
-        started = _format_started(info.get("ExecMainStartTimestamp", ""))
-        if started:
-            extra += f"，启动于 {started}"
-        lines.append(f"- {unit}：{state}{extra}")
-
-    w = health or {}
-    if not w:
-        lines.append("- 心跳探针：读不到（logs/health.log 不可读）")
-    else:
-        span = ""
-        if w.get("first") and w.get("last"):
-            span = (f"（{w['first'].strftime('%m-%d %H:%M')} ~ "
-                    f"{w['last'].strftime('%m-%d %H:%M')}）")
-        verdict = "无异常" if not (w.get("warn") or w.get("fail")) else "有异常"
-        lines.append(f"- 心跳探针（近 24 小时）：{verdict}——WARN {w.get('warn', 0)} 条、"
-                     f"FAIL {w.get('fail', 0)} 条{span}")
-        for line in (w.get("recent") or []):
-            lines.append(f"  · {_short_health_line(line)}")
-
-    t = traces or {}
-    if t.get("readable"):
-        lines.append(f"- 今日服务请求（含评测）：{t.get('rounds', 0)} 轮；"
-                     f"异常收尾 {t.get('abnormal', 0)} 轮；"
-                     f"质检拦截 {t.get('fallback', 0)} 轮；"
-                     f"shadow 权限拒绝 {t.get('denied', 0)} 次")
-    else:
-        lines.append("- 今日服务请求（含评测）：读不到（trace 目录不可读）")
-
-    if sizes:
-        total = sum(s["size"] for s in sizes)
-        top = "、".join(f"{s['path']} {H.format_bytes(s['size'])}" for s in sizes[:3])
-        lines.append(f"- 存活日志：合计 {H.format_bytes(total)}；最大三份 {top}")
-    return _cap("\n".join(lines))
-
-
-def _format_started(raw: str) -> str:
-    """systemd 的 `Sun 2026-09-20 22:00:41 CST` → `09-20 22:00`（认不出就原样）。"""
-    if not raw:
-        return ""
-    m = re.search(r"\d{4}-(\d{2}-(\d{2})) (\d{2}:\d{2})", raw)
-    return f"{m.group(1)} {m.group(3)}" if m else raw
-
-
-def _short_health_line(line: str) -> str:
-    """`2026-09-21 00:45:01 WARN 正文` → `09-21 00:45 WARN 正文`（截 80 字）。"""
-    if len(line) >= 19 and line[4] == "-" and line[13] == ":":
-        return (line[5:16] + " " + line[20:]).strip()[:80]
-    return line[:80]
 
 
 # Moderation status: approved is the final state; ai_result is the recorded AI verdict.

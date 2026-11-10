@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 67,
+  "total": 66,
   "by_file": {
     "eval/corpus_terms.py": 6,
     "eval/golden_fixture.py": 1,
@@ -19,7 +19,6 @@
     "eval/wordlist_gate.py": 6,
     "tests/test_action_text.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_corpus_terms.py": 1,
     "tests/test_golden_family_policy.py": 3,
     "tests/test_golden_fixture.py": 4,
     "tests/test_judge_offline.py": 25,
