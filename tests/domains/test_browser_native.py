@@ -119,8 +119,9 @@ def test_site_guide_separates_features_from_caller_navigation(
     cfg = _config(principal=Principal(7, role, SOURCE_ASSERTION if verified else "body"),
                   user_id=uid)
     result = site.get_site_map.invoke({}, config=cfg)
-    data = json.loads(result.text)
-    assert result.kind == "ok" and data == result.data and not result.meta
+    data = result.data
+    assert result.kind == "ok" and not result.meta
+    assert "**文章标签仅作展示，没有标签筛选功能。**" in result.text
     assert data["coverage"] == "documented_features" and data["exhaustive"] is False
     assert data["grantsAuthorization"] is False
     assert data["articleTags"] == {"display": True, "filterPage": False}
@@ -131,6 +132,8 @@ def test_site_guide_separates_features_from_caller_navigation(
     assert pages["/dashboard"]["navigationAvailable"] is can_manage
     assert "/friends" not in pages and "/he" not in pages
     for path, page in pages.items():
+        navigation = "是" if page["navigationAvailable"] else "否"
+        assert f"{path} | {page['description']} | {navigation}" in result.text
         if "<" not in path:
             assert page["navigationAvailable"] == (path in browser.accessible_paths(cfg))
 
@@ -152,7 +155,8 @@ def test_site_guide_metadata_reaches_the_same_framework_tool_exchange(monkeypatc
                                     _config()))
     observed = next(message for message in model.calls[-1]
                     if isinstance(message, ToolMessage) and message.name == "get_site_map")
-    data = json.loads(observed.content)
+    data = observed.artifact["data"]
+    assert "**文章标签仅作展示，没有标签筛选功能。**" in observed.content
     assert data["exhaustive"] is False
     assert data["articleTags"] == {"display": True, "filterPage": False}
     assert next(row for row in data["pages"] if row["path"] == "/dashboard")[
