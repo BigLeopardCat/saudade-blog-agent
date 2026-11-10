@@ -117,7 +117,7 @@ def prepare_tag_update(
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备改标签名字、颜色、父级或层级确认，不写入。编号必须同时给当前level(1/2)。
-    或用完整原名，同名二级可用current_parent_id区分。仅填要改的字段，颜色空串清空。
+    或用完整原名，同名二级可用current_parent_id区分。仅填要改的字段，颜色空串清空；移动默认保留原颜色，不继承父级。
     parent_id/parent_name指定一级父标签；to_level=1升为一级。带子标签的一级标签不能降级。
     跨层移动保留文章引用，实际编号可能变化；同层改父级保留编号。
     允许同名标签；名字不唯一时用层级和编号定位，不能以名字推断唯一性。

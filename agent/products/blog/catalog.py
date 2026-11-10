@@ -25,7 +25,7 @@ DOMAIN_DESCRIPTIONS = {
     "announcements. Other scheduled writes use their domain's prepare tool. "
     "Relative delays start after approval.",
     "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
-    "entries. Public display names are not account identities.",
+    "entries. Talks are admin-published; display names are not account identities.",
     "utilities": "Read the current time.",
     "task_planning": "Agent内部执行清单，不是用户待办或提醒。仅用于复杂任务（3步以上）"
     "或用户明确要求的执行计划。",
@@ -41,7 +41,8 @@ DOMAIN_DESCRIPTIONS = {
     "missing tags on approval; covers include layout previews.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
-    "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
+    "admin_tags": "Tag dictionary and confirmed edits/deletion. "
+    "Creation needs a name; color is optional. "
     "Article-tag assignment: admin_article_management.",
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",

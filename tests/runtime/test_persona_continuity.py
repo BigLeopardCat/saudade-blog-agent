@@ -97,7 +97,7 @@ def test_chat_only_identity_keeps_the_same_fact_policy_as_tool_enabled_users():
 
     messages = [build_prompt([], Principal(7, role, SOURCE_ASSERTION))[0].content
                 for role in ('user', 'admin', 'zako')]
-    policies = [text.split('事实与叙述：', 1)[1].split('\n执行与交付：', 1)[0]
+    policies = [text.split('事实与叙述：', 1)[1].split('\n输出格式：', 1)[0]
                 for text in messages]
     assert len(set(policies)) == 1
     assert '没有读取不声称查过' in policies[0]
