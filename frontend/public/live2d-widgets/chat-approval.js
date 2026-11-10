@@ -349,7 +349,9 @@
       const ttl = Number.isFinite(data.server_time) ? (data.exp - data.server_time) * 1000 : null;
       const deadline = ttl === null ? undefined : performance.now() + Math.max(0, ttl);
       const previous = currentAsk?.id === data.id ? currentAsk.expiresAt : undefined;
-      currentAsk = { ...data, convId, anchor_id: row?.anchor_id, anchor_turn_id: row?.anchor_turn_id,
+      currentAsk = { ...data, convId, anchor_id: row?.anchor_id,
+        anchor_turn_id: row?.anchor_turn_id || (ctx.state.activeRound?.taskId === data.task_id
+          ? ctx.state.activeRound.turnId : data.task_id),
         selected: currentAsk?.id === data.id ? currentAsk.selected : row?.selected,
         expiresAt: Number.isFinite(previous) && Number.isFinite(deadline)
           ? Math.min(previous, deadline) : deadline };

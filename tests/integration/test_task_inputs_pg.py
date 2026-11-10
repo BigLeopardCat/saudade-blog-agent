@@ -281,19 +281,22 @@ def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monke
     assert child.returncode == 73, child.stderr
     store = CheckpointConversationStore(PostgresSaver(pool))
     saved = store.load(config())
-    assert saved.unfinished and saved.run["id"] == "crash-task"
+    expected_task = "crash-task" if phase == "commit" else "feedback-request"
+    assert saved.unfinished and saved.run["id"] == expected_task
     model = Model(AIMessage(content="只撤销本操作，没有断言当前收藏状态。"))
     rebuilt = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
     with favorite_backend() as state:
         monkeypatch.setattr(confirm.settings, "confirmation_secret", secret)
         if phase == "feedback":
-            assert marker.read_text() == "revoked"
-            old = confirm.verify(saved.pending_confirm["token"], 7, 42)
+            assert saved.pending_confirm is None
+            old = confirm.verify(marker.read_text(), 7, 42)
             domain = rebuilt.application.confirmation(old)
             name, args = domain.validate(old, config())
             row = writes.ledger_for(store.saver).lookup(writes.operation_key(old, name, args))
             assert row is not None and "confirmation_revoked" in str(row)
-        result = list(rebuilt.stream_events({"resume_task": "crash-task"}, config()))[-1]
+            replay = list(rebuilt.stream_events({"confirm_grant": old}, config()))[-1]
+            assert not replay.execution["receipts"]
+        result = list(rebuilt.stream_events({"resume_task": expected_task}, config()))[-1]
         assert not [request for request in state["requests"] if request.method != "GET"]
     final = CheckpointConversationStore(PostgresSaver(pool)).load(config())
     assert not final.unfinished and final.run is None
