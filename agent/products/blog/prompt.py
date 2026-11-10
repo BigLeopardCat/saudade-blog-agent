@@ -67,6 +67,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     context = conversation_context(principal)
     # The model receives a display identity; Principal retains the authorization code.
     role = context["caller"].pop("role")
+    context["caller"].pop("verified")
     context["caller"]["role_label"] = role_cn(role) if role is not None else None
     context["caller"]["conversation_style"] = conversation_style(principal)
     guidance = tool_guidance(principal) or _BOUNDARY
@@ -81,7 +82,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "role_label": context["caller"]["role_label"],
-                     "authentication_status": context["caller"]["authentication_status"],
+                     "authenticated": context["caller"]["authenticated"],
                      "tool_loading": context["tools"]["loading"],
                      "administration_requires": context["tools"]["administration_requires"],
                      "can_access_admin_console": context["caller"]["can_access_admin_console"],
