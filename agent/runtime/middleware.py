@@ -23,6 +23,7 @@ from agent.runtime.control import AgentCancelled, model_options
 from agent.runtime.execution_state import adopt_command, capture, restore
 from agent.runtime.memory_media import hydrate, stage
 from agent.runtime.message_content import text_content
+from agent.runtime.output_budget import base_limit
 from agent.runtime.progress import emit
 from agent.runtime.prompt_budget import fit_history
 from agent.runtime.results import TurnResult, approval_observations, pause_notice
@@ -227,9 +228,10 @@ class SessionMiddleware(AgentMiddleware):
         session.framework_state = {**request.state, "messages": list(request.messages)}
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
+        output_limit = base_limit(session, request)
         # Emergency capacity selection is a model view, not destructive checkpoint editing.
         prompt = fit_history(prompt, session.principal, session.menu,
-            session.budget.limits, session.output_limit, tool_access=session.history_access,
+            session.budget.limits, output_limit, tool_access=session.history_access,
             budget=session.budget, anchor=request.state.get("context_anchor"),
             model_key=request.model)
         session.system_message = request.system_message
@@ -245,9 +247,16 @@ class SessionMiddleware(AgentMiddleware):
             "configurable", {}).get("system_event_id")) or any(
             row.get("background_work") for row in session.receipts)
         tool_choice = ("none" if reviewing or background else "auto") if menu else None
+        options = {**request.model_settings, **model_options(settings.llm_timeout)}
+        if session.output_budget is not None:
+            output_limit, selection = session.output_budget.select(
+                session, request, prompt, concise=reviewing or background)
+            key = "max_completion_tokens" if "max_completion_tokens" in options else "max_tokens"
+            options[key] = output_limit
+            record("native", "output_budget", round=session._round_index, **selection)
         try:
             with native_call(session.budget, prompt, menu, model_key=request.model,
-                             output_limit=session.output_limit) as ticket:
+                             output_limit=output_limit) as ticket:
                 invoked = True
                 record("native", "llm_start", round=session._round_index, engine="langchain",
                        prompt_chars=sum(len(text_content(message.content)) for message in prompt),
@@ -257,7 +266,7 @@ class SessionMiddleware(AgentMiddleware):
                 result = handler(request.override(
                     model=model, messages=messages, tools=menu,
                     tool_choice=tool_choice,
-                    model_settings=model_options(settings.llm_timeout)))
+                    model_settings=options))
                 response = result.result[-1]
                 session.budget.settle(ticket, response)
                 return (replace(result, result=[*extra_inputs, *result.result])

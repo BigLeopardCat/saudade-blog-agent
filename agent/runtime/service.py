@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessageChunk, SystemMessage
 from openai import OpenAIError
 
 from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
+from agent.runtime.output_budget import OutputBudget
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
@@ -212,10 +213,14 @@ class AgentRuntime:
             enable_thinking=effort != "none", streaming=True, stream_usage=True,
             max_tokens=settings.agent_output_tokens, **options
         )
+        output_budget = (OutputBudget(settings.agent_extended_output_tokens,
+                                     settings.agent_output_material_threshold)
+                         if self.model_factory is None else None)
         session = ToolSession(model, config, tools, domains, store=self.store,
                            descriptions=self.application.descriptions,
                            middleware=self.application.middleware,
-                           history_access=self.application.history_access)
+                           history_access=self.application.history_access,
+                           output_budget=output_budget)
         from agent.runtime.conversation_store import bound_tool_domains
 
         session.state["tool_domains"] = bound_tool_domains(snapshot.tool_domains, config)

@@ -34,9 +34,11 @@ from utils.trace import record
 
 class ToolSession:
     def __init__(self, model, config, tools, domains, *,
-                 store=None, descriptions=None, middleware=(), history_access=None):
+                 store=None, descriptions=None, middleware=(), history_access=None,
+                 output_budget=None):
         self.budget = current_budget() or TaskBudget()
         self.output_limit = getattr(model, "max_tokens", None) or settings.agent_output_tokens
+        self.output_budget = output_budget
         self.model = model
         self.config = config
         self.principal = ((config or {}).get("configurable") or {}).get("principal")
