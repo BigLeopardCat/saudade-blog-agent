@@ -37,7 +37,7 @@ def preview(job, url):
     return url
 
 
-def approve_card(job, config, *, result=False):
+def approve_card(job, config, *, result=False, storage="local"):
     principal, cid = bound_context(config)
     request = job.request
     if result:
@@ -57,6 +57,9 @@ def approve_card(job, config, *, result=False):
         {"label": "服务地址", "value": request.provider},
         {"label": "固定参考图", "value": f"{len(request.references)} 张"},
     ]}
+    if result:
+        details["fields"].append({"label": "保存位置",
+                                  "value": "本地存储" if storage == "local" else "R2"})
     review = {"job_id": job.id, "version": version, "prompt": request.prompt,
               "references": [{"name": ref.name, "url": preview(job, ref.previewUrl),
                               "image_id": ref.imageId} for ref in request.references]}
@@ -69,7 +72,8 @@ def approve_card(job, config, *, result=False):
              "has_preview": job.previewUrl is not None, "image_removed": job.imageRemoved}
     observed("image_generation", facts, tuple(facts))
     card = proposal(principal, cid, workflow,
-        {"tool": name, "args": {"job_id": job.id, "version": version}},
+        {"tool": name, "args": {"job_id": job.id, "version": version,
+                                **({"storage": storage} if result else {})}},
         executor="image_generation", question=question,
         target="生成图片入库" if result else "调用图片生成 API",
         payload={"image_review": review}, preparation_facts=facts,
@@ -123,6 +127,7 @@ def prepare_image_generation(
             "size": size,
             "quality": quality,
             "referenceIds": refs,
+            "conversationId": bound_context(config)[1],
         },
         config,
     )
@@ -146,11 +151,11 @@ def prepare_image_generation(
 
 @tool
 def get_image_generation(job_id: JobID, config: RunnableConfig,
-                         wait_seconds: Annotated[StrictInt, Field(ge=0, le=240)] = 240) -> object:
+                         wait_seconds: Annotated[StrictInt, Field(ge=0, le=240)] = 0) -> object:
     """Observe ONE existing image job; never generates or approves an image.
-    After paid-start or saving approval, wait once (up to 240 seconds, bounded by this
-    request's remaining deadline with 15 seconds reserved for the final response)
-    for verified host status, without repeated model polls.
+    Read status immediately by default. Generation and saving run in the background;
+    the open chat receives a completion event and reports it in a separate turn.
+    Only wait when the user explicitly asks to wait for this existing job.
     review: call prepare_generated_image_acceptance to SHOW the actual result and ask
     whether to keep it. review + error means saving failed, not generation failed; the
     result remains available for another explicit acceptance. saving is NOT gallery
@@ -178,9 +183,11 @@ def get_image_generation(job_id: JobID, config: RunnableConfig,
 
 
 @tool(return_direct=True)
-def prepare_generated_image_acceptance(job_id: JobID, config: RunnableConfig) -> object:
+def prepare_generated_image_acceptance(job_id: JobID, config: RunnableConfig,
+                                       storage: Literal["local", "r2"] = "local") -> object:
     """Show actual generated pixels and original prompt/references for human acceptance.
     Approval saves the result in the gallery only. It never sets/publishes a cover.
+    Save locally by default; choose R2 only when the user explicitly requests it.
     Do not invent an image_id before acceptance; read the accepted job's imageId after.
     """
     if not available(config):
@@ -191,7 +198,7 @@ def prepare_generated_image_acceptance(job_id: JobID, config: RunnableConfig) ->
     if value.status != "review":
         return base.unavailable("图片尚无待审阅结果，请先查看生图任务状态。")
     try:
-        return approve_card(value, config, result=True)
+        return approve_card(value, config, result=True, storage=storage)
     except (KeyError, TypeError, ValueError):
         return base.unavailable("结果预览不可用，本次没有将图片加入图库。")
 

@@ -43,8 +43,19 @@ class Body(httpx.SyncByteStream):
         self.closed = True
 
 
+def assert_operations_once(calls, streams, interrupted, ledger, cfg, *grants):
+    assert all(body.closed for body in streams)
+    assert sum(path.endswith("/approve") for _, path in calls) == 1
+    assert sum(path.endswith("/accept") for _, path in calls) == 1
+    assert sum(path.endswith("/events") for _, path in calls) == 2 + int(interrupted)
+    before = len(calls)
+    for grant in grants:
+        assert transactions.execute(grant, cfg, None, ledger=ledger)["receipts"]
+    assert len(calls) == before
+
+
 @pytest.mark.parametrize("interrupted", [False, True])
-def test_sdk_two_approvals_wait_once_each_and_never_send_preview_tokens_to_model(
+def test_sdk_explicit_waits_resume_without_replaying_paid_calls_or_preview_credentials(
         monkeypatch, tmp_path, interrupted):
     cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
     calls, model_requests, streams = [], [], []
@@ -130,28 +141,30 @@ def test_sdk_two_approvals_wait_once_each_and_never_send_preview_tokens_to_model
                      "task_id": "image-followthrough"})
         assert not any(path.endswith("/approve") for _, path in calls)
         first_grant = confirm.verify(first.execution["pending_confirm"]["token"], 7, 42)
+        started = run({"confirm_grant": first_grant})
+        assert job["status"] == "generating" and not started.execution.get("pending_confirm")
+        assert not streams
+        waiting = {"messages": [HumanMessage(content="请等待图片完成并给我看。")],
+                   "task_id": "image-explicit-wait"}
         if interrupted:
             with pytest.raises(AgentCancelled):
-                run({"confirm_grant": first_grant})
+                run(waiting)
             assert streams[0].closed
             stopped.clear()
-            second = run({"resume_task": "image-followthrough"})
+            second = run({"resume_task": "image-explicit-wait"})
         else:
-            second = run({"confirm_grant": first_grant})
+            second = run(waiting)
         card = second.execution["pending_confirm"]
         assert card["image_review"]["result_url"].endswith("token=private")
         assert job["status"] == "review" and not any(path.endswith("/accept") for _, path in calls)
         second_grant = confirm.verify(card["token"], 7, 42)
-        final = run({"confirm_grant": second_grant})
+        saving = run({"confirm_grant": second_grant})
+        assert job["status"] == "saving" and not saving.execution.get("pending_confirm")
+        final = run({"messages": [HumanMessage(content="请等保存完成后告诉我。")],
+                     "task_id": "image-explicit-save-wait"})
         assert final.reply == "图片已保留到图库，编号31。"
-        assert job["status"] == "accepted" and all(body.closed for body in streams)
-        assert sum(path.endswith("/approve") for _, path in calls) == 1
-        assert sum(path.endswith("/accept") for _, path in calls) == 1
-        assert sum(path.endswith("/events") for _, path in calls) == 2 + int(interrupted)
-        before = len(calls)
-        assert transactions.execute(first_grant, cfg, None, ledger=ledger)["receipts"]
-        assert transactions.execute(second_grant, cfg, None, ledger=ledger)["receipts"]
-        assert len(calls) == before
+        assert job["status"] == "accepted"
+        assert_operations_once(calls, streams, interrupted, ledger, cfg, first_grant, second_grant)
     wire = json.dumps(model_requests, ensure_ascii=False)
     assert "token=private" not in wire and "result_url" not in wire
     assert "正在写入图库，尚未核实入库完成" in wire

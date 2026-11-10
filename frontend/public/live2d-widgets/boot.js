@@ -128,6 +128,7 @@
     ['chat-protocol', '__waifuChatProtocol'],
     ['chat-browser-actions', '__waifuBrowserActions'],
     ['chat-steering', '__waifuSteering'],
+    ['chat-image-jobs', '__waifuImageJobs'],
     ['chat-approval', '__waifuApproval'],
     ['chat-stream', '__waifuStream'],
     ['chat-tasks', '__waifuTaskUI'],

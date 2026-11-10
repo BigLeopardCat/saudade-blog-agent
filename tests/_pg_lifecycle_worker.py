@@ -14,7 +14,7 @@ from test_confirmation_continuation import FAVORITE, LOAD, Model
 
 from agent import confirm
 from agent.products.blog.application import BlogApplication
-from agent.runtime import approval, turn_commit
+from agent.runtime import turn_commit
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from eval.own_fixtures import favorite_backend
@@ -45,15 +45,15 @@ def main():
                 turn_commit.commit = crash
             else:
                 list(selected.stream_events(inputs, config()))
-                original = approval.review
+                old_token = selected.store.load(config()).pending_confirm["token"]
+                original = selected.store.replace_pending
 
-                def fail_after_revocation(state, config, **kwargs):
-                    result = original(state, config, **kwargs)
-                    Path(marker).write_text("revoked")
-                    crash()
-                    return result
+                def record_revocation(*args, **kwargs):
+                    original(*args, **kwargs)
+                    Path(marker).write_text(old_token)
 
-                approval.review = fail_after_revocation
+                selected.store.replace_pending = record_revocation
+                model.stream = crash
                 inputs = {"messages": [HumanMessage(content="先不收藏，解释一下。")],
                           "task_id": "feedback-request"}
             list(selected.stream_events(inputs, config()))

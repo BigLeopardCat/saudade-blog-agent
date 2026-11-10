@@ -38,6 +38,9 @@ class Job(BaseModel):
     previewUrl: StrictStr | None = Field(default=None, max_length=4096)
     imageId: StrictInt | None = Field(default=None, gt=0)
     error: StrictStr | None = Field(default=None, max_length=1000)
+    conversationId: StrictInt | None = Field(default=None, gt=0)
+    eventVersion: StrictStr = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
+    saveStorage: Literal["local", "r2"] = "local"
 
     def visible(self, *, wait_outcome="observed"):
         return {"id": self.id, "status": self.status, "imageId": self.imageId,

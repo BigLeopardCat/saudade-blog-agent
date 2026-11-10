@@ -9,6 +9,7 @@ import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
 import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
 import { assertConfirmationContent } from './chat-confirmation-content.browser.mjs';
+import { assertImageJobReports } from './chat-image-jobs.browser.mjs';
 
 const frontend = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 const output = process.env.CHAT_UI_PREVIEW_DIR || '/tmp/chat-ui-preview';
@@ -690,6 +691,8 @@ try {
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
   await assertImageReview({page,origin,output});
+  await assertImageJobReports({browser,origin});
+  passed('image jobs release chat, catch up on reopen and keep completion approval coordinates');
   await assertCoverReview({page});
   await assertWorkRecovery({browser,origin,setMode:mode=>{nextMode=mode;},
     resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});

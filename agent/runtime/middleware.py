@@ -121,6 +121,13 @@ class SessionMiddleware(AgentMiddleware):
         self._recover(state)
         check_cancelled(session.config)
         restore(session, state)
+        if session.event_seed and not any(
+                message.id == session.event_seed.id for message in state["messages"]):
+            self.calls, self.cached = session.event_seed.tool_calls, {}
+            self.exchange = [*state["messages"], session.event_seed]
+            self.attachments = []
+            session.budget.attempt_tools(len(self.calls))
+            return {**capture(session), "messages": [session.event_seed], "jump_to": "tools"}
         emit(session.config, "正在处理请求…", key="model_start")
         replacement = replace_unpublished_proposal(session, state)
         if replacement:
@@ -236,7 +243,10 @@ class SessionMiddleware(AgentMiddleware):
         trace_context.tools(menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
         error = None
-        tool_choice = ("none" if reviewing else "auto") if menu else None
+        background = bool(session.event_seed or session.config.get(
+            "configurable", {}).get("system_event_id")) or any(
+            row.get("background_work") for row in session.receipts)
+        tool_choice = ("none" if reviewing or background else "auto") if menu else None
         try:
             with native_call(session.budget, prompt, menu, model_key=request.model,
                              output_limit=session.output_limit) as ticket:

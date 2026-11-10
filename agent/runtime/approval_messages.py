@@ -11,6 +11,23 @@ from agent.runtime.turns import check_cancelled
 from tools.result import ok
 
 
+def supersede(previous, incoming, grant, principal):
+    from agent.runtime import approval, memory
+
+    messages, name = [], "approval_feedback"
+    for message in previous:
+        if isinstance(message, ToolMessage) and (message.artifact or {}).get("kind") == "prepared":
+            name = message.name or name
+            message = message.model_copy(update={"content": json.dumps({
+                "status": "not_executed", "reason": "superseded_by_user_feedback"}),
+                "artifact": None})
+        messages.append(message)
+    observed = observation({"name": name, "args": {}, "id": "feedback_" + grant["jti"]},
+        ok(json.dumps(approval.superseded_fact(), ensure_ascii=False)))
+    current = memory.turn_messages(incoming, observed, "", principal)[:-1]
+    return memory.checkpoint_messages([], [*messages, *current])
+
+
 class ApprovalResumeMiddleware(AgentMiddleware):
     """Consume approval results before the context-capacity boundary."""
 

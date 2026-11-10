@@ -16,8 +16,12 @@ def prepare(session, state):
     if messages is None:
         # An admission failure can precede the first framework model node.
         messages = add_messages(state.get("messages") or [], accepted)
+    committed = transcript.finish(messages, result.reply, session.principal, accepted)
+    event_id = session.config.get("configurable", {}).get("system_event_id")
+    if event_id and committed:
+        committed[-1] = committed[-1].model_copy(update={"id": "result:" + event_id})
     return {"reply": result.reply, "execution": result.execution,
-            "messages": transcript.finish(messages, result.reply, session.principal, accepted),
+            "messages": committed,
             "tool_domains": session.state.get("tool_domains")}
 
 

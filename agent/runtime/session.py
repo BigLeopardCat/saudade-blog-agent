@@ -72,6 +72,7 @@ class ToolSession:
         self.reply_parts = []
         self.committed_result = None
         self.turn_input = []
+        self.event_seed = None
         self.refresh_menu()
 
     @property

@@ -4,6 +4,7 @@ from typing import Literal
 
 from pydantic import (
     BaseModel,
+    ConfigDict,
     Field,
     ValidationError,
     ValidatorFunctionWrapHandler,
@@ -50,8 +51,15 @@ class BrowserResult(BaseModel):
     error: str | None = Field(default=None, max_length=500)
 
 
+class ImageEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    job_id: str = Field(pattern=r"^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
+    version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
+    image_event: ImageEvent | None = None
     current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     user_id: int = 0
@@ -78,6 +86,11 @@ class ChatRequest(BaseModel):
 
     @model_validator(mode="after")
     def continuation_is_control_only(self):
+        if self.image_event is not None and (
+            not self.conversation_id or self.message.strip() or self.image
+            or self.confirm_token or self.confirm_pick or self.resume_task or self.browser_result
+        ):
+            raise ValueError("图片完成事件不能同时提交消息或操作")
         if self.resume_task and (
             self.conversation_id is None or self.conversation_id <= 0
             or self.task_id or self.message.strip() or self.image

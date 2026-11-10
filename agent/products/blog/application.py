@@ -30,6 +30,11 @@ class BlogApplication:
     expired = staticmethod(expired)
     history_access = staticmethod(tool_access)
 
+    def system_event(self, event, snapshot, config):
+        from agent.products.blog.image_events import prepare
+
+        return prepare(event, snapshot, config)
+
     def __init__(self, catalog=None, *, scheduling=None):
         self.catalog = catalog if catalog is not None else ToolCatalog()
         self.scheduling = scheduling

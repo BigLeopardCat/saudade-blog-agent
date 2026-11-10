@@ -337,7 +337,7 @@
         const silent = !!opts.silent;
         const msg = silent ? (opts.message || '') : input.value.trim();
         const imgs = silent ? [] : (ctx.state.pendingImages || []);
-        if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken) || ctx.state.isSending
+        if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken && !opts.imageEvent) || ctx.state.isSending
             || ctx.state.steeringSubmitting || Object.keys(ctx.state.remoteRounds || {}).length) {
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('此刻有轮次在跑');
           return;
@@ -401,7 +401,7 @@
         // 本轮 roundId：跨窗同步锚点（远端按它定位 live 气泡；本窗与远端轮次
         // roundId 不同 → 双窗并发互不覆盖）。用户条目 id 独立生成（'l' 前缀），
         // discard 广播按它双侧删除（Rust 侧已按用户消息删除 DB 记录）。
-        const roundId = __chatCore.genId();
+        const roundId = opts.imageEvent ? await g.__waifuImageJobs.turnId(opts.imageEvent) : __chatCore.genId();
         // 隐藏确认请求（silent）没有用户气泡：userItemId 为 null，下游所有按它
         // 删条目/广播 discard 的分支都必须先判空（见失败轮的删除路径）
         const userItemId = silent ? null : __chatCore.genId();
@@ -414,7 +414,8 @@
               .filter(id => Number.isSafeInteger(id) && id > 0))],
           },
           taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
-          turnId: silent ? (opts.resumeTurn || lastUserTurn()) : roundId,
+          turnId: opts.imageEvent ? roundId : silent
+            ? (opts.resumeTurn || opts.confirmAsk?.anchor_turn_id || lastUserTurn()) : roundId,
           resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
           resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
             .find(x => x.type === 'user') || {}).text : '') };
@@ -576,10 +577,11 @@
               task_inputs: !!steering && (!silent || !!opts.resumeTask),
               message: msg,
               turn_id: roundState.turnId,
-              ...(!silent ? { task_id: roundId } : {}),
+              ...(!silent || opts.imageEvent ? { task_id: roundId } : {}),
               browser_feedback: !!browserActions,
               ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
               ...(opts.browserResult ? { browser_result: opts.browserResult } : {}),
+              ...(opts.imageEvent ? { image_event: opts.imageEvent } : {}),
               ...(roundConvId !== null ? { conversation_id: roundConvId } : {}),
               ...(imgs.length ? { image: imgs } : {}), // 多模态：dataURL 数组（每张 ≤1MB，最多 6 张）
               current_url: window.location.href,
@@ -594,6 +596,8 @@
             signal: ctrl.signal,
           });
           if (!ownsRound()) throw staleRound();
+          if (opts.imageEvent && resp.status === 204) { completed = true; return true; }
+          if (opts.imageEvent && resp.status === 409) return false;
           if (!resp.ok) {
             if (resp.status >= 500) void ctx.ui.checkService?.();
             // 网关/代理超时可能返回 HTML 错误页（如 504），先读文本再解析
@@ -831,6 +835,10 @@
           execAgentCommands(programCmds, contentSpan);
         } catch(e) {
           if (e?.staleRound || !ownsRound()) return false;
+          if (opts.imageEvent && !displayText) {
+            typingEl?.remove(); div?.remove(); delete ctx.state.live[roundId];
+            return false;
+          }
           if (e && e.skipFailedPersist) {
             if (typingTimer) clearTimeout(typingTimer);
             if (typingEl) typingEl.remove();
@@ -982,6 +990,7 @@
       };
 
       ctx.ui.isResumingTask = () => resumingTask;
+      g.__waifuImageJobs?.init(ctx, sendMessage);
       ctx.ui.currentPausedTask = pausedTask;
       ctx.ui.continueTask = () => resumeStoppedTask(pausedTask());
       ctx.ui.resumeManagedTask = async row => {

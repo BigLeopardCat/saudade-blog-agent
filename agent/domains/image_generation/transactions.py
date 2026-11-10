@@ -1,6 +1,7 @@
 """Short approval operations start durable host jobs; paid calls run outside the chat turn."""
 
 import time
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictStr
 from typing_extensions import Annotated
@@ -22,6 +23,7 @@ class Arguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
     job_id: Annotated[StrictStr, Field(pattern=r"^[0-9a-f-]{36}$")]
     version: Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
+    storage: Literal["local", "r2"] | None = None
 
 
 def handles(grant):
@@ -49,7 +51,10 @@ def validate(grant, config):
         or not authz.check(principal, name).allowed
     ):
         raise ValueError("Image operation not authorized")
-    return name, Arguments.model_validate(specs[0].get("args")).model_dump()
+    args = Arguments.model_validate(specs[0].get("args")).model_dump(exclude_none=True)
+    if name == "start_image_generation" and "storage" in args:
+        raise ValueError("Generation approval cannot choose storage")
+    return name, args
 
 
 def verified(name, args, result):
@@ -68,6 +73,7 @@ def verified(name, args, result):
         }
     return (
         result.get("outputHash") == args["version"]
+        and result.get("saveStorage", "local") == args.get("storage", "local")
         and (result.get("status") == "saving" or (result.get("status") == "accepted"
              and type(result.get("imageId")) is int and result["imageId"] > 0))
     )
@@ -80,7 +86,9 @@ class Operation:
     def invoke(self, args, config=None):
         action = "approve" if self.name == "start_image_generation" else "accept"
         value = base._admin_request(
-            "POST", f"{PATH}/jobs/{args['job_id']}/{action}", {"version": args["version"]}, config
+            "POST", f"{PATH}/jobs/{args['job_id']}/{action}",
+            {"version": args["version"], **({"storage": args.get("storage", "local")}
+                                           if action == "accept" else {})}, config
         )
         if isinstance(value, base.ToolResult):
             return value
@@ -95,20 +103,21 @@ class Operation:
             text = f"生成结果已存入图库，图片编号 {job.imageId}。"
         elif job.status == "saving":
             text = (f"任务 {job.id} 已批准保存，正在写入图库，尚未核实入库完成。"
-                    "请用 get_image_generation 等待核实 accepted。")
+                    "任务在后台执行，结束本轮回复；完成后由独立事件补报结果。")
         elif job.status == "review":
             text = (f"任务 {job.id} 已生成图片，尚未保留。"
                     "请展示实际结果，并询问用户是否保留到图库。")
         else:
             text = (f"任务 {job.id} 已开始生图，尚未生成结果，也尚未入库。"
-                    "请用 get_image_generation 一次等待核实，再展示结果询问是否保留。")
+                    "任务在后台执行，结束本轮回复；完成后会展示结果并询问是否保留。")
         return base.ok(
             text,
             meta={
                 "image_job": {
-                    key: value.get(key)
+                    **{key: value.get(key)
                     for key in ("id", "status", "requestHash", "outputHash",
-                                "imageId", "imageRemoved")
+                                "imageId", "imageRemoved")},
+                    "saveStorage": job.saveStorage,
                 },
                 "approved_args": args,
             },
@@ -133,6 +142,7 @@ def receipt(grant, name, args, result):
         "action": str(result),
         "ts": time.time(),
         "job_id": args["job_id"],
+        "background_work": {"kind": "image_generation", "job_id": args["job_id"]},
     }
 
 

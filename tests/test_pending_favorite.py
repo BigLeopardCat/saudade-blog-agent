@@ -180,14 +180,7 @@ def test_storage_failure_emits_no_cancellation_and_old_card_still_cannot_write(
     if fault == "ledger":
         monkeypatch.setattr(ledger, "finish", failed)
     else:
-        from agent.runtime import approval
-        review = approval.review
-
-        def checkpoint_failed(state, config, **kwargs):
-            review(state, config, **kwargs)
-            raise RuntimeError("storage unavailable")
-
-        monkeypatch.setattr(approval, "review", checkpoint_failed)
+        monkeypatch.setattr(runtime.store._state, "update_state", failed)
     runtime.model_factory = lambda **_: Model("cancel_pending_operation")
     stream = runtime.stream_events({"messages": [HumanMessage(content="取消待办")]}, config())
     with pytest.raises(RuntimeError, match="storage unavailable"):

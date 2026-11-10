@@ -60,6 +60,14 @@ def is_user_input(message):
             and message.additional_kwargs.get("lc_source") != "summarization")
 
 
+def is_event_input(message):
+    event = message.additional_kwargs.get("runtime_event")
+    return (isinstance(message, AIMessage) and isinstance(event, dict)
+            and isinstance(event.get("id"), str)
+            and message.id == "event:" + event["id"]
+            and isinstance(message.additional_kwargs.get("memory_actor"), dict))
+
+
 def summary_message(messages, principal=None):
     for message in reversed(messages):
         if not is_context(message):
@@ -114,7 +122,7 @@ def _turns(messages):
     for message in messages:
         if is_context(message):
             continue
-        if (isinstance(message, HumanMessage)
+        if (is_event_input(message) or isinstance(message, HumanMessage)
                 and not message.additional_kwargs.get("runtime_feedback")):
             turns.append([message])
         elif turns and isinstance(message, (HumanMessage, AIMessage, ToolMessage)):

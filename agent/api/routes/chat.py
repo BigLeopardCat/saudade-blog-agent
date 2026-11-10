@@ -177,7 +177,7 @@ async def chat(req: ChatRequest, request: Request):
         logger.info("[quota] 额度用尽，本轮零执行（uid=%s limit=%s）", req.user_id, _limit)
         return ChatResponse(reply=_quota_blocked_text(_limit), success=True, error=None)
 
-    messages = ([] if grant is not None or req.resume_task else
+    messages = ([] if grant is not None or req.resume_task or req.image_event else
                 build_messages(req, holds_context=runtime_probe.holds_context(runtime)))
     thread_id = checkpoint.thread_id_for(
         req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
@@ -207,7 +207,8 @@ async def chat(req: ChatRequest, request: Request):
             run_turn, task_id=req.task_id, turn_id=req.turn_id, resume_task=req.resume_task,
             confirm_grant=grant, browser_feedback=req.browser_feedback,
             browser_result=req.browser_result.model_dump() if req.browser_result else None,
-            task_inputs=req.task_inputs)
+            task_inputs=req.task_inputs,
+            image_event=req.image_event.model_dump() if req.image_event else None)
         result = await jobs.submit(
             workers.executor,
             turn,
@@ -259,7 +260,7 @@ async def chat_stream(req: ChatRequest, request: Request):
     )):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
-        messages = ([] if grant is not None or req.resume_task else
+        messages = ([] if grant is not None or req.resume_task or req.image_event else
                     build_messages(req, holds_context=runtime_probe.holds_context(runtime)))
         thread_id = checkpoint.thread_id_for(
             req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)
@@ -288,10 +289,13 @@ async def chat_stream(req: ChatRequest, request: Request):
         producer = (functools.partial(stream_to_queue, task_id=req.task_id, turn_id=req.turn_id,
                                       resume_task=req.resume_task,
                                       task_inputs=req.task_inputs,
+                                      image_event=(req.image_event.model_dump()
+                                                   if req.image_event else None),
                                       browser_feedback=req.browser_feedback,
                                       browser_result=(req.browser_result.model_dump()
                                                       if req.browser_result else None))
-                    if req.task_id or req.resume_task or req.browser_feedback or req.task_inputs
+                    if (req.task_id or req.resume_task or req.browser_feedback
+                        or req.task_inputs or req.image_event)
                     else stream_to_queue)
         producer_job = jobs.submit(
             workers.executor,

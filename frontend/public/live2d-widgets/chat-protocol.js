@@ -60,4 +60,17 @@ const createStream = (onEvent) => {
   };
 };
 
-globalThis.__waifuChatProtocol = { createStream, decode };
+const createImageStream = onEvent => createParser({
+  maxBufferSize: 256 * 1024,
+  onEvent({event, data}) {
+    if (event !== 'image_job') return;
+    const job = JSON.parse(data);
+    if (!object(job) || !/^[0-9a-f-]{36}$/.test(job.id)
+        || !/^[0-9a-f]{64}$/.test(job.eventVersion)
+        || !['generating', 'saving', 'review', 'accepted', 'failed', 'unknown',
+          'rejected', 'expired', 'pending'].includes(job.status)) throw new Error('Invalid image job');
+    onEvent({id: job.id, status: job.status, eventVersion: job.eventVersion});
+  },
+});
+
+globalThis.__waifuChatProtocol = { createStream, decode, createImageStream };
