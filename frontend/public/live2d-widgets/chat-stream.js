@@ -24,8 +24,7 @@
         note.textContent = errMsg;
         span.appendChild(note);
       } catch (e2) {
-        // 渲染失败也不能把"这轮失败了"这件事一起吞掉：退回最小可用形态（整段替成错误文案）。
-        // catch 里再抛会越过 finally 变成未处理拒绝，UI 复位了却什么都不显示。
+        // 渲染异常时保留可见的失败状态，避免再次抛错。
         try { applyMsg(span, errMsg); } catch (e3) { /* ignore */ }
       }
     };
@@ -145,8 +144,7 @@
         const isCurrent = () => turnId && ctx.state.conv === originConv && lastUserTurn() === turnId;
         const wrap = document.createElement('div');
         wrap.className = 'chat-msg-retry';
-        // 这组按钮属于哪一条消息（`attachHistoryFailedRetry` 靠它做"同一轮只能有一处
-        // 按钮"的去重；没有这个标记就只能按位置猜，而位置正是会分家的东西）
+        // 用稳定消息标识去重操作按钮。
         wrap.dataset.retryText = msg;
         wrap.dataset.turnId = turnId || '';
         const retryBtn = document.createElement('button');
@@ -276,9 +274,7 @@
           ? victim.contentSpan.textContent : '';
         if (!silent) broadcast({t: 'error', msg: '已停止生成', roundId});
         if (victim && partial.trim()) {
-          // 半截回复**转正**（与空闲超时同形）：错误注记按 renderFailed 的约定只进
-          // DOM，items/缓存里存的仍旧是模型说过的那段话；转正之后 reconcile 不会
-          // 把它当孤儿摘掉，重发/编辑按钮也就跟着活下来
+          // 已收到的正文进入历史；失败提示只保留在界面。
           renderFailed(victim.contentSpan, '已停止生成', partial);
           const partialItem = __chatCore.migrateItem({
             id: roundId, type: 'agent', text: partial, time: Date.now(),
@@ -290,8 +286,7 @@
           saveHistory();
           if (!silent || active.resumeTask) attachRetryActions(victim.contentSpan, victim.el, original, active.turnId);
         } else if (victim && victim.el && victim.el.parentNode) {
-          // 一个 token 都还没收到：气泡里没有可留的东西，摘掉它——提示条与重发/编辑
-          // 由失败轮那一套（持久化标记 + chat-engine 的渲染）在下一次 reconcile 补上
+          // 空回复由失败轮状态重建，不保留空气泡。
           victim.el.parentNode.removeChild(victim.el);
         }
         // silent 轮没有用户条目，也不给重发/编辑（隐藏确认请求重发会变成一次真发言）
@@ -350,8 +345,7 @@
         if (!silent) clearStoppedMarker();
 
         if (!(await engine.ensureConversation())) {
-          // 同上：silent 轮在这里也必须把失败交回卡片（气泡留着——它是给所有人看的
-          // 事实；卡片那句"没发出去，可以再点一次"是给点按钮的人看的下文）
+          // 隐藏确认未发出时交回原卡片重试。
           if (silent && typeof opts.onDropped === 'function') opts.onDropped('新会话没建成');
           const it = __chatCore.migrateItem({ type: 'agent', text: '创建新会话失败，请稍后重试', time: Date.now() });
           ctx.state.items.push(it);
@@ -365,9 +359,7 @@
           return;
         }
         const roundConvId = ctx.state.conv; // 本轮会话锚点：请求体/停止 discard/busy 共用
-        // 确认请求**真的开始了**才登记在途标记（结算权归本轮，见 finally 与
-        // handleAskChoice）。放在忙守卫之后是刻意的：被守卫挡下的一律走 onDropped
-        // 立即回滚，不留一个永远不会被结算的在途标记。
+        // 通过忙守卫后才登记确认请求，由本轮负责结算。
         const resumedAsk = opts.resumeTask && ctx.state.pendingAsk
           && ctx.state.pendingAsk.task_id === opts.resumeTask ? ctx.state.pendingAsk : null;
         if (silent && (opts.confirmToken || resumedAsk)) {
@@ -377,14 +369,11 @@
                                    conv: roundConvId });
         }
 
-        // 新对话开始：自动关闭上一条遗留的"建议跳转"面板——用户没点击/没取消时
-        // 不应让它残留到下一轮（已确认的目标由用户点击触发，不受影响）
         if (ctx.state.pendingNavUrl) {
           navConfirm.classList.remove('active');
           ctx.state.pendingNavUrl = '';
         }
 
-        // 登录检查
         const token = localStorage.getItem('tokenKey');
         if (!token) {
           const notice = '尊敬的访客：\n\n本站部署的AI虚拟形象Agent（导航/解读助手）仅供技术学习交流与功能展示使用，不视为面向公众开放的经营性AI服务。\n\n为严格遵守《生成式人工智能服务管理暂行办法》等相关法律法规，履行合规义务，本项目已采取访问限制措施，当前未向不特定公众开放。\n\n如您确因学习、交流或前端技术测试需要体验该功能，请通过博客顶部或关于页面的联系方式，联系管理员申请临时体验账号。管理员将在确认您的需求后，为您开通限时访问权限。\n\n感谢您的理解与支持！\n我们始终坚持合规先导，也期待与各位爱好者共同交流学习。\n\nSaudade Blog\n2026年7月29日';
@@ -398,12 +387,9 @@
         const thumbs = imgs.length ? await makeThumbs(imgs) : [];
         if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) return; // 压缩 await 窗口期被并发点击发送，放弃本轮
 
-        // 本轮 roundId：跨窗同步锚点（远端按它定位 live 气泡；本窗与远端轮次
-        // roundId 不同 → 双窗并发互不覆盖）。用户条目 id 独立生成（'l' 前缀），
-        // discard 广播按它双侧删除（Rust 侧已按用户消息删除 DB 记录）。
+        // 请求标识用于跨窗同步；用户消息保留独立标识。
         const roundId = opts.imageEvent ? await g.__waifuImageJobs.turnId(opts.imageEvent) : __chatCore.genId();
-        // 隐藏确认请求（silent）没有用户气泡：userItemId 为 null，下游所有按它
-        // 删条目/广播 discard 的分支都必须先判空（见失败轮的删除路径）
+        // 隐藏确认没有用户条目，删除和广播前须检查 userItemId。
         const userItemId = silent ? null : __chatCore.genId();
         const sentAt = Date.now();
         ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent,
@@ -428,8 +414,7 @@
         if (ctx.ui.beginReply) ctx.ui.beginReply();
         if (!silent) {
           input.value = '';
-          // 程序清空不会触发 input 事件：主动重置高度，避免空输入框残留多行高度
-          // （flex 布局下还会连带拉伸发送按钮导致变形）
+          // 程序清空输入后同步重置输入框高度。
           resizeInput();
           ctx.state.pendingImages = [];
           renderPreviews();
@@ -439,7 +424,6 @@
           });
           ctx.state.items.push(userItem);
           appendMsg(userItem);
-          // 发送即回底（聊天软件标准）：即使之前在翻历史，自己发的消息必须可见
           scrollToBottom(messages, true);
           saveHistory(); // 游客立即落缓存（带 thumbs）；登录用户 DB 侧由 Rust 在流开始前入库
         }
@@ -456,15 +440,12 @@
         ctx.state.isSending = true;
         ctx.state.stoppedByUser = false;
         ctx.state.stoppedTurn = false;
-        // 发送按钮切换为"停止生成"（主流对话 UI 形态），点击即中止输出
         sendBtn.disabled = false;
         sendBtn.title = '停止生成';
         sendBtn.innerHTML = '<span class="chat-stop-icon" aria-hidden="true"></span><span>停止</span>';
         sendBtn.classList.add('stop-mode');
         input.disabled = true;
-        // 打字指示器（静默反馈）：流进行中 >1.2s 无帧（LLM 首 token/工具执行间隙）
-        // → 气泡内三点跳动；收到任意帧 → 隐藏并重新计时。声明在 try 外，
-        // catch/正常收尾都能安全清理（try 内 const 是块级作用域，catch 访问不到）
+        // 流空闲时显示打字状态；所有退出路径共享清理。
         let typingEl = null, typingTimer = null;
         let displayText = '';
         let completed = false;
@@ -474,8 +455,6 @@
         // SPA navigation and effects run on arrival. Full-page navigation waits
         // for persisted terminal output, since it closes the current connection.
         let jumpedUrl = null;
-        // 处置**单条**命令。返回 true = 已处置（跳了/开合了/按白名单取消了）；
-        // 返回 false = 只能等流尾（整页跳转，见上）。
         const applyCmd = (c, contentSpan, allowDeferred) => {
             if (!c || typeof c !== 'object' || c.__done) return true;
             if (['appearance', 'article_editor'].includes(c.kind) && browserActions) {
@@ -496,8 +475,7 @@
               const BLOG_ROUTES = [/^\/$/, /^\/about\/?$/, /^\/guestbook\/?$/, /^\/talk\/?$/, /^\/times\/?$/, /^\/login\/?$/, /^\/dashboard/, /^\/category\//, /^\/article\//, /^\/device-console\/?/];
               const navPath = (() => { try { return new URL(navUrl).pathname; } catch(e3) { return null; } })();
               const navOk = !!navPath && BLOG_ROUTES.some(r => r.test(navPath));
-              // 直接跳转额外校验同源：白名单只查 pathname，幻觉的
-              // AUTO_NAVIGATE:https://evil.com/talk 路径合法但会带用户离开本站 → 阻断（降级确认式）
+              // 路径白名单不代替同源校验。
               const hostOk = (() => { try { return new URL(navUrl).host === window.location.host; } catch(e4) { return false; } })();
               if (isDirect) {
                 if (!navOk || !hostOk) {
@@ -510,9 +488,7 @@
                 if (window.__spaNavigate && window.__spaNavigate(navUrl)) {
                   jumpedUrl = navUrl; c.__done = true; return true;
                 }
-                // 桥不接管（nginx 直服的 /device-console/，或跨域 /api）⇒ 只剩整页装载
-                // 一条路，而它会掐断 SSE、本轮回复随之丢失（Rust 在终止帧才落库，
-                // 断连的残缺回复会被 Drop guard 清掉）⇒ 这类**只能等流尾**。
+                // 整页跳转会关闭 SSE，须等待终止帧持久化。
                 if (!allowDeferred) return false;
                 sessionStorage.setItem('chat_open', '1');  // 跳转后默认打开对话框并滚动到底部
                 sessionStorage.setItem('chat_nav_slide', '1');
@@ -525,15 +501,12 @@
               return true;
             }
             if (c.kind === 'effect') {
-              // effect: sakura/rain/snow，action: on/off（agent 侧已按枚举校验过）
               toggleEffect(String(c.effect || ''), c.action === 'off' ? 'off' : 'on');
               c.__done = true;
               return true;
             }
             if (c.kind === 'darkmode') {
-              // 通过对话让 agent 调节同样代表访客意愿：开夜间任何时段都记，关夜间只在夜间
-              // 窗口内记（见 markVisitorChoice），自动切换据此让位；
-              // animate=true 触发与手动点击切换按钮相同的日月过渡动画
+              // 显式主题选择沿用访客偏好与手动切换动画。
               const on = c.mode !== 'off';
               markVisitorChoice(on);
               applyDarkMode(on, true);
@@ -543,9 +516,7 @@
             c.__done = true;   // 未知种类：认过就算处置，别在流尾再试一遍
             return true;
         };
-        // 流尾兜底：把**只能等流尾**的命令（整页跳转）跑掉；其余都是幂等空转
-        // （`__done` 已标记）。三处调用点（正常收尾 / `__ERROR__` / 断流兜底）
-        // 共用这一份——单条失败不拖垮其余，故逐条 try。
+        // 整页命令在流尾执行；逐条隔离失败，避免阻断其余命令。
         const execAgentCommands = (cmds, contentSpan) => {
             for (const c of (cmds || [])) {
               try { applyCmd(c, contentSpan, true); } catch (e) { /* 单条失败不影响其余 */ }
@@ -553,11 +524,9 @@
         };
 
         let div = null, contentSpan = null; // live 气泡（catch 异常路径 failRound 也要引用转正，提升到 try 外）
-        // 空闲/总超时计时器：声明提升到 try 外——catch 异常路径也要 clearTimeout
-        // （块级 let 在 try 内声明会让 catch 引用抛 ReferenceError）
+        // 计时器由正常结束与异常路径共同清理。
         let idleTimer = null, totalTimer = null, requestController = null;
         try {
-          // SSE 流式对话：agent 首 token 即上屏，不再等待完整回复
           const ctrl = new AbortController();
           requestController = ctrl;
           ctx.state.streamCtrl = ctrl;
@@ -566,8 +535,7 @@
             clearTimeout(idleTimer);
             idleTimer = setTimeout(() => { ctx.state.timedOut = true; ctrl.abort(); }, 60000);
           };
-          // 总超时（300s，与后端 STREAM_TOTAL_TIMEOUT 对齐）：agent 工具调用循环等场景
-          // 每轮都有帧会重置空闲计时，此计时器不被重置，保证界面必然恢复
+          // 总时限不随进度帧重置。
           totalTimer = setTimeout(() => { ctx.state.timedOut = true; ctrl.abort(); }, 300000);
           const resp = await fetch('/api/chat/stream', {
             method: 'POST',
@@ -652,7 +620,6 @@
           contentSpan = h.contentSpan;
           scrollToBottom(messages);
 
-          // 打字指示器：插在气泡内 label 与正文之间，静默时三点跳动
           typingEl = document.createElement('div');
           typingEl.className = 'chat-typing';
           typingEl.setAttribute('aria-hidden', 'true');
@@ -730,7 +697,7 @@
             if (now - lastMouthFlip >= 300) {
               lastMouthFlip = now;
               mouthOpen = !mouthOpen;
-              // 闭嘴相位取 0（完全闭合嘴型，模型嘴部与面部同层 PSD）
+              // 相位 0 表示闭嘴。
               window.__mouthOverride = mouthOpen ? 0.8 : 0;
             }
           };
@@ -800,18 +767,15 @@
           completed = true;
           clearTimeout(idleTimer);
           clearTimeout(totalTimer);
-          // 流结束：移除打字指示器（正常收尾路径）
           if (typingTimer) clearTimeout(typingTimer);
           if (typingEl) typingEl.remove();
-          // 口型归位，关闭 override 让模型恢复默认驱动
           resetMouth();
           contentSpan.classList.remove('msg-streaming'); // 渲染完成后恢复 normal，与博客一致
           const fullText = displayText;
           renderAgentContent(contentSpan, fullText);
           scrollToBottom(messages);
           setTimeout(() => scrollToBottom(messages), 150);
-          // live 转正：进 items（含过程行）+ 补 data-mid + 移出 live + saveHistory。
-          // 空回复不转正——历史里不留"泠月喵:"空气泡（转跳后恢复成"（空）"）
+          // 完成的正文和进度进入历史；空回复不持久化为消息。
           if (fullText.trim()) {
             const finalItem = __chatCore.migrateItem({
               id: roundId, type: 'agent', text: fullText, time: Date.now(),
@@ -850,7 +814,6 @@
             if (ctx.state.confirmRound) ctx.state.confirmRound.failed = '会话已删除';
             return; // finally 仍执行（复位 isSending/按钮/busy + pendingPull 补拉）
           }
-          // 异常路径兜底：移除打字指示器（AbortError/网络错误/__ERROR__ 帧）
           if (typingTimer) clearTimeout(typingTimer);
           if (typingEl) typingEl.remove();
           clearTimeout(idleTimer);
@@ -872,7 +835,6 @@
               ctx.state.stoppedTurn = true;
             } else {
               const errMsg = '长时间未收到回复，请稍后重试';
-              // 已收到的部分照旧留在气泡里（displayText 就是屏幕上那段文本）
               renderFailed(contentSpan, errMsg, displayText);
               broadcast({t: 'error', msg: errMsg, roundId});
               if ((displayText).trim()) {
@@ -930,8 +892,7 @@
           clearTimeout(idleTimer); clearTimeout(totalTimer); clearTimeout(typingTimer);
           if (ctx.state.activeRound === roundState) {
             const sameView = ownsRound();
-            // 复位必须在 finally：catch 内 applyMsg/broadcast 万一抛错，
-            // 未复位 isSending 会把对话框永久锁死（后续发送全部被拦，即"卡死"）
+            // finally 释放发送状态，避免异常导致输入框持续锁定。
             ctx.state.isSending = false;
             ctx.state.streamCtrl = null;
             steering?.end();
@@ -1059,7 +1020,6 @@
           if (chatPanel.classList.contains('active')) {
             pullHistory(); // 每次打开都同步所有窗口的聊天记录（DB 权威）
             input.focus();
-            // 打开面板 = 要看最新对话：强制回底（覆盖收起前的历史浏览位置）
             setTimeout(() => scrollToBottom(messages, true), 50);
           }
         });
@@ -1079,10 +1039,8 @@
         setTimeout(() => bindTool(id, onReady, tries - 1), 200);
       };
 
-      // 看板娘第3按钮（switch-model）→ 切换模型 + 弹出消息
       bindTool('waifu-tool-switch-model', (btn) => {
         btn.addEventListener('click', (e) => {
-          // 不阻止默认行为，让库继续执行模型切换
           setTimeout(() => {
             const panel = document.getElementById('waifu-chat');
             if (panel) panel.classList.add('active');
@@ -1096,7 +1054,6 @@
         });
       });
 
-      // 看板娘第4按钮（switch-texture）→ 切换皮肤 + 弹出消息
       bindTool('waifu-tool-switch-texture', (btn) => {
         btn.addEventListener('click', (e) => {
           setTimeout(() => {
@@ -1112,24 +1069,19 @@
         });
       });
 
-      // 星标按钮（看板娘左侧独立容器）+ 展开特效图标
       const addStarButton = () => {
-        // 在 #waifu 左侧创建独立容器
         const waifu = document.getElementById('waifu');
         if (!waifu) { setTimeout(addStarButton, 500); return; }
         const starBox = document.createElement('div');
         starBox.id = 'waifu-tool-star-box';
         starBox.style.cssText = 'position:absolute;left:-10px;top:70px;display:flex;flex-direction:column;gap:5px;align-items:center;opacity:0;transition:opacity 1s;z-index:99;';
         waifu.appendChild(starBox);
-        // 鼠标移入 #waifu 时显示
         let expanded = false;
         waifu.addEventListener('mouseenter', () => { starBox.style.opacity = '1'; });
         waifu.addEventListener('mouseleave', () => {
-          // 如果特效菜单展开则不隐藏
           if (!expanded) starBox.style.opacity = '0';
         });
 
-        // 星星主按钮
         const starLi = document.createElement('div');
         starLi.style.cssText = 'position:relative;width:25px;height:25px;';
         const starImg = document.createElement('img');
@@ -1139,8 +1091,6 @@
         starLi.appendChild(starImg);
         starBox.appendChild(starLi);
 
-        // 三个子特效图标 — 右侧半圆展开（放在 starBox 中，独立于 starLi）
-        // 夜间模式不在此处：博客头部已有独立切换按钮，看板娘侧仅保留 agent 内置 DARKMODE: 命令
         const effects = [
           { src: '/icons/樱花-copy.png', title: '樱花', id: 'effect-sakura', startFn: 'startSakura', stopFn: 'stopSakura' },
           { src: '/icons/大雨.png', title: '大雨', id: 'effect-rain', startFn: 'startRain', stopFn: 'stopRain' },
@@ -1175,16 +1125,13 @@
           effectBtns.push(btn);
         });
 
-        // 特效实时状态跟踪：手动按钮与 agent 命令都会更新，随对话上报给 agent，
-        // 让 agent 感知真实开关状态（避免它只靠自己的调用记忆而失同步）
+        // 页面按钮与 Agent 共用实际特效状态。
         window.__effectState = { sakura: false, rain: false, snow: false };
         const syncEffectState = () => {
           window.__effectStateList = Object.keys(window.__effectState).filter(k => window.__effectState[k]).join(',');
         };
 
-        // 全局特效切换函数（按钮/agent 共用）。
-        // action 为 'on'/'off' 时按显式意图开关（agent 命令），不会因重复命令翻转状态；
-        // 无 action 时保持按钮点击的 toggle 语义
+        // 显式 on/off 保持幂等；未指定 action 时使用按钮切换语义。
         window.toggleEffect = (name, action) => {
           const effectMap = {
             sakura: { start: 'startSakura', stop: 'stopSakura', id: 'effect-sakura' },
@@ -1206,7 +1153,6 @@
           const btn = document.getElementById(eff.id);
           const wantOn = (action === 'on' || action === 'off') ? action === 'on' : null;
           if (wantOn !== null) {
-            // agent 显式开关：设置目标状态（start/stop 本身幂等，重复执行安全）
             if (btn) {
               btn.active = wantOn;
               btn.style.filter = wantOn ? 'brightness(1.3) drop-shadow(0 0 3px gold)' : 'none';
@@ -1227,14 +1173,12 @@
             }
             window.__effectState[name] = btn.active;
           } else {
-            // 按钮还没创建时直接调用
             if (window[eff.start]) window[eff.start]();
             window.__effectState[name] = true;
           }
           syncEffectState();
         };
 
-        // 星星点击展开/收起 — 右侧半圆动画
         starLi.addEventListener('click', (e) => {
           e.stopPropagation();
           expanded = !expanded;
@@ -1254,7 +1198,6 @@
             });
           }
         });
-        // 点击其他地方收起
         document.addEventListener('click', (e) => {
           if (expanded && !starLi.contains(e.target)) {
             expanded = false;
@@ -1267,9 +1210,7 @@
         });
       };
       try { const dm = localStorage.getItem('isDarkMode'); window.__darkMode = dm === 'true' || dm === '"true"'; } catch(e) {/* ignore */}
-      // 博客头部手动切换夜间模式（Head handleModeSwitch）也会派发 darkmode-change，
-      // 同步 __darkMode 保证 current_darkmode 上报真实状态；本文件 applyDarkMode 派发的事件
-      // 到达这里时值相同，幂等无副作用
+      // 同步宿主主题事件，用于上报当前主题状态。
       window.addEventListener('darkmode-change', (e) => {
         try { window.__darkMode = !!(e && e.detail); } catch(err) {/* ignore */}
       });
@@ -1280,10 +1221,6 @@
       syncPanelDark();
       addStarButton();
 
-      // ── 夜间模式控制（agent DARKMODE: 命令 + 夜间自动切换）──
-      // 统一入口：持久化状态 + 通知 React 应用（App 监听 darkmode-change 事件同步 isDark）
-      // animate=true 时触发与手动点击博客头部切换按钮相同的日月全屏过渡动画
-      // （Head 组件监听 moon-sun-animation 事件渲染 MoonToSun）
       const applyDarkMode = (on, animate) => {
         const prev = !!window.__darkMode;
         window.__darkMode = !!on;
@@ -1300,15 +1237,13 @@
 
       // App.tsx owns automatic theme changes; this widget only synchronizes explicit commands.
 
-      // 拖动（仅通过顶部/左侧边框条移动面板，其余区域允许选中文本）
       let isDragging = false, isResizing = false, resizeCorner = 'br', startX, startY, startW, startH, startLeft, startTop, offsetX, offsetY;
       chatPanel.addEventListener('pointerdown', (e) => {
         if (chatPanel.dataset.windowMode && chatPanel.dataset.windowMode !== 'expanded') return;
         // The header's click/drag gesture is owned by chat-ui; this path keeps the left rail.
         if (e.target.closest('.chat-drag-bar-t, .chat-header')) return;
-        // 仅在边框条上按下时启动拖动，其余区域不做拦截以便选中/复制文本
         if (!e.target.closest('.chat-drag-bar-t, .chat-drag-bar-l')) return;
-        // 阻止事件冒泡到 #waifu（live2d-widgets 的拖拽会冲突）并防止选中文本
+        // 边框拖动不传播至 Live2D 拖动处理。
         e.stopPropagation();
         e.preventDefault();
         isDragging = true;
@@ -1352,7 +1287,6 @@
         const isL = corner[1] === 'l';
         const h = document.createElement('div');
         h.className = 'conv-resize-handle';
-        // 对角缩放光标：TL/BR 同向（nwse），TR/BL 同向（nesw）
         h.style.cssText = 'position:absolute;' + (isL ? 'left:0' : 'right:0') + ';' +
           (isT ? 'top:0' : 'bottom:0') + ';width:14px;height:14px;' +
           'cursor:' + (isT === isL ? 'nwse-resize' : 'nesw-resize') +
@@ -1378,7 +1312,6 @@
       const pauseTask = () => {
         if (!ctx.state.isSending) return;
         const pausedRound = ctx.state.activeRound;
-          // 输出中点击 = 停止生成
           ctx.state.stoppedByUser = true;
           ctx.ui.refreshComposer?.();
           if (ctx.state.streamCtrl) ctx.state.streamCtrl.abort();
@@ -1401,11 +1334,8 @@
                 broadcast({ t: 'idle', roundId: r.roundId, from: engine.windowId });
                 try { localStorage.removeItem('saudade-chat-busy'); } catch (e) {}
               } else if (victim) {
-                // 空闲/总超时：保留 user 消息，渲染失败气泡 + 重发/编辑 + 持久化标记
                 const errMsg = '长时间未收到回复，请稍后重试';
-                // 远端轮的正文不在这层闭包里，只能从 DOM 取——**只在它还处在流式纯文本态时**
-                // 才敢拿（`textContent` 等于原文，重渲染无损）；已 markdown 化的文本重渲染
-                // 会把正文里的 markdown 记号二次解释，宁可不动它。
+                // 远端回复仅在流式纯文本阶段重渲染，避免重复解释 Markdown。
                 const remotePartial = victim.contentSpan
                   && victim.contentSpan.classList.contains('msg-streaming')
                   ? victim.contentSpan.textContent : '';
@@ -1441,7 +1371,6 @@
       const imgBtn = document.getElementById('chat-img-btn');
       const imgFile = document.getElementById('chat-img-file');
       const imgPreview = document.getElementById('chat-img-preview');
-      // 预览区动态填充：每张缩略图一个容器（img + 右上角 ×），移除即从数组 splice
       const renderPreviews = () => {
         const imgs = ctx.state.pendingImages || [];
         imgPreview.innerHTML = '';
@@ -1615,26 +1544,17 @@
         if (!ask || !askOtherInput) return;
         const text = String(askOtherInput.value || '').trim();
         if (!text) return;          // 空提交什么都不做：卡片保持可点，确定/取消都还在
-        // 忙判据与 handleAskChoice、sendMessage 里的那几处**同源**，且必须**先于结算**：
-        // 反过来的顺序（先结算、再发现发不出去）就是"卡片说改了、系统里什么都没有"。
+        // 通过忙守卫后再结算卡片，保证结算对应真实发送。
         if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) {
           reportConfirm('在卡片里改口时此刻有轮次在跑（本窗发送中/别的窗口回复中）'
                         + '——卡片保留，待收尾后再提交');
           return;
         }
-        // 到这里才结算，且先摘待办再结算：不摘的话下面 sendMessage 的
-        // `if (!silent && ctx.state.pendingAsk) hideAsk()` 会再结算一次（两次结论）。
-        // 结论用 amend 而不是 cancel——对账读的就是"取消了几次 / 改口了几次"。
-        // click 这一跳报在**这里**而不是点开输入框那一刻（那一支的注释写了理由）：
-        // 一次提交 = 一跳 click + 一跳 settle，跳数配平才不会被读成"点了没结论"。
+        // 先移除待办，再登记修改，避免普通发送重复结算。
         ctx.state.pendingAsk = null;
         reportAskStage('click', { id: String(ask.id || ''), value: 'other' });
         askSettle('这次不算，按你说的来', undefined, 'amend');
-        // 非 silent ⇒ 走**普通发言**那条路（用户气泡、落库、广播、命令执行全都一样）。
-        // sendMessage 读的是主输入框（`input.value`），所以先把话回填进去——「重发」
-        // 那条路径用的也是这一手（见 restoreAndCleanup）。代价：主输入框里若正压着
-        // 半句草稿，会被这一轮带走（它随后被清空）；与重发路径逐字同款，不为此另造
-        // 一条只给卡片用的发送通道（那会让"用户发言"有两条实现，早晚漂）。
+        // 卡片修改通过普通消息通道发送。
         input.value = text;
         resizeInput();
         sendMessage();
@@ -1699,9 +1619,7 @@
         }
         askSettle('确认中…', 'pending');
         if (ask.replay_safe === true) saveAsk(ask);
-        // 隐藏确认请求：不进历史、不起气泡。令牌是唯一凭据（agent 侧验签），
-        // 合成 message 只作为"当前这条用户输入"喂给叙述层（服务端不落库）。
-        // onDropped = 这一跳根本没发出去（忙守卫/建会话失败）⇒ 回滚成可重试。
+        // 隐藏确认以签名令牌授权；未发出时回滚为可重试。
         sendMessage({ silent: true, confirmToken: ask.token, convId: ask.convId,
                       // 「只办第 i 件」带的就是这里（`pick:<i>`）；点「全部办」传空串
                       // = 既有语义（不传字段也等价，旧卡片逐字兼容）
@@ -1729,7 +1647,6 @@
                            onFailedResync: () => { attachHistoryFailedRetry(); steering?.restore(); } });
       }
 
-      // 右上角关闭按钮：收起聊天面板
       document.getElementById('chat-close').addEventListener('click', () => {
         chatPanel.classList.remove('active');
       });
