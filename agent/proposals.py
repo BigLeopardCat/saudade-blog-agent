@@ -58,6 +58,7 @@ def proposal(
         {"label": "取消操作", "value": "no", "kind": "default"},
     ]
     if choices is not None:
+        facts["selection_policy"] = {"initial_selection": "all", "user_changeable": True}
         options[1:1] = [
             {"label": label, "value": f"pick:{index}", "kind": "choice"}
             for index, label in enumerate(choices)

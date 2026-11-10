@@ -15,7 +15,7 @@ PERMISSION_OPERATIONS = frozenset({_domain.operation})
 @tool(return_direct=True)
 def prepare_announcement_deletions(scope: Literal['selected', 'all'], config: RunnableConfig,
     ids: Identifiers = []) -> object:
-    """Prepare deletion of site-wide dashboard announcements. Admin only.
+    """Prepare permanent deletion of site-wide dashboard announcements. Admin only. No undo.
     selected needs IDs; all snapshots current announcements without a prior read.
     One approval includes linked notification copies removed for all recipients.
     Personal inbox clearing uses notifications; clarify ambiguous scope.

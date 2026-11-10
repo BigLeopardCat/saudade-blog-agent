@@ -45,6 +45,8 @@ python -m eval.release_readiness --help
 记录为未评估，不自动重试或降级。报告固定 OpenEvals 版本、输出 schema 和推理参数。
 评审期间关闭 LangSmith tracing，不额外上传材料；不为评审调用业务工具。
 
+语义材料中的 `runtime_preparation_context` 来自同次已准备调用的产品元数据，记录执行策略、触发时间语义和控件默认策略。它不替代 `validated_preparation_facts` 中的服务核实结果，也不证明业务已执行、页面已渲染或通知已经送达。未记录或超过证据上限时保持缺失或未评估，不用当前源码补造历史事实；确认卡正文仍是待审输出。
+
 线上先 POC，后全量，命令和目标见[发布验收](release-acceptance.md)。不得在普通 CI 默认运行线上写入或付费生图；生产材料交给外部 judge 前需脱敏和授权。
 
 ## 追踪与指标

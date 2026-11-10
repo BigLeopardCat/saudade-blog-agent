@@ -23,3 +23,13 @@ def observed(source, value, fields):
     record("native", "preparation_observation", call_id=call_id, round=round_index, source=source,
            facts=facts if complete else None, complete=complete)
     return value
+
+
+def preparation_context(call, round_index, popup):
+    """Record product-declared preparation metadata, excluding drafts and grants."""
+    facts = popup.get("preparation_facts")
+    if facts is None:
+        return
+    complete = isinstance(facts, dict) and len(json.dumps(facts, ensure_ascii=False)) <= MAX_FACT_CHARS
+    record("native", "preparation_context", call_id=call["id"], round=round_index,
+           facts=facts if complete else None, complete=complete)

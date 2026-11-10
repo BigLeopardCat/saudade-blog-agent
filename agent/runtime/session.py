@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.runtime import tool_execution
+from agent.runtime import tool_evidence, tool_execution
 from agent.runtime.budget import (
     BudgetExceeded,
     TaskBudget,
@@ -148,6 +148,8 @@ class ToolSession:
         ).encode()).hexdigest()
         record("native", "call", name=call["name"], args_hash=args_hash,
                call_id=call["id"], round=round_index, kind=kind)
+        if kind == "prepared":
+            tool_evidence.preparation_context(call, round_index, execution["pending_confirm"])
         if kind == "noop":
             self.state["effects"].update(execution)
             message = ToolMessage(content=adapted.reply, name=call["name"],
