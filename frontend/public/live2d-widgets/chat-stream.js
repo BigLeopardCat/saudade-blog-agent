@@ -596,8 +596,11 @@
             signal: ctrl.signal,
           });
           if (!ownsRound()) throw staleRound();
-          if (opts.imageEvent && resp.status === 204) { completed = true; return true; }
-          if (opts.imageEvent && resp.status === 409) return false;
+          if (opts.imageEvent && [204, 409, 401, 403].includes(resp.status)) {
+            typingEl?.remove(); div?.remove(); delete ctx.state.live[roundId];
+            if (resp.status === 204) { completed = true; return true; }
+            return resp.status === 409 ? false : {status: 'forbidden'};
+          }
           if (!resp.ok) {
             if (resp.status >= 500) void ctx.ui.checkService?.();
             // 网关/代理超时可能返回 HTML 错误页（如 504），先读文本再解析
@@ -990,7 +993,7 @@
       };
 
       ctx.ui.isResumingTask = () => resumingTask;
-      g.__waifuImageJobs?.init(ctx, sendMessage);
+      g.__waifuImageJobs?.init(ctx, sendMessage, engine);
       ctx.ui.currentPausedTask = pausedTask;
       ctx.ui.continueTask = () => resumeStoppedTask(pausedTask());
       ctx.ui.resumeManagedTask = async row => {

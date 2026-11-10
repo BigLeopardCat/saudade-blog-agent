@@ -13,7 +13,8 @@ export async function assertImageJobReports({browser, origin}) {
   await page.route('**/api/chat/task/confirmation',route=>route.fulfill({json:{
     task_id:pendingConfirmation?.task_id||null,confirmation:pendingConfirmation,
   }}));
-  await page.route('**/api/chat/tasks',route=>route.fulfill({json:{paused:{items:[]},schedules:{items:[]}}}));
+  await page.route('**/api/chat/tasks',route=>route.fulfill({json:{paused:{items:[]},schedules:{items:[]},
+    images:{items:[{id,title:'后台生成样例',conversationId:1,status,eventVersion:version,reportPending:!reported}]}}}));
   await page.route('**/api/protect/image-generation/chat-jobs?*',route=>route.fulfill({json:{
     code:200,data:reported?[]:[{id,status,eventVersion:version}],
   }}));
@@ -41,11 +42,16 @@ export async function assertImageJobReports({browser, origin}) {
       history.push({id:history.length+1,role:'assistant',content:'图片做好啦，看看要不要保留喵。',turn_id:body.turn_id,time:Date.now(),images:[]});
     }else if(body.confirm_token){
       confirmations.push(body);assert.equal(body.turn_id,reports[0].turn_id);
-      pendingConfirmation=null;
+      pendingConfirmation=null;status='accepted';
+      history.push({id:history.length+1,role:'assistant',content:'图片已保存。',
+        turn_id:body.turn_id,time:Date.now(),images:[]});
       wire=frame('text','图片已保存。');
     }else {
       history.push({id:history.length+1,role:'user',content:body.message,turn_id:body.turn_id,time:Date.now(),images:[]});
-      wire=frame('text','你好喵，图片还在后台生成，可以继续聊天。');
+      history.push({id:history.length+1,role:'assistant',content:'你好喵，图片还在后台生成，可以继续聊天。',
+        turn_id:body.turn_id,time:Date.now(),images:[]});
+      wire=frame('progress',{text:'正在生成图片',work:{id:'image-generation:'+id,
+        stage:'generating',status:'running'}})+frame('text','你好喵，图片还在后台生成，可以继续聊天。');
     }
     await route.fulfill({contentType:'text/event-stream',body:wire+frame('done',{})});
   });
@@ -56,12 +62,21 @@ export async function assertImageJobReports({browser, origin}) {
     await page.locator('#chat-send').click();
     await page.getByText('你好喵，图片还在后台生成，可以继续聊天。',{exact:true}).waitFor();
     await page.waitForFunction(()=>!window.__chatTest.ctx.state.isSending);
+    await page.locator('#conv-tasks-btn').click();
+    const task=page.locator(`[data-task-key="image:${id}"]`);
+    await task.locator('summary').click();
+    await task.getByText('正在生成图片',{exact:true}).waitFor();
+    await page.getByRole('button',{name:'关闭任务列表'}).click();
     await page.locator('#chat-close').click();
     status='review';
     await page.waitForTimeout(1200);
     assert.equal(reports.length,0,'closed dialog must not invoke a report');
     await page.evaluate(()=>document.getElementById('waifu-chat').classList.add('active'));
     await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
+    await page.evaluate(()=>window.__chatTest.engine.refreshView());
+    const work=page.locator(`[data-work-id="image-generation:${id}"]`);
+    assert.equal(await work.first().getAttribute('data-work-stage'),'review');
+    assert.equal(await work.first().textContent(),'图片已生成，等待确认是否保留');
     assert.equal(reports.length,1);
     assert.equal(await page.evaluate(()=>window.__chatTest.ctx.state.items
       .filter(item=>item.type==='user').length),1,'completion fabricated a human message');

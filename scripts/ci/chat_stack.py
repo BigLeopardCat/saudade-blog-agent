@@ -63,15 +63,31 @@ class ProviderHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_POST(self):
+        if self.path == "/fixture/image-job" and getattr(self.server, "image_control", None):
+            value = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            data = json.dumps(self.server.image_control(value)).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         assert self.path == "/v1/chat/completions"
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         history = json.dumps(body["messages"], ensure_ascii=False)
         marker = next(
             (tag for tag in ("STACK_PROBE", "STACK_DROP", "STACK_MAIN") if tag in history), None
         )
+        image_event = any(name in history for name in (
+            '"name": "prepare_generated_image_acceptance"', '"name": "get_image_generation"'))
+        if image_event:
+            marker = "STACK_IMAGE"
         assert marker, "Unexpected provider traffic; fixture must not answer unrelated requests"
         with self.server.lock:
             self.server.calls.append(marker)
+        if image_event:
+            self.reply(body, {"content": "图片任务的最新结果已收到，请查看预览与确认状态。"})
+            return
         names = {row["function"]["name"] for row in body.get("tools", [])}
         completed_read = any(
             row.get("role") == "tool" and row.get("tool_call_id") == "clock"
@@ -492,6 +508,9 @@ http {{
         ]
         assert len(reads) == 1, "The completed read was replayed"
         assert sum(event.get("event") == "jobs_drained" for event in events) >= 4
+        from image_job_drill import run_image_drill
+
+        run_image_drill(AGENT, work, out, blog_dsn, session_key, provider, common)
         status = provider.status()
         assert set(status["closed"]) == {"STACK_MAIN", "STACK_DROP"}
         (out / "summary.json").write_text(
