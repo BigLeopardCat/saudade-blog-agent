@@ -44,6 +44,8 @@ validated_preparation_facts是工具在准备阶段从服务读取并验证的�
 id为空表示本次准备未找到现有标签，可说明批准后将创建，不证明已经创建。
 它不含代写正文；正文仍逐项核对来源。
 validated_operation_facts描述已匹配工具调用或框架审批反馈的操作结果，后者不要求取消工具调用。
+runtime_tool_rejections仅证明运行时拦截了该次工具调用；未知工具名或错误参数不证明用户缺少业务权限，
+即使记录为tool_denied也不证明该业务所有合法路径都不可用，仍需核对当轮工具契约。
 操作未执行不证明目标实体不存在；
 查询的页、筛选条件和时间范围不能扩成全站当前状态。
 检索措辞容忍：用户询问站内相关内容，已完成RAG或关键词检索且未找到相关证据时，
@@ -264,6 +266,11 @@ def material(case, results):
             "tool_observations": [{key: event[key] for key in
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],
+            "runtime_tool_rejections": [
+                {key: event[key] for key in ("event", "name", "call_id", "round", "reason")
+                 if key in event}
+                for event in trace.get("events", []) if event.get("node") == "native"
+                and event.get("event") in {"tool_denied", "tool_error"}],
             "execution_receipts": result.get("exec_rows", []),
             "proposed_actions_not_facts": _proposed_actions(result),
             "interactive_image_reviews_to_review": _image_reviews(result.get("http_events", [])),
