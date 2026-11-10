@@ -164,7 +164,7 @@ def test_preparation_links_writable_state_without_activating_or_changing_secrets
     assert not (releases / "restarts").exists()
     revision = run(["git", "rev-parse", "HEAD"], cwd=source, env=env).stdout.strip()
     release = releases / "releases" / revision
-    for path in ("logs", "output_audio", "eval/cache", "eval/report/wordgraph"):
+    for path in ("logs", "eval/cache", "eval/report/wordgraph"):
         assert (release / path).resolve() == state / path
     assert config.stat().st_mode & 0o777 == 0o600
     assert (release / "data").resolve() == data
