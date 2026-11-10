@@ -22,6 +22,8 @@ def test_sticker_aliases_match_the_public_host_contract():
 def test_chat_only_caller_can_render_stickers_without_loading_tools():
     context = conversation_context(Principal(7, "zako", SOURCE_ASSERTION))
     assert context["tools"]["loading"] == "disabled"
+    assert context["rendering"]["sticker_catalog"] == {
+        "scope": "builtin_mascot", "complete": True, "requires_tools": False}
     assert context["rendering"]["stickers"] == [f":{name}:" for name in STICKER_NAMES]
     assert context["rendering"]["sticker_format"] == {
         "markdown_text": "image", "inline_code": "literal", "code_block": "literal"}

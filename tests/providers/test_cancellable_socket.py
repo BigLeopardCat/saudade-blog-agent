@@ -4,8 +4,10 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import httpx
 import pytest
 from langchain_core.messages import HumanMessage
+from openai import APITimeoutError
 
 from agent.runtime.control import AgentCancelled, RequestControl, request_scope
 from models.llm import get_llm
@@ -14,8 +16,11 @@ from models.transport import ModelIO, io_scope
 
 @pytest.mark.enable_socket
 @pytest.mark.parametrize("headers_sent", [False, True])
-def test_cancel_closes_the_actual_socket_without_waiting_for_server_data(monkeypatch, headers_sent):
+@pytest.mark.parametrize("termination", ["cancel", "timeout"])
+def test_cancel_or_timeout_closes_the_actual_socket(monkeypatch, headers_sent, termination):
     monkeypatch.setattr("config.settings.llm_provider", "opencode")
+    if termination == "timeout":
+        monkeypatch.setattr("config.settings.llm_timeout", 0.15)
     entered, disconnected, stopped = threading.Event(), threading.Event(), threading.Event()
     errors = []
 
@@ -48,16 +53,21 @@ def test_cancel_closes_the_actual_socket_without_waiting_for_server_data(monkeyp
                                 base_url=f"http://127.0.0.1:{server.server_port}/v1",
                                 model="deepseek-v4.1-flash", streaming=True, max_retries=0)
                             model.invoke([HumanMessage(content="Hello.")])
-                    except AgentCancelled as exc:
+                    except (AgentCancelled, APITimeoutError, httpx.ReadTimeout) as exc:
                         errors.append(exc)
 
                 worker = threading.Thread(target=run)
                 worker.start()
                 assert entered.wait(3)
-                stopped.set()
+                if termination == "cancel":
+                    stopped.set()
                 worker.join(2)
                 assert not worker.is_alive() and len(errors) == 1
+                expected = (AgentCancelled if termination == "cancel" else
+                            httpx.ReadTimeout if headers_sent else APITimeoutError)
+                assert isinstance(errors[0], expected)
                 assert disconnected.wait(1), "the peer did not see a closed connection"
+                assert io.pending_cleanup == 0 and io.ready
                 assert not io.client.is_closed
         finally:
             stopped.set()
