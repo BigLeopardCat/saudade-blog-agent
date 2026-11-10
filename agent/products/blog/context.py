@@ -24,8 +24,7 @@ def conversation_context(principal) -> dict:
     role = getattr(principal, "known_role", None) if verified else None
     return {
         "rendering": {"stickers": [f":{name}:" for name in STICKER_NAMES],
-                      "sticker_catalog": {"scope": "builtin_mascot", "complete": True,
-                                          "requires_tools": False},
+                      "sticker_catalog": "all builtin stickers; no tools needed",
                       "sticker_format": {"markdown_text": "image", "inline_code": "literal",
                                          "code_block": "literal"}},
         "guestbook": {"posting_requires_login": True,
