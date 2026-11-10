@@ -14,6 +14,7 @@ from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.service import AgentRuntime
+from utils.trace import tool_result_text
 
 
 @pytest.mark.parametrize("role", ["admin", "user", "zako"])
@@ -42,6 +43,7 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
         assert not any(row["name"].startswith("admin_") for row in overview["domains"])
     text = json.dumps(overview, ensure_ascii=False)
     assert '"parameters"' not in text and '"properties"' not in text
+    assert tool_result_text(text, "get_agent_capabilities", default_limit=8000) == text
     overview_size = estimate_tokens([ToolMessage(content=text, tool_call_id="overview")])
     schemas = json.dumps([convert_to_openai_tool(tool)
                           for tools in domains.values() for tool in tools.values()],
