@@ -43,10 +43,11 @@ DOMAIN_DESCRIPTIONS = {
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
     "Article-tag assignment: admin_article_management.",
-    "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格); "
-    "no mute duration needed.",
-    "admin_account_actions": "Prepare freeze, mute or role changes; eligibility-only queries "
-    "use admin_accounts. Resolve ambiguous names first. System notices are fixed templates; "
+    "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
+    "For mute requests without a duration, check eligibility here before asking for duration.",
+    "admin_account_actions": "Prepare freeze, mute or role changes. Mute requires a duration "
+    "or explicit permanence; missing duration or eligibility checks use admin_accounts. "
+    "Resolve ambiguous names first. System notices are fixed templates; "
     "custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
