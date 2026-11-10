@@ -174,8 +174,8 @@ def prepare_account_role(
     schedule: WriteSchedule | None = None,
 ) -> object:
     """准备变更账号身份确认，只读。新身份明确填写admin/user/zako；只改身份，保留冻结和禁言。
-    同时提供account_id和username时必须指向同一个账号。
-    后端按当前操作者与目标身份核验政策；真实变更使旧登录状态失效。
+    已知编号或完整账号名直接准备，无需先查列表或资格；后端核实目标和操作资格。
+    同时提供account_id和username时必须匹配。真实变更使旧登录状态失效。
     Automatic status notices do not deliver user-authored messages. Use prepare_user_notice
     for those, preserving any requested order before preparing this change.
     """
