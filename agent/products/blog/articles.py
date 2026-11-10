@@ -16,6 +16,7 @@ from utils.trace import record
 
 class ArticleState(AgentState, total=False):
     evidence: dict
+    evidence_task_id: str | None
 
 
 class ArticleMiddleware(AgentMiddleware):
@@ -31,21 +32,29 @@ class ArticleMiddleware(AgentMiddleware):
     def before_agent(self, state, runtime):
         saved = state.get("evidence")
         restoring = state.get("resume") or state.get("proposal")
-        self.evidence = ArticleEvidence.restore(saved) if saved and restoring else ArticleEvidence()
+        task_id = (self.session.task or {}).get("id")
+        same_task = task_id is not None and state.get("evidence_task_id") == task_id
+        self.evidence = (ArticleEvidence.restore(saved) if saved and restoring and same_task
+                         else ArticleEvidence())
         self._visibility()
-        return {"evidence": self.evidence.snapshot()}
+        return {"evidence": self.evidence.snapshot(), "evidence_task_id": task_id}
 
     def before_model(self, state, runtime):
         self._recover(state)
-        return {"evidence": self.evidence.snapshot()}
+        return {"evidence": self.evidence.snapshot(),
+                "evidence_task_id": (self.session.task or {}).get("id")}
 
     def _recover(self, state):
         if not self.session.recovering or self.recovered:
             return
         state = self.session.recovery_state or state
-        saved = state.get("evidence")
+        task_id = (self.session.task or {}).get("id")
+        saved = (state.get("evidence")
+                 if task_id and state.get("evidence_task_id") == task_id else None)
         for message in reversed(state.get("messages", ())):
             if (isinstance(message, ToolMessage)
+                    and task_id is not None
+                    and (message.artifact or {}).get("article_evidence_task_id") == task_id
                     and (message.artifact or {}).get("article_evidence")):
                 saved = message.artifact["article_evidence"]
                 break
@@ -64,7 +73,8 @@ class ArticleMiddleware(AgentMiddleware):
             if not isinstance(message, ToolMessage):
                 return message
             return message.model_copy(update={"artifact": {
-                **(message.artifact or {}), "article_evidence": self.evidence.snapshot()}})
+                **(message.artifact or {}), "article_evidence": self.evidence.snapshot(),
+                "article_evidence_task_id": (self.session.task or {}).get("id")}})
 
         if isinstance(result, Command):
             return replace(result, update={**result.update,
@@ -125,7 +135,5 @@ class ArticleMiddleware(AgentMiddleware):
             reply = ("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"
                      if issue == "unread_article_reference" else
                      "暂时无法核实文章正文，不能据此回答文章内容。请重新指定要阅读的文章。")
-        else:
-            reply = evidence.sources(reply, SITE_BASE)
         return replace(result, result=[*result.result[:-1], response.model_copy(
             update={"content": reply})])
