@@ -2,12 +2,15 @@
 
 from importlib.metadata import version
 
+from rag.tokenization import policy_info
+
 METHOD = "lucene"
 DTYPE = "float64"
 
 
 def backend_info() -> dict:
-    return {"name": "bm25s", "version": version("bm25s"), "method": METHOD, "dtype": DTYPE}
+    return {"name": "bm25s", "version": version("bm25s"), "method": METHOD, "dtype": DTYPE,
+            "tokenizer": policy_info()}
 
 
 class LexicalIndex:

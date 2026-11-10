@@ -1,0 +1,8 @@
+{
+  "schema_version": 1,
+  "name": "bilingual-lexical-regression",
+  "source": "Project-authored synthetic Chinese and English retrieval examples with explicit labels; no production data.",
+  "revision": "1",
+  "license": "MIT",
+  "scope": "Public development regression for lexical analysis, not an independent holdout, production quality estimate or cross-language semantic benchmark."
+}

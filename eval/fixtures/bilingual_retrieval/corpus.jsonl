@@ -1,0 +1,20 @@
+{"_id": "cn_cpp", "title": "C++ 内存管理", "text": "智能指针与 RAII 在 C++ 析构期间释放资源。"}
+{"_id": "en_cpp", "title": "C++ ownership", "text": "C++ destructors release resources; RAII controls ownership."}
+{"_id": "cn_csharp", "title": "C# 异步编程", "text": "C# 使用 Task 与 await 实现异步控制。"}
+{"_id": "en_csharp", "title": "C# asynchronous programming", "text": "C# tasks support asynchronous cancellation and continuations."}
+{"_id": "dotnet", "title": ".NET runtime", "text": ".NET runs managed assemblies and collects unused objects."}
+{"_id": "fishing", "title": "Fishing net maintenance", "text": "A fishing net needs knots repaired before the next catch."}
+{"_id": "bge", "title": "BGE-M3 retrieval", "text": "BGE-M3 embeds multilingual documents for dense retrieval."}
+{"_id": "other_embedding", "title": "Embedding alternatives", "text": "Dense embeddings encode documents into vector representations."}
+{"_id": "transactions", "title": "Durable transactions", "text": "Transactions provide atomicity. Committed transactions survive restarts."}
+{"_id": "coroutines", "title": "Suspending coroutines", "text": "Coroutines suspend cooperatively while asynchronous jobs progress."}
+{"_id": "naive", "title": "Naïve Bayes", "text": "Naïve Bayes classifies features through conditional probabilities."}
+{"_id": "cafe", "title": "Café networking", "text": "A café provides wireless internet to its customers."}
+{"_id": "fullwidth", "title": "ＦａｓｔＡＰＩ", "text": "ＦａｓｔＡＰＩ routes requests using typed models."}
+{"_id": "cat", "title": "猫", "text": "猫喜欢玩耍，是常见的家庭伴侣。"}
+{"_id": "cn_search", "title": "中文信息检索", "text": "倒排索引记录词语对应的文档，信息检索根据相关程度排序。"}
+{"_id": "cn_name", "title": "泠月喵喵的索引", "text": "泠月喵喵维护资料，建立按主题组织的索引。"}
+{"_id": "releases", "title": "Safe deployments", "text": "Deployments use health checks. Failed deployments trigger rollbacks."}
+{"_id": "packages", "title": "Node.js packages", "text": "Node.js loads modules and publishes packages through npm."}
+{"_id": "unicode", "title": "ﬂow control", "text": "The ligature in ﬂow is normalized during matching. Cancellation stops pending work."}
+{"_id": "traditional", "title": "資料庫交易", "text": "資料庫交易在提交後保留結果，重新啟動不重複寫入。"}

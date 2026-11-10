@@ -1,0 +1,20 @@
+{"_id": "cpp", "text": "C++", "answerable": true, "category": "technical"}
+{"_id": "csharp", "text": "C#", "answerable": true, "category": "technical"}
+{"_id": "dotnet", "text": ".NET", "answerable": true, "category": "technical"}
+{"_id": "bge_alias", "text": "bge_m3", "answerable": true, "category": "technical"}
+{"_id": "transaction", "text": "transaction", "answerable": true, "category": "english"}
+{"_id": "coroutine", "text": "coroutine", "answerable": true, "category": "english"}
+{"_id": "deployment", "text": "deployment", "answerable": true, "category": "english"}
+{"_id": "accent", "text": "naive Bayes", "answerable": true, "category": "english"}
+{"_id": "accent_case", "text": "CAFÉ", "answerable": true, "category": "english"}
+{"_id": "compatibility", "text": "FastAPI", "answerable": true, "category": "technical"}
+{"_id": "cat", "text": "猫", "answerable": true, "category": "chinese"}
+{"_id": "search", "text": "倒排索引", "answerable": true, "category": "chinese"}
+{"_id": "cjk_name", "text": "泠月", "answerable": true, "category": "chinese"}
+{"_id": "packages", "text": "node.js", "answerable": true, "category": "technical"}
+{"_id": "ligature", "text": "flow", "answerable": true, "category": "english"}
+{"_id": "traditional", "text": "資料庫交易", "answerable": true, "category": "chinese"}
+{"_id": "cn_question", "text": "C# 怎么处理异步", "answerable": true, "category": "mixed"}
+{"_id": "en_question", "text": "How do coroutines suspend?", "answerable": true, "category": "english"}
+{"_id": "absent_en", "text": "photosynthesisxyz", "answerable": false, "category": "unanswerable"}
+{"_id": "absent_zh", "text": "量子冰淇淋", "answerable": false, "category": "unanswerable"}
