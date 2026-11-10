@@ -82,7 +82,7 @@ def initial_tools(tools, domains):
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
     }
-    if selected or domains:
+    if selected or any(domains.values()):
         overview = capability_overview(selected, domains)
         return {**selected, overview.name: overview}
     return selected

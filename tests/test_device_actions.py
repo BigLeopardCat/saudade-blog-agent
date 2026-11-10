@@ -231,9 +231,10 @@ def test_device_schema_loads_on_demand_before_one_authorized_delivery(service):
     session = ToolSession(Model(), config(), initial_tools({}, domains), domains,
                           middleware=(BlogToolMiddleware,))
     result = session.run([HumanMessage(content="让设备显示hello")])
-    assert [item["function"]["name"] for item in menus[0]] == ["load_devices_info_tools"]
+    assert [item["function"]["name"] for item in menus[0]] == [
+        "get_agent_capabilities", "load_devices_info_tools"]
     assert {item["function"]["name"] for item in menus[1]} == {
-        "load_devices_info_tools", "list_devices", device_actions.NAME}
+        "get_agent_capabilities", "load_devices_info_tools", "list_devices", device_actions.NAME}
     assert menus[1] == menus[2]
     assert len([request for request in service["requests"] if request.method == "PUT"]) == 1
     assert result.execution["receipts"][0]["device_status"] == "queued"
