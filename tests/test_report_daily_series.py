@@ -149,3 +149,24 @@ def test_user_report_keeps_unlisted_users_and_missing_counts_unknown():
     assert "未列出的用户活动未知" in text and "会话 未知／消息 未知" in text
     empty = render_user_stats({"totalUsers": 19, "users": []})
     assert "没有任何用户" not in empty and "不能据此判断全站活动" in empty
+
+
+def test_daily_view_preserves_last_date_with_large_lifetime_rankings(monkeypatch):
+    from tools import base
+    from tools.admin_read import get_note_stats
+
+    rows = series(30)
+    data = {'daily': rows, 'topViewed': [
+        {'noteId': i, 'title': '无关的历史累计排行标题' * 5, 'views': 999}
+        for i in range(10)], 'topLiked': [], 'topFavorited': []}
+    seen = []
+
+    def read(path, config):
+        seen.append(path)
+        return data
+
+    monkeypatch.setattr(base, '_admin_get', read)
+    text = str(get_note_stats.invoke({'view': 'daily'}, config={}))
+    assert all(f"{row['date']} 阅读 {row['views']}" in text for row in rows)
+    assert '历史累计' not in text and '无关的历史' not in text
+    assert '报表过长' not in text and len(seen) == 1

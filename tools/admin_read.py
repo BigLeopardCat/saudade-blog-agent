@@ -44,9 +44,11 @@ def get_user_stats(config: RunnableConfig) -> str | ToolResult:
 
 
 @tool
-def get_note_stats(config: RunnableConfig) -> str | ToolResult:
+def get_note_stats(config: RunnableConfig,
+                   view: Literal["overview", "daily"] = "overview") -> str | ToolResult:
     """查询当前可见文章的历史累计合计与阅读、点赞、收藏排行榜，另附近30天日趋势。
     合计和排行均为历史累计，不是本周、本月或本年；有明确自然周期时使用get_note_periods。
+    趋势查询使用view=daily，只返回日序列及覆盖范围，避免累计榜单挤占正文。
     日趋势是独立滚动窗口，不能据此把累计排行榜称为窗口内排名。
     单篇文章的累计指标使用get_article_stats。本工具仅管理员可用。
     """
@@ -57,7 +59,8 @@ def get_note_stats(config: RunnableConfig) -> str | ToolResult:
     if not data:
         return empty("后台没有返回文章流量数据")
     try:
-        return ok(R.render_note_stats(data), data=data)
+        render = R.render_note_daily if view == "daily" else R.render_note_stats
+        return ok(render(data), data=data)
     except Exception as exc:
         logger.exception("render_note_stats failed")
         return unavailable(f"整理文章流量报表失败: {exc}")

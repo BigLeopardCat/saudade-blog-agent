@@ -170,3 +170,35 @@ def test_invalid_approval_text_is_not_replayed_after_checkpoint_reconstruction(b
     result = run(runtime(resumed, selected.saver), grant=grant)
     assert result.reply == "已收藏文章19。" and len(state["writes"]) == 1
     assert "DSML" not in str(resumed.prompts) and "private-canary" not in str(resumed.prompts)
+
+
+def test_feedback_distinguishes_revoked_card_from_unprepared_sibling(backend):
+    from langchain_core.messages import ToolMessage
+    from test_confirmation_continuation import NOTICE
+
+    state, _ = backend
+    selected = runtime(Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE, NOTICE])))
+    prepared = run(selected, "先收藏，再标记通知已读。")
+    specs = prepared.execution["pending_action"]["specs"]
+    model = Model(AIMessage(content="收藏确认已撤销，标记通知已读尚未准备。"))
+    selected.model_factory = lambda **_: model
+    run(selected, "整个任务取消，两项都不要做。")
+    saved = selected.store.load(config()).messages
+    tools = {m.name: json.loads(m.content) for m in saved
+             if isinstance(m, ToolMessage)
+             and 'superseded_by_user_feedback' in m.content}
+    assert tools['prepare_favorite_change']['confirmation_revoked'] is True
+    fact = json.loads(model.prompts[0][-1].content)
+    assert fact['scope_complete'] is True and fact['revoked_operations'] == specs
+    assert not state['writes'] and not selected.store.load(config()).has_pending
+
+
+def test_deferred_feedback_retains_absence_of_preparation():
+    from agent.runtime.approval_messages import deferred, superseded_message
+    message = deferred(call("prepare_notification_read", "later", ids=[101]),
+                       awaiting="first", available=True)
+    cancelled = superseded_message(message)
+    content = json.loads(cancelled.content)
+    assert content["prepared"] is False and content["confirmation_revoked"] is False
+    assert content["approval"] == "not_requested_for_this_operation"
+    assert cancelled.artifact is None

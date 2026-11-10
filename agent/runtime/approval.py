@@ -67,7 +67,7 @@ def review(state, config, *, feedback=None):
         if feedback is None:
             raise ValueError("approval_feedback_not_available")
         execution = feedback(config).execution
-        observed = superseded_fact()
+        observed = superseded_fact(action["specs"])
         content = json.dumps(observed, ensure_ascii=False)
         observations = []
         for spec in action["specs"]:
@@ -97,8 +97,11 @@ def _commit(state):
     return {}
 
 
-def superseded_fact():
+def superseded_fact(specs=()):
     return {**cancellation_fact(), "status": "superseded",
+            "revoked_operations": [{"tool": spec["tool"], "args": spec["args"]}
+                                   for spec in specs],
+            "scope_complete": bool(specs),
             "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"
                       "如仍需执行，必须重新准备确认卡；普通聊天文字不构成批准。"}
 
