@@ -1,5 +1,5 @@
 {
-  "_note": "Pinned scanner findings by file; unregistered files and per-file increases fail. Tighten this ledger when findings decrease.",
+  "_note": "ruff error 数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量（ruff 版本 / line-length / select）都必须与 pyproject.toml 同源——三者都会改变条目集。判据见 eval/lint_gate.py 头注；纪律见 CONTRIBUTING.md。",
   "ruff_version": "0.14.4",
   "line_length": 100,
   "select": [
@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 118,
+  "total": 117,
   "by_file": {
     "eval/admin_write_probe.py": 29,
     "eval/corpus_terms.py": 6,
