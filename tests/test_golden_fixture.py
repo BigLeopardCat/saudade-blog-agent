@@ -33,11 +33,7 @@ _WRITE_PATTERNS = (
 
 
 def _docstring_lines(text: str) -> set[int]:
-    """模块/类/函数 docstring 覆盖的行号（1 起）。解析不了 ⇒ 当没有。
-
-    片段样本（`'x.post(1)'` 那种）本来就不是合法模块，落进这个分支正好——它们要的是
-    "照原样扫一遍"。
-    """
+    """Return docstring line numbers; syntax fragments retain their literal scan scope."""
     import ast
     try:
         tree = ast.parse(text)
@@ -330,6 +326,17 @@ def test_golden_fixture():
     finally:
         if _old_uid_b is not None:
             os.environ["GOLDEN_ADMIN_UID"] = _old_uid_b
+    _check_fixture_gate(_CASES, _FIXROW)
+    _check_todo_fixture(_CASES)
+    if FAILS:
+        sys.exit(1)
+    print("=== 全部通过 ===")
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+
+def _check_fixture_gate(_CASES, _FIXROW):
     print("\n⑧ 夹具闸（三族共用一个实现，两个跑法调用同一个函数）")
     _GATE_CASES = [
         {"id": "c1", "requires_fixture": "agent_fixture_category_a"},
@@ -351,9 +358,7 @@ def test_golden_fixture():
         check("被摘掉的 id 按声明逐个报出来（计入分母变化）", _drop == ["c1", "c3"], str(_drop))
         check("不写 kind = 分类族（存量用例的语义一个字都没变）",
               "c1" in _drop and "c2" not in _drop)
-        # 第二遍：三族夹具**分别在位/不在位**——每一族的理由各说各的（分类族指公开列表，
-        # 账号族指复位 SQL，留言族指"被人在后台复核掉了、重跑那份 SQL"）。只跑一遍
-        # "夹具都在位"是看不到这三句话里任何一句的。
+        # Verify each fixture family's missing-state diagnostics independently.
         gf.snapshot = lambda kind: {"category": ["agent_fixture_category_a"],
                                     "account": {"agent_fixture_freeze_a": {"status": 0}},
                                     "board": {"108": _brow(108, approved=1)}}[kind]
@@ -368,14 +373,13 @@ def test_golden_fixture():
               bool(_cat_ln) and "公开分类" in _cat_ln[0]
               and bool(_acc_ln) and "复位" in _acc_ln[0]
               and bool(_brd_ln) and "复核" in _brd_ln[0], str(_lines2)[:240])
-        # 快照按 kind 只取一次：两条分类用例共用一份（省一次往返，也保证看到同一份清单）
+        # Cases in the same fixture family share one consistent snapshot.
         _calls: list[str] = []
         gf.snapshot = lambda kind: (_calls.append(kind), _SNAPS[kind])[1]
         gf.gate(list(_GATE_CASES))
         check("同族夹具只取一次快照（同一批用例看到同一份）", _calls.count("category") == 1,
               str(_calls))
-        # 未知 kind 必须**响亮报错**：拼错一个字母会让闸去查另一族 ⇒ 用例静默跳过，
-        # 而打印出来的理由是"那一族里没有它"（读的人只会去查那一族）。
+        # Unknown fixture kinds fail instead of silently checking another family.
         gf.snapshot = _old_snap
         try:
             gf.gate([{"id": "c9", "requires_fixture": "agent_fixture_x",
@@ -410,6 +414,9 @@ def test_golden_fixture():
     check("留言族用例声明的那个名字，正是那份迁移 SQL 建出来的正文（用例改了名字而 SQL 还在建"
       "旧的 ⇒ 红在这里，而不是红成「模型没按台账办」）",
           gfb.declared_fixtures() == [_BOARD_FIX], str(gfb.declared_fixtures()))
+
+
+def _check_todo_fixture(_CASES):
     print("\n⑦f 待办族只有一条读通道（源码扫描，与账号族 / 留言族互为镜像）")
     _SRC_TODO = (ROOT / "eval/golden_fixture_todo.py").read_text(encoding="utf-8")
     _TODO_PATTERNS = _WRITE_VERBS + ('"POST"', '"PUT"', '"DELETE"', "method=",
@@ -515,7 +522,8 @@ def test_golden_fixture():
               "golden_fixture_todo_20261003.sql" in gf.skip_reason("todo", _TODO_FIX, "absent"))
     finally:
         gft.todo_rows, gf.snapshot = _old_todo_rows, _old_snap_t
-    _todo_cases = [cid for cid, k in _kinds if k == "todo"]
+    _todo_cases = [case["id"] for case in _CASES
+                   if case.get("requires_fixture_kind") == "todo"]
     check("待办族夹具用例真的在文件里（这条闸不是空转的）", bool(_todo_cases), str(_todo_cases))
     check("待办族用例声明的名字与 declared_fixtures() 同源（哨兵要放行它，名字只能有一处来源）",
           set(gft.declared_fixtures()) == {c["requires_fixture"] for c in _CASES
@@ -543,10 +551,6 @@ def test_golden_fixture():
         print(f"=== {len(FAILS)} 项失败 ===")
         for f in FAILS:
             print("  -", f)
-        sys.exit(1)
-    print("=== 全部通过 ===")
-    assert not FAILS, (
-        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
 
 
 if __name__ == "__main__":

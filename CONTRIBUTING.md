@@ -33,11 +33,15 @@ PostgreSQL 测试只使用显式 `SAUDADE_CKPT_TEST_DSN`、`SAUDADE_SCHEDULING_T
 
 ```sh
 uv run --frozen ruff check --select F821 --no-cache .
+uv run --frozen ruff check --select C901,PLR0915 .
 uv run --frozen python eval/type_gate.py
 uv run --frozen python eval/lint_gate.py
 bash scripts/dev/package_smoke.sh
 bash scripts/dev/coverage.sh
 ```
+
+函数复杂度和语句数由 Ruff C901、PLR0915 直接检查，配置在 `pyproject.toml`。
+不维护单独的 AST 计数器或复杂度台账；生成物和冻结报告沿用仓库忽略规则。
 
 真实模型、小批量与全量线上评测独立于普通 PR CI，见[评测说明](docs/eval-observability.md)。
 

@@ -1,7 +1,6 @@
 """Check checkpoint backend selection, startup failures and nonblocking setup locks.
 
-Uses fake connections and independent positive/negative controls; SQL checks do
-not depend on historical commentary in the production module.
+Uses fake connections and independent positive/negative controls.
 """
 
 
@@ -393,10 +392,7 @@ def test_checkpoint_factory():
     try:
         _S.checkpoint_dsn = _DEAD
         _loud = _raises(_build_checkpointer)
-        # 拨成一个连不上的 DSN ⇒ 必须**响亮抛**。这就证明了那一格被真的读到了：
-        # 没读到的话 `build_checkpointer()` 会拿空串直接返回 `None`（**静默**）。
-        # 刻意不用"能连上的 DSN + 断言返回了 saver"——那要求本机有个真库，
-        # 判据就变成了"本机有没有库"，而这条要判的是**接线通不通**。
+        # An unreachable DSN verifies configuration wiring without a live database.
         check("拨成 DSN ⇒ **不给参数**也响亮抛（不是静默返回 None ⇒ 那一格是活的）",
               _loud.startswith("RuntimeError:"), _loud[:90] or "（没抛 = 这一格是死的）")
         _S.checkpoint_dsn = "   "
@@ -430,6 +426,26 @@ def test_checkpoint_factory():
     check("没带口令的原样返回（不是把整条 DSN 都吃掉）",
           C.redact("postgresql://h:5432/db") == "postgresql://h:5432/db",
           C.redact("postgresql://h:5432/db"))
+    _check_database_setup()
+    if FAILS:
+        raise SystemExit(1)
+    print("全部通过 ✅")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+
+def test_background_usage_schema_upgrade_keeps_setup_lock():
+    connection, saver = _FakeConn([True]), _Saver()
+    C._setup_under_lock(saver, pool=_FakePool(connection))
+    assert connection.usage_schema_upgrades == 1
+    assert connection.input_schema_upgrades == 2
+    assert connection.lock_tries == connection.unlocks == saver.calls == 1
+
+
+
+def _check_database_setup():
     print("\n⑨ 建表抢锁：轮询、有预算、池必须 autocommit")
     _c, _s = _FakeConn([False, False, True]), _Saver()
     _tries = C.wait_for_setup_lock(_c, now=lambda: 0.0, sleep=lambda d: None)
@@ -457,9 +473,7 @@ def test_checkpoint_factory():
     _clock3 = _Clock()
     _t0 = time.monotonic()
     try:
-        # ⚠️ `sleep` **必须是会走字的那个假钟**（`_clock3.sleep`），不能写 `lambda d: None`：
-        # `wait_for_setup_lock` 的判据是 `now() >= deadline`，一个不前进的钟 ⇒ **死循环**。
-        # ⑨b 那两个 `lambda d: None` 之所以没事，是因为那里最终**抢到了**锁、不走预算那条路。
+        # Deadline exhaustion requires a fake sleep that advances the clock.
         C._setup_under_lock(_s3, pool=_FakePool(_c3), now=_clock3.now,
                             sleep=_clock3.sleep, budget=2.0)
         _msg3 = ""
@@ -552,20 +566,6 @@ def test_checkpoint_factory():
     print()
     if FAILS:
         print(f"失败 {len(FAILS)} 项 ❌: {FAILS}")
-        raise SystemExit(1)
-    print("全部通过 ✅")
-
-    assert not FAILS, (
-        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
-
-
-
-def test_background_usage_schema_upgrade_keeps_setup_lock():
-    connection, saver = _FakeConn([True]), _Saver()
-    C._setup_under_lock(saver, pool=_FakePool(connection))
-    assert connection.usage_schema_upgrades == 1
-    assert connection.input_schema_upgrades == 2
-    assert connection.lock_tries == connection.unlocks == saver.calls == 1
 
 
 if __name__ == "__main__":
