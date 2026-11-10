@@ -42,7 +42,7 @@ DOMAIN_DESCRIPTIONS = {
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed edits/deletion. "
-    "Creation needs a name; color is optional. "
+    "Creation: ask for a missing name before loading; color is optional. "
     "Article-tag assignment: admin_article_management.",
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",

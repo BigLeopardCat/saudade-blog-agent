@@ -157,7 +157,7 @@ def set_page_appearance(
 ) -> object:
     """Set requested theme/effects to on/off; omit other settings.
     Switching rain to snow sets rain=off and snow=on. States are absolute; repeats
-    do not toggle. Browser feedback waits for observed settings.
+    do not toggle. No approval card. Browser feedback waits for observed settings.
     sent means queued; only completed proves application.
     """
     effects = {
