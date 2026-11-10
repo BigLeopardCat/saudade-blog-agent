@@ -297,14 +297,22 @@ def test_current_golden_requires_the_exact_batch_and_rejects_a_narrowed_card(bac
     assert native_assertions.check(limits, {"native_events": [*calls, {"event": "llm_start"}]})
     assert native_assertions.check(limits, {"native_events": [*calls, calls[-1]]})
     assert case["gold"]["forbid_business_write"] and case["gold"]["require_zero_exec"]
-    expected = case["gold"]["require_confirm_specs"][0]
-    _, grant = approve(expected["args"]["intent"])
-    assert native_assertions.contains(grant["specs"][0], expected)
-    narrowed = copy.deepcopy(grant)
-    intent = narrowed["specs"][0]["args"]["intent"]
-    if intent["action"] == "metadata":
-        intent["items"] = intent["items"][:1]
+    wanted = case["gold"].get("require_confirm_intent")
+    if wanted:
+        intents = wanted["one_of"]
+        gold = {"require_confirm_intent": wanted}
     else:
-        intent["imageIds"] = [72]
-    assert not native_assertions.contains(narrowed["specs"][0], expected)
+        expected = case["gold"]["require_confirm_specs"][0]
+        intents = [expected["args"]["intent"]]
+        gold = {"require_confirm_specs": [expected]}
+    for candidate in intents:
+        _, grant = approve(candidate)
+        assert not native_assertions.check(gold, {"native_events": [], "confirm_payloads": [grant]})
+        narrowed = copy.deepcopy(grant)
+        intent = narrowed["specs"][0]["args"]["intent"]
+        if intent["action"] == "metadata":
+            intent["items"] = intent["items"][:1]
+        else:
+            intent["imageIds"] = [72]
+        assert native_assertions.check(gold, {"native_events": [], "confirm_payloads": [narrowed]})
     assert backend["effects"] == 0
