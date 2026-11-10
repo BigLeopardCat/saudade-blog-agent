@@ -28,7 +28,7 @@ def get_site_map(config: RunnableConfig) -> ToolResult:
         ("/talk", "说说", "浏览管理员发布的动态与碎语"),
         ("/guestbook", "留言板", "公开浏览河灯集；发布须登录，可匿名隐藏公开留名，不需邮箱"),
         ("/about", "关于我", "个人介绍"),
-        ("/article/<id>", "文章详情", "公开文章正文与Mermaid图表"),
+        ("/article/<id>", "文章详情", "公开文章正文与Mermaid图表；标签用于展示，不是标签筛选页面"),
         ("/login", "登录", "账号登录"),
         ("/dashboard", "后台管理", "仅管理员管理文章、分类、标签、公告等"),
     ]

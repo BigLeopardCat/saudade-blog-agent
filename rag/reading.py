@@ -151,6 +151,7 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
         "totalChars",
         "readComplete",
         "source",
+        "omittedViews",
         "authorName",
         "authorNameTruncated",
         "authorAvatar",

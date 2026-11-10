@@ -198,7 +198,15 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     if kind == "note" and view == "outline":
         data.update(noteId=page.id, noteTitle=page.title)
     elif kind == "note":
-        data.update(_article_metadata(page.metadata))
+        continuing = view == "body" and offset > 0 and not section
+        if continuing:
+            # Continuation needs exact body/provenance, not another copy of the
+            # first page's display metadata and directory. Dedicated views retain both.
+            for key in ("sections", "sectionCount", "sectionsOffset", "nextSectionsOffset"):
+                data.pop(key, None)
+            data["omittedViews"] = ["metadata", "outline"]
+        else:
+            data.update(_article_metadata(page.metadata))
         data.update(
             noteId=page.id,
             noteTitle=page.title,
