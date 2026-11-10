@@ -114,7 +114,7 @@ def test_promoted_browser_action_does_not_activate_other_site_tools():
     assert result.execution["receipts"] and not session.state["tool_domains"]["domains"]
     assert model.requests[0]["tools"] == model.requests[1]["tools"]
     assert "site_read" not in str(model.requests[1]["tools"])
-    assert list(session.tools) == ["navigate_page", "set_page_appearance"]
+    assert list(session.tools) == ["navigate_page", "set_page_appearance", "get_agent_capabilities"]
 
 
 @pytest.mark.parametrize("changed", ["page", "summary"])

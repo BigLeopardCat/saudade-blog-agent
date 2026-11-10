@@ -136,7 +136,8 @@ def test_new_task_keeps_activation_order_after_history_compaction(
     after = Model(AIMessageChunk(content="Follow-up complete."))
     assert turn(runtime(after), "Continue.").reply == "Follow-up complete."
     assert names(after.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta", "read_alpha"]
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools",
+        "read_beta", "read_alpha"]
     assert "read_alpha" in names(first.requests[-1]) and "read_beta" in names(first.requests[-1])
     assert calls == ["beta"]
     if trimmed:
@@ -205,7 +206,8 @@ def test_new_task_rebuilds_catalog_for_the_verified_scope(setup, changed):
         assert not model.requests and selected.get_state(config()) == before
         return
     turn(runtime(model), cfg=cfg)
-    assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
+    assert names(model.requests[0]) == [
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools"]
 
 
 def test_catalog_removal_rechecks_loaded_domains(setup):
@@ -214,7 +216,7 @@ def test_catalog_removal_rechecks_loaded_domains(setup):
                        AIMessageChunk(content="Ready."))))
     model = Model(AIMessageChunk(content="Current catalog."))
     turn(runtime(model, {"alpha": domains["alpha"]}))
-    assert names(model.requests[0]) == ["load_alpha_info_tools"]
+    assert names(model.requests[0]) == ["get_agent_capabilities", "load_alpha_info_tools"]
 
 
 def test_exhausted_task_budget_is_not_reset_by_releasing_domains(setup):
@@ -280,7 +282,8 @@ def test_loading_another_domain_preserves_current_task_tools_until_completion(se
     following = Model(AIMessageChunk(content="Next task."))
     turn(runtime(following))
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta", "read_alpha"]
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools",
+        "read_beta", "read_alpha"]
 
 
 def test_over_budget_saved_domains_release_capacity_and_can_be_loaded_again(setup):
@@ -294,7 +297,8 @@ def test_over_budget_saved_domains_release_capacity_and_can_be_loaded_again(setu
     with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
     assert result.reply == "Hello." and calls == ["beta"]
-    assert names(model.requests[0]) == ["load_alpha_info_tools", "load_beta_info_tools"]
+    assert names(model.requests[0]) == [
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools"]
     assert selected.store.load(config()).tool_domains["domains"] == []
     assert budget.reason is None and budget.model_calls == 1
     restored = Model(call("load_beta_info_tools"), call("read_beta"),
@@ -317,7 +321,7 @@ def test_discarded_child_activation_does_not_replace_the_committed_domains(setup
     model = Model(AIMessageChunk(content="Fresh task."))
     turn(runtime(model), "Start a fresh task.")
     assert names(model.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools", "read_alpha"]
     assert calls == ["alpha", "beta"]
 
 
@@ -352,7 +356,7 @@ def test_discard_removes_only_domains_first_activated_in_the_discarded_turn(setu
     following = Model(AIMessageChunk(content="Rebuilt."))
     turn(runtime(following))
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
 
 
 def test_explicit_load_over_budget_has_error_receipt_and_no_partial_activation(setup):

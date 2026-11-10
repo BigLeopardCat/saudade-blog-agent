@@ -1,5 +1,23 @@
 """Build standard on-demand discovery schemas from application descriptions."""
 
+from langchain_core.tools import StructuredTool
+
+
+def capability_overview(initial, domains):
+    """Project the application's current menu without loading execution schemas."""
+    def get_agent_capabilities() -> dict:
+        """List current caller's available tool capabilities without loading domain tools."""
+        return {
+            "coverage": "current_tool_catalog",
+            "grants_authorization": False,
+            "initial_tools": [{"name": name, "summary": tool.description.split("\n", 1)[0]}
+                              for name, tool in initial.items()],
+            "domains": [{"name": name, "available_tools": list(tools)}
+                        for name, tools in domains.items() if tools],
+        }
+
+    return StructuredTool.from_function(get_agent_capabilities)
+
 
 def loader(domain: str, description: str | None = None) -> dict:
     return {"type": "function", "function": {

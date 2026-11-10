@@ -50,7 +50,7 @@ def test_real_sdk_omits_released_schema_and_keeps_its_discovery_entry(request):
             assert turn(runtime(model), "Just chat.").reply == "Hello."
     assert len(requests) == 1 and calls == ["beta"]
     assert {t["function"]["name"] for t in requests[0]["tools"]} == {
-        "load_alpha_info_tools", "load_beta_info_tools"}
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools"}
 
 
 def test_current_business_batch_is_not_evicted_to_fit_another_domain(request):
@@ -153,7 +153,7 @@ def test_required_multi_domain_task_can_exceed_soft_target_then_bound_its_carryo
     following = Model(AIMessageChunk(content="Hello."))
     assert turn(runtime(following), "Hello.").reply == "Hello."
     assert names(following.requests[0]) == [
-        "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools", "read_beta"]
     assert calls == ["alpha", "beta"]
     assert [d["domain"] for d in selected.store.load(config()).tool_domains["domains"]] == ["beta"]
 
@@ -175,7 +175,7 @@ def test_soft_target_alone_releases_heavy_carryover_without_an_extra_model_call(
     assert len(requests) == 2 and calls == ["beta"]
     assert requests[0]["tools"] == requests[1]["tools"]
     assert {s["function"]["name"] for s in requests[0]["tools"]} == {
-        "load_alpha_info_tools", "load_beta_info_tools"}
+        "get_agent_capabilities", "load_alpha_info_tools", "load_beta_info_tools"}
     assert selected.store.load(config()).tool_domains["domains"] == []
 
 

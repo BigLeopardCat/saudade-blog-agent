@@ -17,7 +17,8 @@ def permission_names():
         config = {"configurable": {"principal": principal, "user_id": 7,
                   "conversation_id": 42, "thread_id": "conv_42", "browser_feedback": True,
                   "browser_task": {"task_id": "inventory"}}}
-        names |= catalog.initial_tools(True).keys()
-        for tools in catalog.domains(config, True).values():
+        domains = catalog.domains(config, True)
+        names |= catalog.promote_tools(catalog.initial_tools(True), domains).keys()
+        for tools in domains.values():
             names |= tools.keys()
     return sorted(names)

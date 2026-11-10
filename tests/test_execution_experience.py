@@ -21,7 +21,9 @@ def test_discovery_allows_real_candidate_links_without_forcing_a_body_read():
 def test_device_action_waits_for_loading_even_when_authorized():
     action, loader = object(), object()
     base = {"load_devices_info_tools": loader}
-    assert initial_tools(base, {"devices": {"device_oled_display": action}}) == base
+    selected = initial_tools(base, {"devices": {"device_oled_display": action}})
+    assert set(selected) == {"load_devices_info_tools", "get_agent_capabilities"}
+    assert selected["load_devices_info_tools"] is loader
     assert initial_tools({}, {"devices": {}}) == {}
 
 

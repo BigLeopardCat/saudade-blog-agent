@@ -3,6 +3,7 @@
 from agent.domains.account_actions.targets import Role
 from agent.domains.notices.targets import DEFAULT_TITLE
 from agent.role_labels import role_cn
+from agent.runtime.catalog import capability_overview
 
 # Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {
@@ -77,7 +78,11 @@ _BROWSER_ACTIONS = ("navigate_page", "set_page_appearance")
 def initial_tools(tools, domains):
     # These operations remain authorized by the domain builder and again on invocation.
     browser = domains.get("site") or {}
-    return {
+    selected = {
         **tools,
         **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
     }
+    if selected or any(domains.values()):
+        overview = capability_overview(selected, domains)
+        return {**selected, overview.name: overview}
+    return selected
