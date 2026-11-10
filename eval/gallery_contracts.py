@@ -5,6 +5,7 @@ import os
 import re
 import time
 from contextlib import contextmanager
+from functools import partial
 from unittest.mock import patch
 
 import httpx
@@ -23,7 +24,8 @@ ORGANIZE_REQUEST = ("帮我整理一下相册：先查清所有未分类图片�
 def backend():
     images = [{"imageKey": ident, "imageUrl": f"https://images.test/{ident}.png",
                "displayName": f"候选封面{ident}", "description": "公开练习封面",
-               "folderId": 0, "isFavorite": False, "version": "a" * 64}
+               "folderId": 0, "isFavorite": False, "version": "a" * 64,
+               "storage": "local" if ident % 2 else "r2"}
               for ident in range(1, 48)]
     images.append({**images[-1], "imageKey": 72, "imageUrl": "https://images.test/accepted.png",
                    "displayName": "学院风", "folderId": 1})
@@ -35,7 +37,9 @@ def backend():
         state["requests"].append(request)
         path, params = request.url.path, request.url.params
         if request.method == "GET" and path.endswith("/gallery/images"):
-            rows = sorted(images, key=lambda row: row["imageKey"], reverse=True)
+            available = [row for row in images if not params.get("storage")
+                         or row["storage"] == params["storage"]]
+            rows = sorted(available, key=lambda row: row["imageKey"], reverse=True)
             if "folderId" in params:
                 rows = [row for row in rows if row["folderId"] == int(params["folderId"])]
             if "before" in params:
@@ -117,5 +121,23 @@ def show_accepted_image(turn, state):
         raise ValueError("accepted image display scanned the catalog or requested a paid action")
 
 
+def storage_index(storage, turn, state):
+    label = "本地" if storage == "local" else "R2"
+    result = turn(f"只列出{label}存储里的最近6张图库图片，告诉我名称。不要看原图，不用列全量。")
+    reads = [request for request in state["requests"]
+             if request.url.path.endswith("/gallery/images")]
+    if (len(reads) != 1 or reads[0].url.params.get("storage") != storage
+            or reads[0].url.params.get("limit") != "6"):
+        raise ValueError("Storage selection was omitted, changed or unnecessarily paginated")
+    if (result['confirm_tokens'] or result['exec_rows'] or not result['text'].strip()
+            or state['unsupported_reads']):
+        raise ValueError("A bounded gallery index read performed unrelated work")
+    if sum(event.get('event') == 'llm_done'
+           for event in result.get('native_events', [])) > 3:
+        raise ValueError("Storage index exceeded its model-call budget")
+
+
 CASES = [("gallery_organize_unclassified", backend, organize_unclassified),
-         ("gallery_show_accepted_followup", backend, show_accepted_image)]
+         ("gallery_show_accepted_followup", backend, show_accepted_image),
+         *[(f"gallery_storage_{storage}_contract", backend, partial(storage_index, storage))
+           for storage in ("local", "r2")]]
