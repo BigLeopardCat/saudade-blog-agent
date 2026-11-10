@@ -87,7 +87,8 @@ def prepare_tag_create(
     schedule: WriteSchedule | None = None,
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
-    准备新建标签确认，不写入。默认一级；填写一级父标签编号或完整名字则创建二级。
+    准备新建标签确认，不写入。默认一级；创建二级可直接填parent_name完整父名，由后端核实，
+    无需先枚举父子标签；也可填parent_id。若父名不唯一再查询区分。
     颜色可选#RRGGBB；省略则保存为未设置，不继承父级颜色、不自动分配颜色。
     这是标签字典管理，给文章加标签应使用文章标签工具。
     """
