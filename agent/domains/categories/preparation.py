@@ -90,6 +90,7 @@ def prepare_category_create(
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备新建文章分类确认，不写入。默认以名字作路径；含空格或路径保留字符时需另填path_name。
     可选简介、图标和#RRGGBB颜色，不填保持未设置；名字和非空路径不能与已有分类冲突。
+    影响数量分为全部关联文章（含私密、独立草稿）与编辑草稿。
     """
     return _prepare(
         "create",
@@ -115,7 +116,7 @@ def prepare_category_update(
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备修改分类确认，不写入。按category_id或完整category_name定位，同时提供时交叉核对。
     仅填写要改的字段；new_name是新名字。简介、图标和颜色可传空串清空；路径不能清空。
-    名字/路径的变化会影响所有关联文章的分类展示，确认卡列出影响数量。
+    名字/路径的变化影响所有关联文章的分类展示；数量分为全部文章（含私密、独立草稿）与编辑草稿。
     """
     return _prepare(
         "update",
@@ -141,7 +142,7 @@ def prepare_category_delete(
 ) -> object:
     """Optional schedule delays this exact approved change; use run_at for clock times.
     准备删除分类确认，不写入。以唯一编号或完整原名定位；文章不删除，关联记录改为无分类。
-    确认卡包含文章和编辑草稿的影响数量；关联范围变化后必须重新确认。
+    确认卡分别计数全部关联文章（含私密、独立草稿）与编辑草稿；关联范围变化后必须重新确认。
     """
     return _prepare("delete", {"id": category_id, "name": category_name}, {}, config, schedule)
 

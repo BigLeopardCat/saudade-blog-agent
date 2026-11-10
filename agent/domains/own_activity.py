@@ -75,6 +75,7 @@ def list_my_board(config: RunnableConfig, status: Status | None = None,
 
     返回匹配总数与240字内容节选；用 item_id 读取单条内容（最多2000字，显式标记截断）。
     displayName 是自由填写的留名，不是账号。只读取本人数据，不审核或收回留言。
+    返回当前记录；空结果不证明从未发表。公开留言板仅展示通过审核的记录。
     """
     if item_id is not None:
         page, limit = 1, 1

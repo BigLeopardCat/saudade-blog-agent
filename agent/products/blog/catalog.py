@@ -37,8 +37,8 @@ DOMAIN_DESCRIPTIONS = {
     "河灯/留言 and review status.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
-    "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "
-    "cover preparation includes layout previews.",
+    "pinning, tags or permanent deletion. Known IDs need no lookup; tag assignment creates "
+    "missing tags on approval; covers include layout previews.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "

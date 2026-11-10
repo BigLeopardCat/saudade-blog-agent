@@ -113,7 +113,8 @@ def get_moderation_status(config: RunnableConfig) -> object:
     """一次查询全部河灯留言及未删除文章评论的审核总数、最终状态和AI判定分布，只取计数。
 
     总数、待审数或其他状态计数用本工具，不读取正文；无需逐个状态查列表。AI判定与最终状态是独立维度，
-    未经过AI不等于人工已审核。需要具体记录再用 list_admin_board/list_admin_comments。
+    aiUnreviewed仅指没有AI判定记录；人工审核次数和操作者未知，不能据此判断审核方式。
+    需要具体记录再用 list_admin_board/list_admin_comments。
     """
     if not _allowed(config):
         return base.unavailable("需要已验签的管理员身份，无法读取审核汇总。")
@@ -131,7 +132,7 @@ def get_moderation_status(config: RunnableConfig) -> object:
         result[name] = {"scope": scope,
                         "finalStatus": {key: counts[key] for key in _COUNTS[:4]},
                         "aiDecision": {key: counts[key] for key in _COUNTS[4:]},
-                        "reviewProvenance": "not_reported"}
+                        "reviewProvenance": "not_reported", "manualReviewCount": None}
     if set(data) != {"board", "comments"}:
         return base.unavailable("审核汇总缺少有效计数或分布与总数不一致。")
     return _render(result)
