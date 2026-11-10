@@ -1,4 +1,4 @@
-# Python-generated files
+# Private configuration and generated local artifacts.
 __pycache__/
 *.py[oc]
 build/
@@ -6,70 +6,46 @@ dist/
 wheels/
 *.egg-info
 
-# Virtual environments
 .venv
 .venv*/
 
-# IDE
 .vscode/
 .idea/
 
-# Private environment variants; sanitized examples remain reviewable.
 .env*
 !.env.example
 !**/.env.example
 /CLAUDE.local.md
 /.claude/settings.local.json
 
-# Host-issued bearer credentials; never publish background authorization.
 /data/delegations/
 
-# Generated audio files
-output_audio/
-
-# OS files
 Thumbs.db
 .DS_Store
-# Eval run artifacts（runs/ 留档与 last_run.json 不入 git；baseline_*.json 是受控存档，例外进 git）
-# 注：必须忽略内容（dir/*）而非目录本身（dir/），否则 negation 无法放行 baseline 文件
 eval/report/*
 !eval/report/baseline_*.json
 
-# RAG 调试中间快照（recall_eval 已走 live API，不再使用）
 eval/data/
 eval/cache/
 
-# 图谱查询产物（vectors.f32 1.4MB，由 scripts/build_word_graph.py 可重生成）
 data/word_graph/
 
-# 混合检索的向量索引（cache.f32 数百 KB + manifest/cache 的 json，由
-# rag/vector_index.py 按语料增量重建）。与图谱产物同理：可重生成、对本机之外没有意义，
-# 且换 embedding 模型就会整库失效 ⇒ 入库只会留一份过期垃圾。
 data/rag_vectors/
-
 
 logs/
 data/traces/
 
-# 改代码前的本地备份（如 graph.py 拆分前的全量副本；内容等价于 git 历史，不进库）
 agent/*.bak_*
 *.bak_*
 
-# Read-only public host contract checkout used by CI.
 _parent/
 
-# golden 草稿（含真实用户文本，绝不入库；只在本机被 REVIEW 与人工挑选用）
 eval/drafts/
 
-# mypy 的缓存（eval/type_gate.py 会跑它）
 .mypy_cache/
 
-# coverage 的并行数据文件（`tests/run_all.py --coverage` 的落点，跑完 combine 成一份）。
-# 与 eval 那些产物同理：只对这台机器的这一次跑有意义，入 git 只是给仓库添垃圾。
 .coverage-data/
 
-# pytest 的本地缓存（--lf 上次失败名单等，只对这台机器的这一次跑有意义，同上）。
 .pytest_cache/
 
-# Browser test dependencies and generated previews.
 frontend/node_modules/
