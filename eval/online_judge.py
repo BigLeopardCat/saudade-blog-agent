@@ -43,6 +43,10 @@ validated_preparation_facts是工具在准备阶段从服务读取并验证的�
 可证明准备依据，不证明写入已经执行。article_tags的resolved_tags是服务端标签解析结果：
 id为空表示本次准备未找到现有标签，可说明批准后将创建，不证明已经创建。
 它不含代写正文；正文仍逐项核对来源。
+runtime_preparation_context是同次已准备调用中产品提供的元数据，包括定时执行策略、
+触发时间语义及选择控件的默认策略；它不是业务执行回执，也不能代替service准备事实。
+selection_policy只证明初始默认选择，不证明浏览器当前已渲染或用户未改选择；
+best_effort通知不保证送达。未记录该元数据时不能用卡片正文或今日源码补造。
 validated_operation_facts描述已匹配工具调用或框架审批反馈的操作结果，后者不要求取消工具调用。
 runtime_tool_rejections仅证明运行时拦截了该次工具调用；未知工具名或错误参数不证明用户缺少业务权限，
 即使记录为tool_denied也不证明该业务所有合法路径都不可用，仍需核对当轮工具契约。
@@ -173,6 +177,18 @@ def _runtime_rejections(trace):
             and event.get("event") in {"tool_denied", "tool_error"}]
 
 
+def _preparation_contexts(trace, calls):
+    prepared = {(row.get("round"), row.get("call_id")) for row in calls
+                if row.get("kind") == "prepared" and row.get("call_id")}
+    rows = [row for row in trace.get("events", [])
+            if row.get("node") == "native" and row.get("event") == "preparation_context"
+            and (row.get("round"), row.get("call_id")) in prepared]
+    if any(row.get("complete") is not True or not isinstance(row.get("facts"), dict)
+           for row in rows):
+        raise ValueError("runtime preparation context is incomplete")
+    return rows
+
+
 def _tool_catalogs(turns):
     """Store identical recorded menus once, retaining each turn's exact reference."""
     catalogs = []
@@ -271,6 +287,7 @@ def material(case, results):
             "runtime_context": context,
             "validated_preparation_facts": preparations,
             "validated_operation_facts": operations,
+            "runtime_preparation_context": _preparation_contexts(trace, calls),
             "tool_observations": [{key: event[key] for key in
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],

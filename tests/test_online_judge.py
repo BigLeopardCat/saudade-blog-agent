@@ -534,3 +534,38 @@ def test_runtime_rejections_preserve_failed_attempts_without_claiming_business_e
     assert turn["tool_observations"] == turn["execution_receipts"] == []
     assert canary not in str(model.messages)
     assert report["counts"] == {"suspect": 1}
+
+
+def test_preparation_context_cannot_replace_verified_service_facts(tmp_path):
+    events = [{"node": "native", "event": "call", "kind": "prepared", "call_id": "a"},
+              {"node": "native", "event": "preparation_context", "call_id": "a",
+               "complete": True, "facts": {"execution_policy": {
+                   "result_notification": "best_effort"}}}]
+    case = recorded(tmp_path, trace_extra={"events": events})
+    with pytest.raises(ValueError, match="validated preparation facts"):
+        online_judge.material(case, case["result"]["rounds"])
+
+
+@pytest.mark.parametrize("field,value", [("node", "untrusted"), ("call_id", "other"),
+                                         ("round", 2)])
+def test_preparation_context_requires_same_native_prepared_call(tmp_path, field, value):
+    observed = {"node": "native", "event": "preparation_observation", "call_id": "a",
+                "complete": True, "facts": {"id": 7}}
+    context = {"node": "native", "event": "preparation_context", "call_id": "a",
+               "complete": True, "facts": {"policy": "PRIVATE_CANARY"}, field: value}
+    case = recorded(tmp_path, trace_extra={"events": [observed, context,
+        {"node": "native", "event": "call", "kind": "prepared", "call_id": "a"}]})
+    text = online_judge.material(case, case["result"]["rounds"])
+    assert json.loads(text)["turns"][0]["runtime_preparation_context"] == []
+    assert "PRIVATE_CANARY" not in text
+
+
+def test_incomplete_preparation_context_stays_unevaluated(tmp_path):
+    case = recorded(tmp_path, trace_extra={"events": [
+        {"node": "native", "event": "call", "kind": "prepared", "call_id": "a"},
+        {"node": "native", "event": "preparation_observation", "call_id": "a",
+         "complete": True, "facts": {"id": 7}},
+        {"node": "native", "event": "preparation_context", "call_id": "a",
+         "complete": False, "facts": None}]})
+    with pytest.raises(ValueError, match="runtime preparation context is incomplete"):
+        online_judge.material(case, case["result"]["rounds"])
