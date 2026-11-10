@@ -28,6 +28,16 @@ jobs:
         with:
           node-version-file: frontend/.node-version
 
+      - name: Install locked widget dependencies
+        working-directory: frontend
+        run: npm ci --ignore-scripts
+
+      - name: Widget types and reproducible static artifacts
+        working-directory: frontend
+        run: |
+          npm run typecheck
+          npm run check:generated
+
       - name: Widget Markdown security regression
         run: node --test frontend/tests/*.test.mjs
 
