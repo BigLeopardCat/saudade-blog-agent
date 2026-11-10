@@ -1,19 +1,18 @@
-# -*- coding: utf-8 -*-
 """Read-only administrator reports.
 
-Host metrics read local system state. Site reports call the Blog API with the
-requesting user's identity; the backend checks current administrator privileges.
+Diagnostics and site reports call the Blog API with the requesting user's
+identity; the backend checks current administrator privileges.
 Tool definitions are the single source of model-visible descriptions and schemas.
 """
 
 import logging
-import os
 from typing import Annotated, Literal
 
 from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 from tools import base as _base
+from tools.diagnostics import get_server_status, get_service_health
 from tools.result import ToolResult, empty, ok, unavailable
 
 # Public exports; helper names stay private to their modules.
@@ -21,54 +20,6 @@ __all__ = ["logger", "get_server_status", "get_service_health", "get_user_stats"
            "get_note_stats", "get_note_periods"]
 
 logger = logging.getLogger(__name__)
-
-@tool
-def get_server_status() -> str | ToolResult:
-    """查看服务器运行状态：CPU 核数与使用率、1/5/15 分钟负载、内存与 Swap 用量、
-    各磁盘用量与可用空间、开机时长。数据由 agent 直接读本机 /proc 得到，不经后台接口。"""
-    # Import report dependencies lazily to avoid the tool registry's import cycle.
-    from agent import hostinfo as H
-    from agent import reports as R
-    try:
-        cpu = H.cpu_percent_over()
-        mem = H.mem_summary(H.parse_meminfo(H.read_meminfo()))
-        if cpu is None and not mem:
-            # 两样都读不到 = 这根本不是一台正常机器，如实说"读不到"而不是给一张空报表
-            return unavailable("读取服务器状态失败：本机 /proc 不可读")
-        # Preserve structured measurements alongside their readable projection.
-        kw: R.ServerStatusKw = {"cpu_pct": cpu, "cores": os.cpu_count() or 0,
-              "load": H.parse_loadavg(H.read_loadavg()), "mem": mem,
-              "disks": H.disk_rows(), "uptime_s": H.read_uptime()}
-        return ok(R.render_server_status(**kw), data=kw)
-    except Exception as exc:
-        logger.exception("get_server_status failed")
-        return unavailable(f"读取服务器状态失败: {exc}")
-
-
-@tool
-def get_service_health() -> str | ToolResult:
-    """读取当前服务状态、重启次数、历史探针记录、对话计数和日志体积，仅管理员。
-    当前状态不能证明历史一直正常；这些读数不证明故障原因。
-    """
-    from agent import hostinfo as H
-    from agent import reports as R
-    try:
-        services = [(unit, H.service_show(unit)) for unit in H.SERVICES]
-        health = H.parse_health_log(H.read_text_tail(H.HEALTH_LOG),
-                                    H.health_window(24))
-        kw: R.ServiceHealthKw = {"services": services, "health": health,
-              "traces": H.trace_stats(), "sizes": H.log_sizes()}
-        return ok(R.render_service_health(**kw), data=kw)
-    except Exception as exc:
-        logger.exception("get_service_health failed")
-        return unavailable(f"读取服务健康失败: {exc}")
-
-
-
-
-
-
-
 
 @tool
 def get_user_stats(config: RunnableConfig) -> str | ToolResult:

@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from agent import hostinfo, reports
 from eval import daily_metrics, request_metrics, traffic_purpose
 
 BUILD = "a" * 40
@@ -165,14 +164,6 @@ def test_real_cli_accepts_repeated_reports_and_keeps_all_traffic(tmp_path, mode)
         assert measured["views"]["excluding_known_evaluation"]["coverage"]["requests"] == 1
 
 
-def test_host_statistics_are_explicitly_all_traffic_without_reading_reports(tmp_path, monkeypatch):
-    paths, _, _ = evidence(tmp_path)
-    monkeypatch.setattr(hostinfo, "TRACES_DIR", str(Path(paths[0]).parent))
-    stats = hostinfo.trace_stats()
-    assert stats["traffic_scope"] == "all_traffic" and stats["includes_evaluations"]
-    assert stats["rounds"] == 2
-    rendered = reports.render_service_health(services=[], health={}, traces=stats, sizes=[])
-    assert "今日服务请求（含评测）" in rendered and "今日对话" not in rendered
 
 
 @pytest.mark.parametrize("conflicting", [False, True])

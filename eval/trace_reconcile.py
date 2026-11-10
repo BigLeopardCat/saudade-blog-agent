@@ -1,13 +1,4 @@
-# -*- coding: utf-8 -*-
-"""跨源对账：trace ↔ agent.log ↔ monitor.log，对不上就是异常。
-
-本脚本做确定性对账：零 LLM、零网络、零 DB、**只读**。三个源与各自权威的东西：
-  · `logs/agent/traces/*.json` / `*.json.*.gz`  每轮一份 trace（trace_id / user_id /
-    started_at / end_reason / frames / events）
-  · `logs/agent/agent.log(.N.gz)`               每轮收尾一行 `[stream] end reason=…
-    duration=…s frames=…`（同一行带 `tid=`）
-  · `logs/frontend/monitor.log`                 前端错误上报（POST /api/monitor/log，匿名可写）
-"""
+"""Reconcile request traces, HTTP completion logs and frontend lifecycle evidence offline."""
 import argparse
 import glob
 import gzip
@@ -22,21 +13,16 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import settings  # noqa: E402
 from utils.trace_files import iter_trace_files  # noqa: E402
-from utils.trace_io import load_trace  # noqa: E402  （读取的唯一实现，含 gz）
+from utils.trace_io import load_trace  # noqa: E402
 
-# ── CLI 默认路径（读者函数一律把路径当参数收，模块常量只给 CLI 与自测用）──────
 TRACE_DIR = settings.trace_dir
-AGENT_LOG_DIR = os.path.join(settings.blog_root, "logs", "agent") if settings.blog_root else ""
-MONITOR_DIR = os.path.join(settings.blog_root, "logs", "frontend") if settings.blog_root else ""
-HEALTH_LOG = os.path.join(settings.blog_root, "logs", "health.log") if settings.blog_root else ""
 REPORT_DIR = "eval/report"
 
 TS_FMT = "%Y-%m-%d %H:%M:%S"
-CLUE_MIN = 15        # 弹窗轮 ↔ confirm_card 的配对窗口（分钟），见判据 ⑥
+CLUE_MIN = 15  # Maximum confirmation/error correlation window, in minutes.
 SHOW_MAX = 8         # 报告里每类最多列几条明细
 
-# `2026-09-24 00:12:25 | server | INFO | tid=r32bdcf8… | [stream] end reason=… duration=…s frames=…`
-# tid 用非贪婪（它后面紧跟 ` | [stream] end`）；行首 19 字符是本地钟面时间戳。
+# Match the complete request identifier before the stream completion record.
 STREAM_END_RE = re.compile(
     r"^(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}).*?(?:request_id|tid)=(.*?) \| \[stream\] end "
     r"reason=(\S+) duration=([\d.]+)s frames=(\d+)")
@@ -46,7 +32,7 @@ MON_HEAD_RE = re.compile(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})(?:[.,]\d+)? \S
 MON_FAILURE_TYPES = ("confirm_card", "orphan_dom_drop")
 # Normal confirmation lifecycle messages are not frontend failures.
 FLOW_TYPE = "confirm_flow"
-# 弹窗链上五个阶段（判据 ⑦ 按它数跳、缺哪一跳点名哪一跳）
+# Confirmation lifecycle stages used for completeness checks.
 FLOW_STAGES = ("frame", "card", "click", "sent", "settle")
 # `type=confirm_flow uid=… url=… msg=stage=frame n=1 id=c1 opts=2 exp=no q=… stack=`
 # 埋点把阶段与字段拼在 message 里（`k=v` 空格分隔，q 里的空白已被前端压成单空格）。
@@ -84,7 +70,7 @@ def read_traces(trace_dir: str, since: datetime, until: datetime) -> dict:
 
     `index` 是**全量**（不按窗口过滤）的 tid → [rec…]，只用于"这个 tid 到底有没有
     trace"的存在性判定；`records` 才是窗口内的，用于 ①②③④ 的明细与统计。
-    uid==0 的是 golden/诊断产出的形状（`golden_trace.py` 恒传 0），跳过并计数。
+    uid==0 的诊断记录单独计数，不计入业务请求。
     """
     index = defaultdict(list)
     records, bad, uid0, odd = [], 0, 0, []
@@ -214,7 +200,7 @@ def reconcile(trace_dir: str, log_dir: str, monitor_dir: str,
     def in_interval(t):
         return bool(judge and interval[0] <= t <= interval[1])
 
-    # 自检：一条收尾行都没有而 trace 一堆 ⇒ 更像是"日志级别/轮转改了"，不是"N 条对不上"
+    # Missing completion-log coverage is distinct from individual missing records.
     self_check = ""
     if not ends and tr["records"]:
         self_check = (f"窗口内 trace {len(tr['records'])} 份、收尾行 0 条——"
@@ -321,9 +307,7 @@ def reconcile(trace_dir: str, log_dir: str, monitor_dir: str,
         for r, c in ch["results"].items():
             flow_results[r] = flow_results.get(r, 0) + c
 
-    # 卫生项（生产目录里的异物）**不算异常**：它是"有人把 golden/诊断产物落错了地方"，
-    # 不是这一夜的对账结果，报在报告里、进一行结论，但不该让 health.log 每晚响一次
-    # （响多了就没人看了——那条通道要留给真异常）。
+    # Unexpected files are reported separately from request reconciliation failures.
     anomalies = {
         "trace_without_end": trace_without_end,
         "end_without_trace": end_without_trace,
@@ -373,8 +357,7 @@ def render_md(r: dict) -> str:
         A(f"⚠️ {r['self_check']}")
         A("")
     if r["flow_chains"] or r["flow_noid"]:
-        # 弹窗链是**信息**不是异常（判据 ⑦ 的说明在文件头）：这一行说的是"这一夜里
-        # 用户点过多少次确定、各自以什么结束"，跳数不齐的另在下面点名。
+        # Lifecycle counts describe observed transitions, not successful writes.
         res = "、".join(f"{k} {v}" for k, v in sorted(r["flow_results"].items())) or "（无结论记录）"
         A(f"弹窗链：{r['flow_chains']} 条（{r['flow_events']} 条埋点）"
           f"｜结论分布：{res}"
@@ -453,18 +436,18 @@ def summarize(r: dict) -> str:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=1,
-                    help="近 N 天（默认 1：只对账刚过去这一夜，见文件头）")
+                    help="近 N 天（默认 1）")
     ap.add_argument("--from", dest="since", default="", help="起点日期 20260922")
     ap.add_argument("--to", dest="until", default="", help="终点日期 20260923（含当天）")
     ap.add_argument("--trace-dir", default=TRACE_DIR)
-    ap.add_argument("--log-dir", default=AGENT_LOG_DIR)
-    ap.add_argument("--monitor-dir", default=MONITOR_DIR)
-    ap.add_argument("--health-log", default=HEALTH_LOG)
+    ap.add_argument("--log-dir", default="")
+    ap.add_argument("--monitor-dir", default="")
+    ap.add_argument("--health-log", default="")
     ap.add_argument("--report-dir", default=REPORT_DIR)
     ap.add_argument("--json", action="store_true", help="只打印结果 JSON（管道/程序读）")
     args = ap.parse_args()
     if not args.log_dir or not args.monitor_dir:
-        ap.error("Set BLOG_ROOT or provide --log-dir and --monitor-dir; host logs are unavailable")
+        ap.error("Provide --log-dir and --monitor-dir; host logs are unavailable")
 
     now = datetime.now()
     if args.since:
@@ -493,7 +476,7 @@ def main():
     print(summarize(r))
     print(f"报告: {md}")
     if r["has_anomaly"] and args.health_log:
-        # 只在异常时进 health.log（同既有约定：干净就不写，一行都不多）
+        # Append only diagnosed reconciliation failures.
         try:
             with open(args.health_log, "a", encoding="utf-8") as f:
                 f.write(f"{now.strftime(TS_FMT)} WARN [trace-reconcile] {summarize(r)}\n")
