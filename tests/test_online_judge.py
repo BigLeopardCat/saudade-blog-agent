@@ -506,3 +506,31 @@ def test_batch_card_controls_come_from_captured_ui_not_signed_action_count(tmp_p
     rounds[0]["http_events"] = []
     current = json.loads(online_judge.material(case, rounds))["turns"][0]
     assert current["confirmation_controls"] == []
+
+
+def test_runtime_rejections_preserve_failed_attempts_without_claiming_business_execution(tmp_path):
+    canary = secrets.token_urlsafe(24)
+    events = [
+        {"node": "native", "event": "tool_denied", "name": "add_favorite", "token": canary},
+        {"node": "native", "event": "tool_error", "name": "invented_preparation",
+         "call_id": "unknown", "round": 1, "reason": "unknown_tool", "args": {"secret": canary}},
+        {"node": "native", "event": "tool_error", "name": "load_favorites_info_tools",
+         "call_id": "bad_args", "round": 2, "reason": "invalid_arguments"},
+        {"node": "model", "event": "tool_denied", "name": "not_runtime_evidence"},
+    ]
+    case = recorded(tmp_path, trace_extra={"events": events}, confirm_payloads=[])
+    model = Model({"unsupported": [], "answered": False, "verdict": "suspect",
+                   "reason": "调用被拒不代表合法的准备工具不可用，任务未完成"})
+    report = run(tmp_path, case, model)
+    material = json.loads(model.messages[0][1]["content"])
+    turn = material["turns"][0]
+    assert turn["runtime_tool_rejections"] == [
+        {"event": "tool_denied", "name": "add_favorite"},
+        {"event": "tool_error", "name": "invented_preparation", "call_id": "unknown",
+         "round": 1, "reason": "unknown_tool"},
+        {"event": "tool_error", "name": "load_favorites_info_tools", "call_id": "bad_args",
+         "round": 2, "reason": "invalid_arguments"},
+    ]
+    assert turn["tool_observations"] == turn["execution_receipts"] == []
+    assert canary not in str(model.messages)
+    assert report["counts"] == {"suspect": 1}
