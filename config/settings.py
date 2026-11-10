@@ -142,10 +142,6 @@ class Settings(BaseSettings):
     max_concurrent_streams: int = Field(default=8, gt=0, validation_alias="AGENT_MAX_CONCURRENT")
     review_concurrency: int = Field(default=4, gt=0, validation_alias="AGENT_MAX_REVIEW")
 
-    # ── TTS (Text-to-Speech) ───────────────────────────────────────
-    tts_enabled: bool = False
-    tts_voice: str = "zh-CN-XiaoyiNeural"
-
     # ── IoT 设备服务（ESP32 OLED 显示等）─────────────────────────────
     # Independent identity and approval keys; backend capabilities are host-issued.
     confirmation_secret: str = Field(default="", validation_alias="AGENT_CONFIRM_SECRET")

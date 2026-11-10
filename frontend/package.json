@@ -4,12 +4,20 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
-    "test:browser": "node tests/chat-ui.browser.mjs"
+    "test:browser": "node tests/chat-ui.browser.mjs",
+    "build": "node scripts/build.mjs",
+    "check:generated": "node scripts/build.mjs --check",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "playwright": "1.64.1"
+    "playwright": "1.64.1",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3"
   },
   "engines": {
     "node": ">=24.22.1 <25"
+  },
+  "dependencies": {
+    "eventsource-parser": "4.1.2"
   }
 }

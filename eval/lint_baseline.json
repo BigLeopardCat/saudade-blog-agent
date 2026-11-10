@@ -31,7 +31,6 @@
     "tests/test_judge_offline.py": 25,
     "tests/test_module_budget.py": 2,
     "tests/test_reconcile_offline.py": 6,
-    "tests/test_widget_pin_drift.py": 1,
-    "utils/tts.py": 1
+    "tests/test_widget_pin_drift.py": 1
   }
 }

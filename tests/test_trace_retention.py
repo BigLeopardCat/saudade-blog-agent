@@ -91,7 +91,7 @@ def main() -> int:
               "by_day=False" in src("eval/golden_trace.py"))
 
         # ── ② 枚举：只认 <YYYYMMDD> 子目录，别的子目录不是 trace ─────────────
-        write(os.path.join(prod, "output_audio", "clip.json"))
+        write(os.path.join(prod, "unrelated-data", "clip.json"))
         write(os.path.join(prod, "20250101", "20250101T000000_1_deadbeef.json"))
         write(os.path.join(prod, "20250102", "20250102T000000_2_deadbeef.json.gz"))
         write(os.path.join(prod, "20250103T000000_3_legacy00.json"))
@@ -102,8 +102,8 @@ def main() -> int:
               and any(n.startswith("2025") and n.endswith(".json") and os.sep in n for n in names)
               and any(n.endswith(".json.gz") for n in names),
               str(sorted(names)[:4]))
-        check("② output_audio/ 之类的子目录**不**枚举",
-              not any("output_audio" in n for n in names))
+        check("② unrelated-data/ 之类的子目录**不**枚举",
+              not any("unrelated-data" in n for n in names))
         check("② 目录不存在 ⇒ 空表不抛",
               tf.iter_trace_files(os.path.join(tmp, "nope")) == [])
 
