@@ -94,6 +94,7 @@
           headers: {Authorization: 'Bearer ' + token()}, cache: 'no-store',
           signal: AbortSignal.timeout(10000),
         });
+        if (!active() || current() !== anchor) return;
         if ([401, 403].includes(response.status)) {
           forbidden = true; pending.clear(); throw new Error('image_job_forbidden');
         }
@@ -108,7 +109,7 @@
           receive(row);
           if (['generating', 'saving'].includes(row.status)) void watch(row);
         }
-      } catch (error) { report('list_unavailable', '', error.message); }
+      } catch (error) { if (current() === anchor) report('list_unavailable', '', error.message); }
       finally { fetching = false; }
     };
     const tick = async () => {
