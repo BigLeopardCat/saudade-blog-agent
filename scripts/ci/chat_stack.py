@@ -392,7 +392,6 @@ def run(args):
             "AGENT_STREAM_IDLE_TIMEOUT": "15",
             "AGENT_STREAM_TOTAL_TIMEOUT": "45",
             "BLOG_API_BASE": "http://127.0.0.1:18081/api/public",
-            "GRAPH_API_BASE": "http://127.0.0.1:18081/api/public",
             "AGENT_ADMIN_BASE": "http://127.0.0.1:18081",
             "SCHEDULING_ENABLED": "0",
             "IOT_ENABLED": "0",
