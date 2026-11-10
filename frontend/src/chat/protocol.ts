@@ -59,7 +59,7 @@ export function decode({event, data}: Pick<EventSourceMessage, 'event' | 'data'>
     if (object(value) && typeof value.text === 'string'
         && value.text.length > 0 && value.text.length <= 300
         && globalThis.__waifuWorkProgress?.valid(value.work)) {
-      return {type: event, data: {text: value.text, work: value.work}};
+      return {type: event, data: value as {text: string; work: Work}};
     }
   }
   if ((event === 'done' || event === 'text_reset') && object(value)
