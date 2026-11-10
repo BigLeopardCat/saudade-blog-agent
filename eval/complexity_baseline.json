@@ -43,10 +43,6 @@
     "c": 31,
     "lines": 41
   },
-  "scripts/build_word_graph.py::main": {
-    "c": 39,
-    "lines": 219
-  },
   "tests/test_artifact_retention.py::main": {
     "c": 38,
     "lines": 170
@@ -70,10 +66,6 @@
   "tests/test_golden_fixture_corpus.py::test_golden_fixture_corpus": {
     "c": 57,
     "lines": 156
-  },
-  "tests/test_graph_build.py::test_graph_build": {
-    "c": 40,
-    "lines": 233
   },
   "tests/test_judge_offline.py::main": {
     "c": 75,

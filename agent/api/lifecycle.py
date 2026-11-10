@@ -9,7 +9,7 @@ from fastapi import FastAPI
 from agent.runtime.workers import RequestWorkers
 from config.settings import settings
 from rag import search as rag_search
-from rag import vector_index, wordgraph
+from rag import vector_index
 from utils.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -49,9 +49,8 @@ async def lifespan(app: FastAPI):
         app.state.runtime = build_runtime(resources)
         app.state.scheduling = getattr(getattr(app.state.runtime, "application", None),
                                        "scheduling", None)
-        logger.info("Native agent ready")
+        logger.info("Agent ready")
         # Optional warmups do not block startup.
-        workers.warm_up(wordgraph.warm)
         workers.warm_up(rag_search.warm)
         yield
     finally:

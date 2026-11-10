@@ -39,8 +39,6 @@ eval/report/*
 eval/data/
 eval/cache/
 
-# 图谱查询产物（vectors.f32 1.4MB，由 scripts/build_word_graph.py 可重生成）
-data/word_graph/
 
 # 混合检索的向量索引（cache.f32 数百 KB + manifest/cache 的 json，由
 # rag/vector_index.py 按语料增量重建）。与图谱产物同理：可重生成、对本机之外没有意义，

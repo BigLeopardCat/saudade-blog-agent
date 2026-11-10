@@ -25,7 +25,6 @@ DEFAULT_REPORT_ROOT = os.path.join(REPO, "eval", "report")
 KEEP_DAYS_ARCHIVE = 90
 KEEP_COUNT_REPORTS = 20
 KEEP_COUNT_DRAFTS = 10
-KEEP_COUNT_WORDGRAPH = 10
 KEEP_COUNT_SLOT_STABILITY = 10
 # Must match eval.pg_retention.KEEP_DAYS_DEFAULT.
 KEEP_DAYS_CHECKPOINT = 30
@@ -42,7 +41,6 @@ def store_of(c: dict) -> str:
 # Report family names use YYYYMMDD-HHMMSS or YYYYMMDD_HHMMSS timestamps.
 FAMILY_RE = re.compile(r"^([a-z][a-z0-9_]*?)_(\d{8})[-_](\d{6})\.(md|jsonl)$")
 
-WORDGRAPH_RE = re.compile(r"^(\d{8})-(\d{6})_")
 SLOT_STABILITY_RE = re.compile(r"^(\d{8})_(\d{6})_\d{3}\.json$")
 
 
@@ -286,19 +284,7 @@ CLASSES = [
         rule=dict(kind="keep-count", keep=KEEP_COUNT_SLOT_STABILITY,
                   name_re=SLOT_STABILITY_RE.pattern),
     ),
-    dict(
-        key="wordgraph-builds",
-        label="词图构建中间产物",
-        root=DEFAULT_REPORT_ROOT,
-        patterns=["wordgraph/**"],
-        status="managed",
-        owner="eval/artifact_retention.py",
-        owner_ref="eval/artifact_retention.py",
-        retention=f"保留最近 {KEEP_COUNT_WORDGRAPH} 份",
-        why="`<YYYYMMDD>-<HHMMSS>_vocab.txt|build.json`，重建一次落一套。"
-            "产物本身由 `rag/wordgraph.py` 从语料重算 ⇒ 旧的是可再生的中间态，不是证据",
-        rule=dict(kind="keep-count", keep=KEEP_COUNT_WORDGRAPH, name_re=WORDGRAPH_RE.pattern),
-    ),
+
 ]
 
 

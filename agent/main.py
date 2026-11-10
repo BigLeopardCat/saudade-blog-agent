@@ -12,7 +12,6 @@ from agent.api.routes import (
     automations,
     chat,
     conversations,
-    knowledge_graph,
     moderation,
     operations,
     task_inputs,
@@ -46,7 +45,6 @@ def create_app() -> FastAPI:
         automations.router,
         conversations.router,
         task_inputs.router,
-        knowledge_graph.router,
         moderation.router,
         operations.router,
     ):

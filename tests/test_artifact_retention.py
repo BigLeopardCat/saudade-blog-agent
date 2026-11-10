@@ -67,11 +67,6 @@ def build_fixture(root: str) -> None:
     write(f"{root}/archive/new.log", age_days=1)
     write(f"{root}/archive/DELETED-20260925.txt", age_days=100)      # frozen：永不删
     write(f"{root}/archive/chat_conv_20260903_pre.sql", age_days=200)  # frozen：永不删
-    for stamp, age in (("20260901-101010", 5), ("20260902-101010", 4), ("20260903-101010", 3)):
-        write(f"{root}/wordgraph/{stamp}_vocab.txt", age_days=age)
-        write(f"{root}/wordgraph/{stamp}_build.json", age_days=age)
-    # 越界诱饵：名字形态与词图产物一模一样，但在 runs/ 下 ⇒ wordgraph 类**不许**碰
-    write(f"{root}/runs/20260831-133434_vector_poc.json", age_days=30)
     # 报告族：3 份旧 + 1 份新（新那份的 mtime **故意拨到最老**，验判据取文件名戳）
     for n, d in ((1, "20260101_000000"), (2, "20260102_000000"), (3, "20260103_000000")):
         write(f"{root}/review_{d}.md", age_days=10)
@@ -107,23 +102,6 @@ def main() -> int:
               == {"archive-audit-log", "archive-sql-backup"})
         check("① 归属判据认 root（同一路径在夹具根下则不属于 logs 的类）",
               rm.owner_of("archive/old.log", a["root"]) is None)
-
-        # ── ② wordgraph：整组删 + **绝不越界到 runs/** ────────────────────
-        w = ar.plan(classes=with_rule("wordgraph-builds", keep=1),
-                    only="wordgraph-builds", roots={"wordgraph-builds": root})[0]
-        check("② wordgraph 只数自己 patterns 内的 6 个文件",
-              w["files"] == 6, f"files={w['files']}")
-        check("② 留最新一套（整组两个文件都在）、删掉另两套的 4 个",
-              rels(root, w["delete"]) == {
-                  "wordgraph/20260901-101010_vocab.txt", "wordgraph/20260901-101010_build.json",
-                  "wordgraph/20260902-101010_vocab.txt", "wordgraph/20260902-101010_build.json"},
-              str(sorted(rels(root, w["delete"]))))
-        check("② **越界诱饵没被碰**：runs/ 下的同形文件不在待删表里",
-              not any(p.startswith("runs/") for p in rels(root, w["delete"])))
-        check("② 留的那套是「戳最新」而不是「mtime 最新」",
-              all("20260903-101010" not in p for p in rels(root, w["delete"])))
-        check("② 报告名（notes.md / idle.md）不在 wordgraph 的视野里",
-              w["unknown"] == [], str(w["unknown"]))
 
         # ── ③ eval-reports：按族留 N 份，判据取**文件名里的跑次** ───────────
         r = ar.plan(classes=with_rule("eval-reports", keep=1),
@@ -166,7 +144,7 @@ def main() -> int:
         # ── ④ 哪些类真的会执行 ───────────────────────────────────────────
         keys = [p["key"] for p in ar.plan()]
         check("④ 只有带 rule 的类被执行（trace / golden-traces 有别的执行者）",
-              keys == ["archive", "eval-reports", "slot-stability", "wordgraph-builds"], str(keys))
+              keys == ["archive", "eval-reports", "slot-stability"], str(keys))
         check("④ trace-audio 是 open ⇒ 本轮不执行（登记了但还没接管）",
               "trace-audio" not in keys)
 
@@ -230,12 +208,12 @@ def main() -> int:
         # ── ⑨ --json 可解析、字段齐 ──────────────────────────────────────
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            rc = ar.main(["--only", "wordgraph-builds", "--root", root, "--json"])
+            rc = ar.main(["--only", "slot-stability", "--root", root, "--json"])
         d = json.loads(buf.getvalue())
         check("⑨ --json 可解析、applied=False、字段齐",
               rc == 0 and d["applied"] is False and d["deleted"] == 0
               and {"classes", "deleted", "freed_bytes", "errors"} <= set(d)
-              and d["classes"][0]["key"] == "wordgraph-builds", str(sorted(d)[:5]))
+              and d["classes"][0]["key"] == "slot-stability", str(sorted(d)[:5]))
 
         # ── ⑩ 表里没有的 key 不许被当成"跑过了" ──────────────────────────
         buf = io.StringIO()

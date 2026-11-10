@@ -98,7 +98,6 @@ def test_concurrent_persistent_applications_own_their_pools(
             yield AIMessageChunk(content="reply")
 
     monkeypatch.setattr(lifecycle, "setup_logging", lambda: None)
-    monkeypatch.setattr(lifecycle.wordgraph, "warm", lambda: None)
     monkeypatch.setattr(lifecycle.rag_search, "warm", lambda: None)
     monkeypatch.setattr(native, "get_llm", lambda **kwargs: Model())
     first, second = create_app(), create_app()
