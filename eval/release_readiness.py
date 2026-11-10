@@ -29,7 +29,7 @@ def task_class(tags):
         ("multi", {"multi_intent"}), ("control", {"confirmation"}),
         ("conversation", {"memory", "multi_turn"}), ("prepare", {"write_prepare"}),
         ("browser", {"browser"}), ("article_read", {"body", "comparison", "dependency"}),
-        ("read", {"read", "retrieval", "accounts"}),
+        ("read", {"read", "retrieval", "accounts", "capabilities"}),
     ):
         if tags & matches:
             return name
