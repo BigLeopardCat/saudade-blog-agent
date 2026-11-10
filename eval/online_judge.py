@@ -165,6 +165,14 @@ def _observations(trace):
                    and (event.get("round"), event.get("call_id")) in ids], operations
 
 
+def _runtime_rejections(trace):
+    """Keep runtime refusal evidence separate from executed business observations."""
+    return [{key: event[key] for key in ("event", "name", "call_id", "round", "reason")
+             if key in event}
+            for event in trace.get("events", []) if event.get("node") == "native"
+            and event.get("event") in {"tool_denied", "tool_error"}]
+
+
 def _tool_catalogs(turns):
     """Store identical recorded menus once, retaining each turn's exact reference."""
     catalogs = []
@@ -266,11 +274,7 @@ def material(case, results):
             "tool_observations": [{key: event[key] for key in
                                    ("name", "args", "kind", "result") if key in event}
                                   for event in calls if event.get("kind") != "prepared"],
-            "runtime_tool_rejections": [
-                {key: event[key] for key in ("event", "name", "call_id", "round", "reason")
-                 if key in event}
-                for event in trace.get("events", []) if event.get("node") == "native"
-                and event.get("event") in {"tool_denied", "tool_error"}],
+            "runtime_tool_rejections": _runtime_rejections(trace),
             "execution_receipts": result.get("exec_rows", []),
             "proposed_actions_not_facts": _proposed_actions(result),
             "interactive_image_reviews_to_review": _image_reviews(result.get("http_events", [])),
