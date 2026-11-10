@@ -11,19 +11,29 @@ from agent.runtime.turns import check_cancelled
 from tools.result import ok
 
 
-def supersede(previous, incoming, grant, principal):
+def superseded_message(message):
+    prepared = (message.artifact or {}).get("kind") == "prepared"
+    return message.model_copy(update={"content": json.dumps({
+        "status": "not_executed", "reason": "superseded_by_user_feedback",
+        "prepared": prepared, "confirmation_revoked": prepared,
+        "approval": "revoked" if prepared else "not_requested_for_this_operation",
+    }), "artifact": None})
+
+
+def supersede(previous, incoming, grant, principal, specs=()):
     from agent.runtime import approval, memory
 
     messages, name = [], "approval_feedback"
     for message in previous:
-        if isinstance(message, ToolMessage) and (message.artifact or {}).get("kind") == "prepared":
-            name = message.name or name
-            message = message.model_copy(update={"content": json.dumps({
-                "status": "not_executed", "reason": "superseded_by_user_feedback"}),
-                "artifact": None})
+        artifact = getattr(message, "artifact", None) or {}
+        if isinstance(message, ToolMessage) and (
+                artifact.get("kind") == "prepared" or artifact.get("phase") == "deferred"):
+            if artifact.get("kind") == "prepared":
+                name = message.name or name
+            message = superseded_message(message)
         messages.append(message)
     observed = observation({"name": name, "args": {}, "id": "feedback_" + grant["jti"]},
-        ok(json.dumps(approval.superseded_fact(), ensure_ascii=False)))
+        ok(json.dumps(approval.superseded_fact(specs), ensure_ascii=False)))
     current = memory.turn_messages(incoming, observed, "", principal)[:-1]
     return memory.checkpoint_messages([], [*messages, *current])
 

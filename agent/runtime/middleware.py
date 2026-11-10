@@ -205,9 +205,7 @@ class SessionMiddleware(AgentMiddleware):
             if isinstance(message, ToolMessage) and (
                     message.tool_call_id == session.state["awaiting_call"]
                     or (message.artifact or {}).get("phase") == "deferred"):
-                message = message.model_copy(update={"content": json.dumps({
-                    "status": "not_executed", "reason": "superseded_by_user_feedback"}),
-                    "artifact": None})
+                message = approval_messages.superseded_message(message)
                 replacements.append(message)
             messages.append(message)
         extra = facts.get("model_input", facts.get("input")) or []

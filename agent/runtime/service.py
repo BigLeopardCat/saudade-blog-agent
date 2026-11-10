@@ -173,10 +173,11 @@ class AgentRuntime:
             self.inputs.finish(snapshot.run, set())
             self.inputs.open(task, retry=True)
         messages = supersede(snapshot.messages, incoming, pending.grant,
-                             config["configurable"]["principal"])
+                             config["configurable"]["principal"], pending.action["specs"])
         self.store.replace_pending(config, pending.grant["jti"], task, messages)
         record("native", "approval_feedback", facts={key: value
-            for key, value in approval.superseded_fact().items() if key != "result"})
+            for key, value in approval.superseded_fact(pending.action["specs"]).items()
+            if key != "result"})
         record("native", "task_replaced", prior_task_id=snapshot.run["id"], task_id=task_id)
         yield from self._resume_task(self.store.load(config), task_id, config)
 

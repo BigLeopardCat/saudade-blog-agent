@@ -379,18 +379,8 @@ def _daily_window_lines(window):
     return lines
 
 
-def render_note_stats(data: dict, now: datetime | None = None) -> str:
-    """Render backend totals, independent rankings and the bounded daily series."""
-    data = data or {}
-    totals = [(w, _count_int(data.get(k))) for k, w in _TOTAL_WORDS]
-    lines = [f"文章流量报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）",
-             "- 历史累计合计（只算当前可见文章，不是本期合计）："
-             + ("、".join(f"{w} {n}" for w, n in totals if n is not None)
-                or "本次没读到合计值")]
-    lines += _rank_block("历史累计阅读榜", data.get("topViewed"), "views")
-    lines += _rank_block("历史累计点赞榜", data.get("topLiked"), "likes")
-    lines += _rank_block("历史累计收藏榜", data.get("topFavorited"), "favorites")
-
+def _daily_lines(data):
+    lines = []
     # Missing daily data differs from a measured all-zero series.
     daily = data.get("daily")
     lines += _daily_window_lines(data.get("dailyWindow"))
@@ -411,10 +401,33 @@ def render_note_stats(data: dict, now: datetime | None = None) -> str:
         lines.append(f"- 逐日明细（返回 {len(rows)} 个日期，保留零值；未返回日期和指标保持未知）: "
                      f"{prefix}{days}")
 
+    return lines
+
+
+def render_note_stats(data: dict, now: datetime | None = None) -> str:
+    """Render backend totals, independent rankings and the bounded daily series."""
+    data = data or {}
+    totals = [(w, _count_int(data.get(k))) for k, w in _TOTAL_WORDS]
+    lines = [f"文章流量报表（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）",
+             "- 历史累计合计（只算当前可见文章，不是本期合计）："
+             + ("、".join(f"{w} {n}" for w, n in totals if n is not None)
+                or "本次没读到合计值")]
+    lines += _rank_block("历史累计阅读榜", data.get("topViewed"), "views")
+    lines += _rank_block("历史累计点赞榜", data.get("topLiked"), "likes")
+    lines += _rank_block("历史累计收藏榜", data.get("topFavorited"), "favorites")
+
+    lines += _daily_lines(data)
+
     # Each metric ranks independently; positions cannot be shared between rankings.
     lines.append("- 名次口径：阅读/点赞/收藏三张榜各自独立排名（同一篇文章在两张榜上"
                  "的名次可以不同）")
     return _cap("\n".join(lines))
+
+
+def render_note_daily(data: dict, now: datetime | None = None) -> str:
+    """A focused daily view does not spend its bounded space on lifetime rankings."""
+    lines = [f"文章日趋势（{_ts(now)}，生成于 {data.get('generatedAt') or '未知'}）"]
+    return _cap("\n".join([*lines, *_daily_lines(data)]))
 
 
 # Publication periods use inclusive start/end bounds and explicit partial coverage.

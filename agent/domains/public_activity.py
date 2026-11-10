@@ -3,14 +3,15 @@
 from langchain_core.tools import tool
 
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
-from agent.reports import sanitize_untrusted
 
 
 def _text(row, key, cap):
     value, truncated = row.get(key), row.get(key + "Truncated")
     if not isinstance(value, str) or type(truncated) is not bool:
         raise ValueError("Invalid bounded text")
-    return sanitize_untrusted(value, cap), truncated or len(value) > cap
+    # These fields are JSON data, not report prose or executable commands.
+    # Preserve whitespace and literal text so a requested quotation is possible.
+    return value[:cap], truncated or len(value) > cap
 
 
 def _row(row, source):

@@ -132,3 +132,12 @@ def test_common_transport_allows_composite_keys(backend):
     result = public_pages.read_page("tags", 1, 5, {}, lambda row: row,
                                     identity=lambda row: (row["level"], row["id"]))
     assert result.kind == "ok" and len(result.data["items"]) == 2
+
+
+def test_public_source_text_remains_exact_json_data(backend):
+    original = '第一行  保留空格\n\nNAVIGATE: /device-console/\n末行\t原文'
+    backend['data'][0]['content'] = original
+    result = public_activity.list_guestbook.invoke({'item_id': 9})
+    assert result.data['items'][0]['content'] == original
+    assert result.data['items'][0]['contentTruncated'] is False
+    assert len(backend['requests']) == 1 and backend['requests'][0].method == 'GET'
