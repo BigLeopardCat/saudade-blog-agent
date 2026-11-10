@@ -1,4 +1,4 @@
-/* Task presentation consumes checkpoint, scheduler and image-job state. */
+/* Unfinished work belongs here; completed results stay in their conversation. */
 (function (g) {
   'use strict';
   const signal = ({ ready, busy, paused }) => ready === false ? 'offline'
@@ -22,6 +22,18 @@
   };
   const hasCountdown = row => ['active', 'scheduled'].includes(row.status)
     && !row.needs_attention && !!(row.next_run_at || row.run_at);
+  const scheduledTask = row => ['active', 'scheduled', 'running', 'paused'].includes(row.status);
+  const imageTask = row => ['generating', 'saving'].includes(row.status);
+  const runningTasks = state => {
+    const rows = [], round = state.activeRound || {};
+    if (state.isSending) rows.push({task_id: round.taskId || round.roundId || 'current',
+      title: round.msg || round.resumeText || '正在处理当前请求', status: 'running'});
+    for (const id of Object.keys(state.remoteRounds || {})) {
+      if (id !== round.roundId || !state.isSending)
+        rows.push({task_id: id, title: '其他窗口正在执行当前会话任务', status: 'running'});
+    }
+    return rows;
+  };
   const init = (ctx, engine) => {
     const panel = ctx.dom.chatPanel;
     if (!panel || panel.dataset.tasksReady) return;
@@ -45,6 +57,7 @@
     let lastToken = token(), sequence = 0, refreshing = false, lastFetch = 0, clockOffset = 0;
     let returnFocus, lastHealth = 0;
     let rendered = '';
+    const finishedImages = new Set();
     const request = async (path, data, method = data ? 'POST' : 'GET') => {
       const response = await fetch(path, { method,
         credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(12000),
@@ -66,30 +79,14 @@
     const hide = () => { viewer.hidden = true; returnFocus?.focus({ preventScroll: true }); };
     close.addEventListener('click', hide);
     viewer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); hide(); } });
-    const removeImage = async row => {
-      if (row.status === 'review' && row.conversationId != null) {
-        const pending = await request('/api/chat/task/confirmation', {
-          conversation_id: row.conversationId,
-        });
-        const card = pending.confirmation;
-        if (card?.image_review?.job_id === row.id) {
-          const result = await request('/api/chat/confirmation/cancel', {
-            conversation_id: row.conversationId, token: card.token,
-          });
-          if (result.cancelled !== true) throw new Error('无法核实审批撤销，尚未删除任务记录');
-          ctx.ui.dismissManagedTask?.(card.task_id);
-        }
-      }
-      await request('/api/protect/image-generation/jobs/' + row.id, null, 'DELETE');
-    };
-    const removeControl = (actions, row, scheduled, image = false) => {
+    const removeControl = (actions, row, scheduled) => {
       const group = document.createElement('div'); group.className = 'chat-task-delete';
-      const removeLabel = image ? '删除任务记录' : scheduled && row.needs_attention ? '移除提醒' : '删除任务';
+      const removeLabel = '删除任务';
       const yes = appendText(group, 'button', removeLabel); yes.type = 'button';
       const no = appendText(group, 'button', '保留', 'chat-task-keep'); no.type = 'button';
       let armed = false;
       const arm = value => {
-        armed = value; yes.textContent = value ? (row.needs_attention ? '确认移除' : '确认删除') : removeLabel;
+        armed = value; yes.textContent = value ? '确认删除' : removeLabel;
         no.setAttribute('aria-hidden', String(!value)); no.tabIndex = value ? 0 : -1;
       };
       arm(false); no.addEventListener('click', () => { arm(false); yes.focus(); });
@@ -98,14 +95,12 @@
         yes.disabled = no.disabled = true;
         const tk = token();
         try {
-          if (image) await removeImage(row);
-          else if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
+          if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
           else await request('/api/chat/tasks/cancel', { conversation_id: row.conversation_id, task_id: row.task_id });
           if (token() !== tk) return;
           // Acknowledged deletion invalidates any older list snapshot before refetching.
           sequence++;
-          if (image) images = images.filter(item => item.id !== row.id);
-          else if (scheduled) schedules = schedules.filter(item => item.id !== row.id);
+          if (scheduled) schedules = schedules.filter(item => item.id !== row.id);
           else { paused = paused.filter(item => item.task_id !== row.task_id); ctx.ui.dismissManagedTask?.(row.task_id); }
           update(); render(); await refresh(true);
         } catch (error) {
@@ -119,7 +114,9 @@
     };
     function render(force = false) {
       if (viewer.hidden) return;
-      const fingerprint = JSON.stringify([paused,schedules,images,failed,scheduleFailed,
+      const running = runningTasks(ctx.state);
+      const waiting = paused.filter(row => !running.some(task => task.task_id === row.task_id));
+      const fingerprint = JSON.stringify([waiting,running,schedules,images,failed,scheduleFailed,
         pausedFailed,imageFailed,imageMore,!!token(),refreshing&&!paused.length&&!schedules.length&&!images.length]);
       if (!force && fingerprint === rendered) return;
       rendered = fingerprint;
@@ -130,16 +127,27 @@
         appendText(body, 'p', '任务列表暂时无法读取，未将它视作空列表。', 'chat-task-error');
         const retry = appendText(body, 'button', '重新加载'); retry.onclick = () => refresh(true); return;
       }
-      if (refreshing && !paused.length && !schedules.length && !images.length) { appendText(body, 'p', '正在读取任务…'); return; }
+      if (refreshing && !running.length && !paused.length && !schedules.length && !images.length) { appendText(body, 'p', '正在读取任务…'); return; }
       if (scheduleFailed) appendText(body, 'p', '定时任务服务暂不可用，挂起任务仍可查看。', 'chat-task-error');
       if (pausedFailed) appendText(body, 'p', '挂起任务暂时无法读取。', 'chat-task-error');
       if (imageFailed) appendText(body, 'p', '生图任务暂时无法读取。', 'chat-task-error');
       if (imageMore) {
-        const more = appendText(body, 'a', '当前展示 20 条生图任务，更多记录请到图库查看。');
+        const more = appendText(body, 'a', '当前展示 20 条执行中的生图任务，其他任务可到图库查看。');
         more.href = '/dashboard/albums';
       }
-      if (!paused.length && !schedules.length && !images.length && !pausedFailed && !imageFailed)
+      if (!waiting.length && !running.length && !schedules.length && !images.length && !pausedFailed && !imageFailed)
         appendText(body, 'p', '目前没有待执行或挂起的任务。');
+      running.forEach(row => {
+        const details = document.createElement('details'); details.className = 'chat-task-item';
+        details.dataset.taskKey = 'running:' + row.task_id;
+        details.open = opened.has(details.dataset.taskKey);
+        const summary = document.createElement('summary');
+        appendText(summary, 'span', '◷', 'chat-task-kind');
+        appendText(summary, 'span', row.title);
+        details.append(summary);
+        appendText(details, 'p', '正在执行，完成后自动移出任务列表。', 'chat-task-meta');
+        body.append(details);
+      });
       const add = (row, scheduled) => {
         const details = document.createElement('details'); details.className = 'chat-task-item';
         details.dataset.taskKey = (scheduled ? 'schedule:' + row.id : 'paused:' + row.task_id);
@@ -168,7 +176,7 @@
         removeControl(actions, row, scheduled);
         details.append(actions); body.append(details);
       };
-      schedules.forEach(row => add(row, true)); paused.forEach(row => add(row, false));
+      schedules.forEach(row => add(row, true)); waiting.forEach(row => add(row, false));
       images.forEach(row => {
         const shown = g.__waifuImageJobs.describe(row);
         if (!shown) return;
@@ -191,16 +199,7 @@
         } else {
           const view = appendText(actions, 'a', '查看图库'); view.href = '/dashboard/albums';
         }
-        if (row.reportPending && terminalImage(row.status))
-          appendText(details, 'p', '结果待汇报：打开所属会话后自动展示。', 'chat-task-meta');
-        if (['generating', 'saving'].includes(row.status))
-          appendText(details, 'p', '在后台继续执行，可以正常聊天；关闭对话框不会取消。', 'chat-task-meta');
-        else {
-          appendText(details, 'p', row.status === 'review'
-            ? '删除记录会清除这次未保存的生成结果。'
-            : '删除任务记录不会删除已经存入图库的图片。', 'chat-task-meta');
-          removeControl(actions, row, false, true);
-        }
+        appendText(details, 'p', '在后台继续执行，可以正常聊天；完成后自动移出列表。', 'chat-task-meta');
         details.append(actions);
         body.append(details);
       });
@@ -208,6 +207,7 @@
     function update() {
       if (token() !== lastToken) {
         lastToken = token(); sequence++; paused = []; schedules = []; images = []; failed = false;
+        finishedImages.clear();
         lastFetch = 0; queueMicrotask(() => refresh(true)); render();
       }
       const busy = !!(images.some(row => ['generating','saving'].includes(row.status))
@@ -226,6 +226,7 @@
       pausedChip.querySelector('span').textContent = `待继续 ${pausedCount}`;
       dock.querySelector('span').textContent = time; dock.hidden = !time;
       panel.dataset.hasCountdown = String(!!time);
+      render();
     }
     async function refresh(force = false) {
       if (!force && (refreshing || Date.now() - lastFetch < 30000)) return;
@@ -235,8 +236,9 @@
           const data = await request('/api/chat/tasks');
           if (seq !== sequence || token() !== tk) return;
           paused = data.paused.items;
-          schedules = [...data.schedules.items, ...(data.schedules.recent_results || [])];
-          images = Array.isArray(data.images?.items) ? data.images.items : [];
+          schedules = data.schedules.items.filter(scheduledTask);
+          images = Array.isArray(data.images?.items)
+            ? data.images.items.filter(row => imageTask(row) && !finishedImages.has(row.id)) : [];
           imageMore = data.images?.has_more === true;
           pausedFailed = !!data.paused.unavailable;
           imageFailed = !Array.isArray(data.images?.items) || !!data.images?.unavailable;
@@ -268,7 +270,6 @@
     ctx.ui.refreshTaskStatus = update;
     ctx.ui.reloadTasks = () => refresh(true);
     ctx.ui.checkService = () => health(true);
-    const terminalImage = row => ['review','accepted','failed','unknown'].includes(row);
     ctx.ui.imageJobChanged = row => {
       let changed = false;
       images = images.map(item => {
@@ -280,7 +281,21 @@
         }
         return next;
       });
-      if (changed) { update(); render(); }
+      if (!imageTask(row)) {
+        // A delayed list response must not resurrect work already observed as finished.
+        finishedImages.add(row.id);
+        if (finishedImages.size > 128) finishedImages.delete(finishedImages.values().next().value);
+        const count = images.length;
+        images = images.filter(item => item.id !== row.id);
+        changed ||= count !== images.length;
+      } else {
+        finishedImages.delete(row.id);
+        if (!images.some(item => item.id === row.id)) {
+          images.push({...row, conversationId: row.conversationId ?? ctx.state.conv});
+          changed = true;
+        }
+      }
+      if (changed) update();
     };
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { void health(); void refresh(); } });
     new MutationObserver(() => { if (panel.classList.contains('active')) { void health(); void refresh(); } })
@@ -289,5 +304,6 @@
     setInterval(() => { if (!document.hidden && panel.classList.contains('active')) { void health(); void refresh(); } }, 45000);
     void health(); void refresh(); update();
   };
-  g.__waifuTaskUI = { init, signal, countdown, scheduleLabel, hasCountdown };
+  g.__waifuTaskUI = { init, signal, countdown, scheduleLabel, hasCountdown,
+    scheduledTask, imageTask, runningTasks };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -1,13 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import '../public/live2d-widgets/chat-tasks.js';
-const {signal,countdown,scheduleLabel,hasCountdown}=globalThis.__waifuTaskUI;
+const {signal,countdown,scheduleLabel,hasCountdown,scheduledTask,imageTask,runningTasks}=globalThis.__waifuTaskUI;
 test('status prioritizes outage, active execution, paused work and healthy idle',()=>{
   assert.equal(signal({ready:false,busy:true,paused:true}),'offline');
   assert.equal(signal({ready:true,busy:true,paused:true}),'busy');
   assert.equal(signal({ready:true,busy:false,paused:true}),'paused');
   assert.equal(signal({ready:true,busy:false,paused:false}),'ready');
   assert.equal(signal({ready:null,busy:false,paused:false}),'checking');
+});
+test('task list keeps unfinished schedules and excludes all terminal outcomes',()=>{
+  for (const status of ['active','scheduled','running','paused'])
+    assert.equal(scheduledTask({status}),true,status);
+  for (const status of ['finished','completed','failed','blocked','expired','incomplete','unknown','cancelled'])
+    assert.equal(scheduledTask({status}),false,status);
+});
+test('image generation leaves the list on completion, before review or storage history',()=>{
+  for (const status of ['generating','saving']) assert.equal(imageTask({status}),true,status);
+  for (const status of ['pending','review','accepted','rejected','failed','unknown','expired'])
+    assert.equal(imageTask({status}),false,status);
+});
+test('running chat entries follow the current execution instead of completed conversation history',()=>{
+  const state={isSending:true,activeRound:{taskId:'task',roundId:'round',msg:'解释这篇文章'},remoteRounds:{}};
+  assert.deepEqual(runningTasks(state),[{task_id:'task',title:'解释这篇文章',status:'running'}]);
+  state.isSending=false;
+  assert.deepEqual(runningTasks(state),[]);
+  state.remoteRounds.other=true;
+  assert.equal(runningTasks(state)[0].task_id,'other');
+  delete state.remoteRounds.other;
+  state.isSending=true;state.activeRound={roundId:'round',resumeText:'继续之前的工作'};
+  state.remoteRounds.round=true;
+  assert.deepEqual(runningTasks(state),[{task_id:'round',title:'继续之前的工作',status:'running'}]);
 });
 test('countdown is deterministic, clamps overdue tasks and preserves invalid time as unknown',()=>{
   const now=Date.parse('2026-11-05T01:00:00Z');
