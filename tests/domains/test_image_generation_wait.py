@@ -58,7 +58,8 @@ def observe(monkeypatch, stream, *, headers=None, control=None, status=200):
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
         monkeypatch.setattr(base, "_client", client)
         with request_scope(control or RequestControl(threading.Event(), time.monotonic() + 300)):
-            result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 240}, config=cfg)
+            result = tools.get_image_generation.invoke(
+                {"job_id": ID, "wait_seconds": 240}, config=cfg)
     return result, requests, progress
 
 
@@ -219,7 +220,8 @@ def test_role_or_user_binding_rejected_before_opening_sse(monkeypatch):
         for cfg in (config(principal=Principal(7, "user", SOURCE_ASSERTION)),
                     config(principal=Principal(8, "admin", SOURCE_ASSERTION))):
             cfg["configurable"]["user_id"] = 7
-            result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 240}, config=cfg)
+            result = tools.get_image_generation.invoke(
+                {"job_id": ID, "wait_seconds": 240}, config=cfg)
             assert result.kind == "unavailable"
 
 
