@@ -34,7 +34,6 @@ def startup(monkeypatch):
         resources.callback(events.append, "pool_closed")
         return object(), "native"
     monkeypatch.setattr(app_lifecycle, "build_runtime", build)
-    monkeypatch.setattr(app_lifecycle.wordgraph, "warm", lambda: events.append("wordgraph"))
     monkeypatch.setattr(app_lifecycle.rag_search, "warm", lambda: events.append("rag"))
     return events
 
@@ -219,7 +218,8 @@ def test_optional_warmups_are_joined_and_failures_are_logged(startup, monkeypatc
         assert unblock.wait(5)
         raise ValueError("optional warmup fixture")
 
-    monkeypatch.setattr(app_lifecycle.wordgraph, "warm", warm)
+
+    monkeypatch.setattr(app_lifecycle.rag_search, "warm", warm)
 
     async def run():
         lifecycle = app_lifecycle.lifespan(app)

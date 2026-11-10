@@ -1,7 +1,6 @@
 """Exercise mounted service routes without starting models, databases or build jobs."""
 
 
-import asyncio
 import secrets
 import threading
 import time
@@ -12,16 +11,10 @@ import pytest
 from _service import app
 from fastapi.testclient import TestClient
 
-from agent.api.routes import knowledge_graph, moderation
+from agent.api.routes import moderation
 from config.settings import settings
-from utils.logging import get_trace_id
 
-BUILD_ENDPOINTS = [
-    ("POST", "/graph/rebuild"),
-    ("GET", "/graph/rebuild/status"),
-    ("POST", "/graph/rebuild/cancel"),
-]
-SERVICE_ENDPOINTS = [("POST", "/review"), ("POST", "/graph/query"), *BUILD_ENDPOINTS]
+SERVICE_ENDPOINTS = [("POST", "/review")]
 
 
 @pytest.fixture
@@ -56,75 +49,10 @@ def test_services_reject_untrusted_identity_before_work(client, monkeypatch, met
         pytest.fail("unauthenticated request reached business work")
 
     monkeypatch.setattr(moderation.moderator, "review", forbidden)
-    monkeypatch.setattr(knowledge_graph.wordgraph, "query_words", forbidden)
-    for name in ("start", "status", "cancel"):
-        monkeypatch.setattr(knowledge_graph.graph_build, name, forbidden)
     headers = {"X-Agent-Assertion": secrets.token_urlsafe()} if identity == "invalid" else {}
     if identity == "expired":
         headers = signed(ttl=-10)
     assert request(client, method, path, headers).status_code == 401
-
-
-@pytest.mark.parametrize("method,path", BUILD_ENDPOINTS)
-@pytest.mark.parametrize("role", ["user", "zako", "unknown", None])
-def test_build_permissions_ignore_body_identity_and_role(client, monkeypatch, method, path, role):
-    def forbidden(*args, **kwargs):
-        pytest.fail("non-admin request reached build operations")
-
-    for name in ("start", "status", "cancel"):
-        monkeypatch.setattr(knowledge_graph.graph_build, name, forbidden)
-    assert request(client, method, path, signed(role), role="superadmin").status_code == 403
-
-
-def test_unsigned_identity_is_rejected_before_console_permissions(client, monkeypatch):
-    response = request(client, "POST", "/graph/rebuild", role="superadmin")
-    assert response.status_code == 401
-
-
-@pytest.mark.parametrize("role", ["admin", "superadmin"])
-@pytest.mark.parametrize("excluded", [None, "", "9,10"])
-def test_build_parameters_and_results_round_trip(client, monkeypatch, role, excluded):
-    seen = []
-
-    def start(params, mode):
-        seen.append((params, mode))
-        return {"ok": False, "reason": "busy"}
-
-    monkeypatch.setattr(knowledge_graph.graph_build, "start", start)
-    response = request(client, "POST", "/graph/rebuild", signed(role),
-                       mode="precheck", exclude_ids=excluded, argv="untrusted")
-    assert response.status_code == 200
-    assert response.json() == {"ok": False, "reason": "busy"}
-    params, mode = seen.pop()
-    assert mode == "precheck" and params["exclude_ids"] == excluded
-    assert not {"uid", "mode", "role", "argv"}.intersection(params)
-
-
-@pytest.mark.parametrize("method,path,name", [
-    ("GET", "/graph/rebuild/status", "status"),
-    ("POST", "/graph/rebuild/cancel", "cancel"),
-])
-def test_build_state_operations_forward_results(client, monkeypatch, method, path, name):
-    result = {"ok": False, "reason": "not_running", "run_id": "fixture"}
-    monkeypatch.setattr(knowledge_graph.graph_build, name, lambda: result)
-    response = request(client, method, path, signed())
-    assert response.status_code == 200 and response.json() == result
-
-
-def test_graph_degradation_and_context_survive_worker_dispatch(client, monkeypatch):
-    def query(q, limit):
-        with pytest.raises(RuntimeError):
-            asyncio.get_running_loop()
-        assert q == "测试查询" and limit == knowledge_graph.wordgraph.TOP_K_DEFAULT
-        assert get_trace_id() == "router-thread-test"
-        return {"ok": False, "reason": "no_index", "words": []}
-
-    monkeypatch.setattr(knowledge_graph.wordgraph, "query_words", query)
-    response = request(client, "POST", "/graph/query",
-                       {**signed("user"), "X-Request-ID": "router-thread-test"})
-    assert response.status_code == 200
-    assert response.json() == {"ok": False, "reason": "no_index", "words": []}
-    assert response.headers["X-Request-ID"] == "router-thread-test"
 
 
 def test_review_authenticates_before_admission_and_releases_on_failure(client, monkeypatch):
@@ -177,8 +105,11 @@ def test_review_holds_permit_until_work_finishes_and_reports_usage(client, monke
 @pytest.mark.parametrize("path,field,value", [
     ("/review", "content", "x" * 4001),
     ("/review", "author", "x" * 101),
-    ("/graph/query", "q", "x" * 129),
-    ("/graph/rebuild", "site", "x" * 201),
 ])
 def test_request_limits_remain_enforced(client, path, field, value):
     assert request(client, "POST", path, signed(), **{field: value}).status_code == 422
+
+@pytest.mark.parametrize("method,path",[("POST","/graph/query"),("POST","/graph/rebuild"),
+    ("GET","/graph/rebuild/status"),("POST","/graph/rebuild/cancel")])
+def test_graph_operations_are_not_mounted_in_the_agent(client,method,path):
+    assert request(client,method,path,signed()).status_code == 404

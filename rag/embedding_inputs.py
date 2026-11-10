@@ -57,6 +57,19 @@ class InputProfile:
         return text
 
 
+def signature_payload(spec: ProfileSpec) -> bytes:
+    """Canonical identity shared with independently deployed embedding consumers."""
+    identity = spec.model_dump(exclude={"tokenizer_file"})
+    if spec.unicode_normalization == "none":
+        identity.pop("unicode_normalization")
+    identity.update(
+        tokenizers_version=version("tokenizers"),
+        splitter="tokenizers-offset-window-v2",
+        chunking=INDEX_VERSION,
+    )
+    return json.dumps(identity, sort_keys=True).encode()
+
+
 @lru_cache(maxsize=4)
 def load_profile(filename: str) -> InputProfile:
     # Immutable files per deployment. Changing files at the same path requires restart.
@@ -74,14 +87,7 @@ def load_profile(filename: str) -> InputProfile:
             raise InputProfileError("invalid tokenizer artifact") from error
         tokenizer.no_truncation()
         tokenizer.no_padding()
-        identity = spec.model_dump(exclude={"tokenizer_file"})
-        if spec.unicode_normalization == "none":
-            identity.pop("unicode_normalization")
-        identity.update(
-            tokenizers_version=version("tokenizers"),
-            splitter="tokenizers-offset-window-v2", chunking=INDEX_VERSION,
-        )
-        signature = hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+        signature = hashlib.sha256(signature_payload(spec)).hexdigest()
         return InputProfile(spec, signature, tokenizer)
     except (OSError, ValueError, ImportError) as error:
         raise InputProfileError("cannot load pinned embedding profile/tokenizer") from error

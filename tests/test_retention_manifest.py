@@ -172,7 +172,6 @@ def main() -> int:
             (".last_deploy_sha", "deploy-state", True),
             ("review_20260925_043825.md", "eval-reports", True),
             ("runs/20260925-043825_golden.json", "golden-run-archive", True),
-            ("wordgraph/20260915-203224_vocab.txt", "wordgraph-builds", True),
             ("last_run.json", "eval-baselines", True),
             ("archive/DELETED-20260925.txt", "archive-audit-log", True),
             ("archive/chat_conv_20260903_pre.sql", "archive-sql-backup", True),

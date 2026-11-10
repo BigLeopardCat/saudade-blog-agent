@@ -148,7 +148,7 @@ token 窗口，只修改本次独立编码结果；共享 Tokenizer 不启用全
 
 没有匹配 tokenizer 的 API 可以继续不设置 profile，使用供应商输入校验及既有故障
 回退；这条路径不声称有本地精确 token 保证。不能为该 API 套用 Qwen tokenizer。
-本选项只作用于 RAG；首页词图仍使用独立的 `rag/embed_space.py` 契约，不应把图谱
+本选项只作用于 RAG；首页词图仍使用独立的 `rag/vector_index.py` 契约，不应把图谱
 缓存误认为本文的文档向量缓存。
 
 ## 增量缓存与切换

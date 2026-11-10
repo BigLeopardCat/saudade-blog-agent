@@ -28,7 +28,7 @@ eval/report/*
 eval/data/
 eval/cache/
 
-data/word_graph/
+
 
 data/rag_vectors/
 

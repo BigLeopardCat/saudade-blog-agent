@@ -43,7 +43,7 @@ def _repo_module_key(dotted: str) -> str | None:
     只认盘上的文件，**不 import**（import 会把候选模块的副作用带进来，判据不该有副作用）。
     四个附加根（`eval/`、`tests/`、`scripts/`、`scripts/dev/`）是因为套件按脚本态把它们
     塞进了 `sys.path`，那些模块进 `sys.modules` 时用的是**裸名**（`golden_fixture`、
-    `build_word_graph`，不是 `eval.golden_fixture`）—— 名单里也必须写裸名，
+    `report_archive`，不是 `eval.golden_fixture`）—— 名单里也必须写裸名，
     否则名字对不上、还原打空。
     """
     parts = dotted.split(".")

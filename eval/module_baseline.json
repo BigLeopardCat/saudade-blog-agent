@@ -3,10 +3,6 @@
     "lines": 1113,
     "top_defs": 40
   },
-  "scripts/build_word_graph.py": {
-    "lines": 1021,
-    "top_defs": 36
-  },
   "tests/test_judge_offline.py": {
     "lines": 1083,
     "top_defs": 11

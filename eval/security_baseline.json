@@ -22,7 +22,7 @@
   "targets": [
     "."
   ],
-  "total": 37,
+  "total": 32,
   "nosec": 0,
   "by_key": {
     "agent/article_labels.py::B105": 1,
@@ -41,9 +41,6 @@
     "eval/pg_retention.py::B608": 5,
     "eval/trace_reconcile.py::B112": 1,
     "eval/wordlist_gate.py::B324": 1,
-    "scripts/build_word_graph.py::B310": 1,
-    "scripts/build_word_graph.py::B324": 2,
-    "scripts/layout_ab.py::B108": 2,
     "scripts/sticker_smoke.py::B310": 1,
     "tests/test_golden_fixture_corpus.py::B310": 1,
     "tests/test_packaging.py::B108": 1,

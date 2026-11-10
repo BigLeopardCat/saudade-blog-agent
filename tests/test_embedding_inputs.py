@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -298,15 +299,13 @@ def test_parallel_token_windows_preserve_shared_tokenizer_configuration(profile)
     policy = inputs.active_profile()
     before = policy.tokenizer.to_str()
     body = "博客Rust👩🏽‍💻é\n" * 90 + "TAIL"
-    chunks = [
-        {**chunk, "title": "标题"} for chunk in split("标题", "## 来源\n" + body)
-    ]
+    chunks = [{**chunk, "title": "标题"} for chunk in split("标题", "## 来源\n" + body)]
 
     def prepare(_):
         refined = inputs.vector_chunks(chunks)
         covered = set()
         for chunk in refined:
-            assert chunk["text"][chunk["prefix_chars"]:] == body[chunk["start"]:chunk["end"]]
+            assert chunk["text"][chunk["prefix_chars"] :] == body[chunk["start"] : chunk["end"]]
             covered.update(range(chunk["start"], chunk["end"]))
             policy.validate(inputs.document_text("标题", chunk["text"], policy))
         assert covered == set(range(len(body)))
@@ -316,3 +315,23 @@ def test_parallel_token_windows_preserve_shared_tokenizer_configuration(profile)
         counts = list(executor.map(prepare, range(12)))
     assert min(counts) > policy.spec.max_tokens
     assert policy.tokenizer.to_str() == before
+
+
+def test_exported_query_contract_has_the_same_profile_identity_and_tokenizer(profile, tmp_path):
+    from scripts.prepare_embedding_assets import export_query_contract
+
+    path, spec = profile
+    path.write_text(json.dumps({**spec, "model_revision": "fixture;llama-test;"}))
+    output = tmp_path / "shared-assets"
+    result = export_query_contract(path, output)
+    policy = inputs.load_profile(str(path))
+    contract = json.loads(Path(result["query_contract"]).read_text())
+    assert hashlib.sha256(contract["signature_payload"].encode()).hexdigest() == policy.signature
+    tokenizer = output / f"tokenizer-{policy.spec.tokenizer_sha256}.json"
+    assert hashlib.sha256(tokenizer.read_bytes()).hexdigest() == policy.spec.tokenizer_sha256
+    inode = tokenizer.stat().st_ino
+    export_query_contract(path, output)
+    assert tokenizer.stat().st_ino == inode
+    tokenizer.write_text("tampered")
+    with pytest.raises(ValueError, match="immutable"):
+        export_query_contract(path, output)

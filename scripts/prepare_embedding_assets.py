@@ -130,22 +130,62 @@ def prepare(root: Path, model_name: str, download: bool, verify_only: bool) -> d
     }
 
 
+def export_query_contract(profile_path: Path, destination: Path) -> dict:
+    """Export verified, immutable query assets without a consumer runtime dependency."""
+    from rag.embedding_inputs import load_profile, signature_payload
+
+    profile = load_profile(str(profile_path))
+    payload = signature_payload(profile.spec)
+    artifact = (profile_path.resolve().parent / profile.spec.tokenizer_file).read_bytes()
+    destination.mkdir(parents=True, exist_ok=True)
+    if ";llama-" not in profile.spec.model_revision:
+        raise ValueError("query contract export requires a llama.cpp model deployment")
+    files = {
+        f"tokenizer-{profile.spec.tokenizer_sha256}.json": artifact,
+        f"query-profile-{profile.signature}.json": json.dumps(
+            {
+                "schema_version": 1,
+                "signature_payload": payload.decode(),
+                "tokenization_protocol": "llama.cpp-tokenize-v1",
+            },
+            ensure_ascii=False,
+        ).encode(),
+    }
+    for name, data in files.items():
+        path = destination / name
+        if path.exists():
+            if path.read_bytes() != data:
+                raise ValueError("changed immutable query contract asset")
+            continue
+        with tempfile.NamedTemporaryFile(dir=destination, delete=False) as file:
+            temporary = Path(file.name)
+            try:
+                file.write(data)
+                file.flush()
+                temporary.chmod(0o644)
+                temporary.replace(path)
+            finally:
+                temporary.unlink(missing_ok=True)
+    return {
+        "query_contract": str((destination / f"query-profile-{profile.signature}.json").resolve()),
+        "signature": profile.signature,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", required=True, type=Path)
     parser.add_argument("--model", required=True, choices=("bge-q8", "bge-f16", "qwen-q8"))
     parser.add_argument("--download", action="store_true")
     parser.add_argument("--verify-only", action="store_true")
+    parser.add_argument("--export-query-contract", type=Path)
     args = parser.parse_args()
     if args.verify_only and args.download:
         parser.error("verify-only does not download")
-    print(
-        json.dumps(
-            prepare(args.directory, args.model, args.download, args.verify_only),
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    result = prepare(args.directory, args.model, args.download, args.verify_only)
+    if args.export_query_contract:
+        result.update(export_query_contract(Path(result["profile"]), args.export_query_contract))
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 

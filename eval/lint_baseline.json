@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 82,
+  "total": 66,
   "by_file": {
     "eval/corpus_terms.py": 6,
     "eval/golden_fixture.py": 1,
@@ -17,12 +17,8 @@
     "eval/trace_metrics.py": 2,
     "eval/trace_reconcile.py": 5,
     "eval/wordlist_gate.py": 6,
-    "scripts/build_word_graph.py": 11,
-    "scripts/layout_ab.py": 1,
     "tests/test_action_text.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_corpus_terms.py": 1,
-    "tests/test_embed_space.py": 3,
     "tests/test_golden_family_policy.py": 3,
     "tests/test_golden_fixture.py": 4,
     "tests/test_judge_offline.py": 25,
