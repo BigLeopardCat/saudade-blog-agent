@@ -83,10 +83,10 @@ def test_wilson_diagnostic_does_not_replace_the_observed_rate_gate(tmp_path):
 def test_core_statistics_keep_unresolved_cases_and_do_not_count_rounds():
     from eval.release_readiness import quality_gate_statistics
 
-    cases = [{"id": "core_pass", "tags": ["read"], "result": {"rounds": [{}, {}]}},
+    cases = [{"id": "read_ok", "tags": ["read"], "result": {"rounds": [{}, {}]}},
              {"id": "core_missing", "tags": ["read"]},
              {"id": "chat", "tags": ["chat"]}]
-    got = quality_gate_statistics(cases, {"core_pass": "checks_passed", "chat": "checks_passed"},
+    got = quality_gate_statistics(cases, {"read_ok": "checks_passed", "chat": "checks_passed"},
                                   json.loads(PROFILE.read_bytes()))
     assert got["task"]["combined_checks"]["rate"] == 2 / 3
     assert got["core"]["combined_checks"]["total"] == 2
