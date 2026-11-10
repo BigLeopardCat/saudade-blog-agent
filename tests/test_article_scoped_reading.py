@@ -155,6 +155,9 @@ def test_shared_candidate_version_can_read_every_visible_section(article):
         assert result.kind == "ok" and result.data["sectionText"]
         assert result.data["source"]["offset"] == int(offset)
         assert len(result.data["sectionText"]) == int(length)
+        assert result.data["omittedViews"] == ["metadata", "outline"]
+        assert not {"sections", "sectionCount", "sectionsOffset", "nextSectionsOffset",
+                    "authorName", "description", "tags"}.intersection(result.data)
 
 
 def test_every_directory_entry_can_be_traversed_without_claiming_body_reads(article):
