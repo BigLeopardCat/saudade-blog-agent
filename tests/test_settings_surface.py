@@ -133,15 +133,15 @@ def test_settings_surface():
     field_keys = {_env_name(f) for f in fields}
     spurious = sorted(k for k in env_keys if k not in field_keys and k not in _PROCESS_ONLY)
 
-    check("每个键都能对应到 settings 字段或进程变量（鬼键 = 用户改了不生效的那个坑）",
+    check("示例环境键对应 Settings 字段或进程配置",
           not spurious, "、".join(spurious) or f"{len(env_keys)} 个键全部对得上")
 
-    print("\n④ 双轨收敛后的文档面：README 不许再教人走旧路（20261020 反转）")
+    print("\n④ 文档说明当前环境变量的配置方式")
 
     readme = README.read_text(encoding="utf-8")
     check("README 点名 AGENT_CONTEXT_TOKENS",
           "AGENT_CONTEXT_TOKENS" in readme)
-    check("README 不再说这几个键写 .env 不生效（收敛后那是假话——旧坑表留着就是撒谎）",
+    check("README 不把有效环境变量描述为不可配置",
           re.search(r"写[进在]?\s*`?\.env`?\s*(一点作用|不生效|无效)", readme) is None)
     check(".env.example 的开头把单轨边界写下来了（仍只走进程环境的四个键，两份文档同调）",
           all(k in env_text[:2400] for k in
@@ -150,11 +150,11 @@ def test_settings_surface():
 
     print("\n⑤ 顺带：.env.example 里不许再种回维护者的站点字面量")
 
-    check("没有 saudade.site 之类指向某一家的域名（父仓 20261007 已中性化，agent 仓跟上）",
+    check("配置示例不包含维护者的生产域名",
           "saudade.site" not in env_text,
           f"出现 {env_text.count('saudade.site')} 次")
 
-    print("\n⑥ 单轨接线（20261020 收敛）：五个限额常量只从 settings 取值")
+    print("\n⑥ HTTP 限额只从 Settings 读取")
 
     _HTTP_LIMITS = {
         "STREAM_IDLE_TIMEOUT": "stream_idle_timeout",
@@ -186,7 +186,7 @@ def test_settings_surface():
           not _unwired,
           f"未单轨：{'、'.join(_unwired) or '无'}")
     check("HTTP 应用模块通过 Settings 读取配置（"
-          "将来真有正当用途时再来改这条判据——红着比悄悄漏掉好）",
+          "配置读取使用统一入口）",
           "os.environ" not in server_src)
     check("判据内部两张表与 settings 的 alias 对得上（常量名/env 键/字段名三口对账）",
           sorted(_env_name(f) for f in _HTTP_LIMITS.values()) == sorted(_ENV_TO_FIELD))
@@ -207,7 +207,7 @@ def test_settings_surface():
         from config.settings import Settings as _Settings
         _drift = [f for f, v in _DEFAULTS.items()
                   if getattr(_Settings(), f) != v]
-        check("不设 env 时五个默认值与收敛前的字面量逐个相同（反控：收敛 = 零行为变化）",
+        check("未配置时使用声明的默认 HTTP 限额",
               not _drift, "、".join(_drift) or "5/5 同值")
         for k in _ENV_WANT:
             _os.environ[k] = str(_ENV_WANT[k])
