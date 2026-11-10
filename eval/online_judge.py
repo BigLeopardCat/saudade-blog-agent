@@ -144,11 +144,23 @@ def runtime_context(events):
         "permissions": callers[-1].get("permissions") if callers else None,
         "turn_phase": phases[-1].get("phase") if phases else "not_recorded",
         "receipt_count": phases[-1].get("receipt_count") if phases else None,
+        "execution_controls": _execution_controls(events),
         "available_tools": contracts,
         "used_tool_contracts": [item for item in contracts if item["name"] in used],
         "missing": [name for name, present in (("caller", callers), ("phase", phases),
                                                ("tool_contracts", contracts)) if not present],
     }
+
+
+def _execution_controls(events):
+    """Project recorded controls, without inferring authority from tool reply text."""
+    fields = {("native", "budget_stop"): ("reason",),
+              ("native", "llm_start"): ("round", "phase"),
+              ("model", "wire_request"): ("tool_choice",)}
+    return [{"event": event["event"],
+             **{key: event[key] for key in fields[event["node"], event["event"]]
+                if key in event}}
+            for event in events if (event.get("node"), event.get("event")) in fields]
 
 
 def _observations(trace):

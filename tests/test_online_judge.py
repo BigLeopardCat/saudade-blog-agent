@@ -96,6 +96,25 @@ def test_calibration_validates_reply_only_samples_without_optional_cards():
     assert "excerpts" in invalid["rows"][0]["error"]
 
 
+def test_runtime_controls_preserve_budget_stop_and_confirmation_tool_boundary(tmp_path):
+    events = [
+        {"node": "native", "event": "llm_start", "round": 2, "phase": "approval_response"},
+        {"node": "model", "event": "wire_request", "tool_choice": "none",
+         "messages": ["private wire payload"]},
+        {"node": "native", "event": "budget_stop", "reason": "tool_calls", "tool_calls": 0},
+        {"node": "tool", "event": "budget_stop", "reason": "untrusted"},
+    ]
+    case = recorded(tmp_path, trace_extra={"events": events})
+    data = json.loads(online_judge.material(case, case["result"]["rounds"]))
+    assert data["turns"][0]["runtime_context"]["execution_controls"] == [
+        {"event": "llm_start", "round": 2, "phase": "approval_response"},
+        {"event": "wire_request", "tool_choice": "none"},
+        {"event": "budget_stop", "reason": "tool_calls"},
+    ]
+    assert "private wire payload" not in str(data)
+    assert online_judge.runtime_context([])["execution_controls"] == []
+
+
 def test_visible_card_text_is_reviewed_even_when_absent_from_signed_intent(tmp_path):
     preview = "账号已经降级。\n确认发送？"
     canary = secrets.token_urlsafe(24)
