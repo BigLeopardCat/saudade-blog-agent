@@ -63,6 +63,38 @@ def test_missing_semantic_review_is_unverified(tmp_path):
     report, profile, _, _ = fixture(tmp_path)
     got = assess(report, profile_path=profile)
     assert got["status"] == "unverified" and not got["semantic_counts"]
+    assert got["quality_gate_statistics"]["task"]["combined_checks"] is None
+    assert got["quality_gate_statistics"]["task"]["wilson_lower_meets_target"] is None
+
+
+def test_wilson_diagnostic_does_not_replace_the_observed_rate_gate(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "http_checks_passed"
+    for name in ("task", "core"):
+        row = got["quality_gate_statistics"][name]
+        assert row["combined_checks"]["total"] == 20
+        assert row["combined_checks"]["rate"] == 1
+        assert row["combined_checks"]["wilson_95"][0] < 0.84
+        assert row["wilson_lower_meets_target"] is False
+        assert row["wilson_is_release_gate"] is False
+
+
+def test_core_statistics_keep_unresolved_cases_and_do_not_count_rounds():
+    from eval.release_readiness import quality_gate_statistics
+
+    cases = [{"id": "read_ok", "tags": ["read"], "result": {"rounds": [{}, {}]}},
+             {"id": "core_missing", "tags": ["read"]},
+             {"id": "chat", "tags": ["chat"]}]
+    got = quality_gate_statistics(cases, {"read_ok": "checks_passed", "chat": "checks_passed"},
+                                  json.loads(PROFILE.read_bytes()))
+    assert got["task"]["combined_checks"]["rate"] == 2 / 3
+    assert got["core"]["combined_checks"]["total"] == 2
+    assert got["core"]["combined_checks"]["rate"] == 0.5
+    assert got["core"]["unresolved_semantic"] == 1
+    assert got["core"]["wilson_lower_meets_target"] is None
+    empty = quality_gate_statistics([], {}, json.loads(PROFILE.read_bytes()))
+    assert empty["core"]["combined_checks"] is None
 
 
 def test_one_good_sample_cannot_establish_p95(tmp_path):

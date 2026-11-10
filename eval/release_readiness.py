@@ -185,6 +185,27 @@ def _action_timings(groups, minimum):
             for name, rows in groups.items()}
 
 
+def quality_gate_statistics(cases, semantic, profile):
+    """Show sample uncertainty beside the unchanged observed-rate release gates."""
+    core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
+    result = {}
+    for name, rows, target in (("task", cases, profile["task_pass_rate"]),
+                               ("core", core, profile["core_pass_rate"])):
+        unresolved = sum(semantic.get(case["id"]) in
+                         (None, "not_evaluated", "needs_review") for case in rows)
+        checked = (proportion(sum(semantic.get(case["id"]) == "checks_passed"
+                                  for case in rows), len(rows)) if semantic else None)
+        interval = checked["wilson_95"] if checked else None
+        result[name] = {
+            "target": target, "basis": "observed_rate", "combined_checks": checked,
+            "unresolved_semantic": unresolved,
+            "wilson_lower_meets_target": interval[0] >= target
+                if interval is not None and not unresolved else None,
+            "wilson_is_release_gate": False,
+        }
+    return result
+
+
 def _reject(failures, name, passed, detail):
     if not passed:
         failures.append({"gate": name, "detail": detail})
@@ -304,6 +325,7 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
         "quality_statistics": quality_statistics(report["cases"], semantic),
+        "quality_gate_statistics": quality_gate_statistics(report["cases"], semantic, profile),
         "first_decision": metrics["decisions"],
         "cache_diagnostics": {name: _cache_summary(row)
                               for name, row in metrics["populations"].items()},
