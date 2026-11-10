@@ -20,6 +20,9 @@ from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.runtime.access import configured_reads_enabled
 from tools import base
 
+__all__ = ["Count", "Percentage", "Memory", "Disk", "Host", "Service", "Diagnostics",
+           "get_server_status", "get_service_health"]
+
 Count = Annotated[StrictInt, Field(ge=0)]
 Percentage = Annotated[FiniteFloat, Field(ge=0, le=100)]
 

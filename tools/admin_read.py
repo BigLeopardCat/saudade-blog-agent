@@ -12,11 +12,10 @@ from langchain_core.runnables.config import RunnableConfig
 from langchain_core.tools import tool
 
 from tools import base as _base
-from tools.diagnostics import get_server_status, get_service_health
 from tools.result import ToolResult, empty, ok, unavailable
 
 # Public exports; helper names stay private to their modules.
-__all__ = ["logger", "get_server_status", "get_service_health", "get_user_stats",
+__all__ = ["logger", "get_user_stats",
            "get_note_stats", "get_note_periods"]
 
 logger = logging.getLogger(__name__)

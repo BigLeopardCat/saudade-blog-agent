@@ -197,10 +197,9 @@ def _own_read_post(path: str, payload: dict, config: RunnableConfig):
 from tools.admin_read import (  # noqa: E402,F401
     get_note_periods,
     get_note_stats,
-    get_server_status,
-    get_service_health,
     get_user_stats,
     )
+from tools.diagnostics import get_server_status, get_service_health  # noqa: E402,F401
 
 # Authenticated writes must distinguish HTTP success from the API business result.
 # An uncertain result returns unavailable and cannot become a success receipt.
