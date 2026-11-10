@@ -1,10 +1,4 @@
-"""工程配置的六条判据。
-
-判据一律读**磁盘事实**（目录在不在、源码里还有没有第二份字面量），不读"文档里写了
-这一条"——后者的失效方式正是"名单对了、事情没做"。
-
-用法：.venv/bin/python tests/test_packaging.py
-"""
+"""Validate package sources, versioning, CI and coverage configuration."""
 
 
 from __future__ import annotations
@@ -31,15 +25,7 @@ check = collector(FAILED)
 
 
 def _strip_comments(text: str) -> str:
-    """把每行的 `#` 之后丢掉——**但引号内的 `#` 不算注释**。
-
-    ⚠️ 这一步不能省：本仓的 pyproject 在注释里用 ASCII 双引号引中文
-    （`# 现在只有"声明我有哪些包"的价值`）。不剥注释的话，下面那句
-    `"([^"]+)"` 会把**注释里的中文**当包名读出来，断言就报出一个磁盘上
-    从来没有过的"包"——正是"注释伪装成代码骗过断言"那一族（同
-    CSS 注释关掉整块规则）。引号计数只是够用，
-    不是 TOML 词法：本文件的字符串值里没有 `#`。
-    """
+    """Discard comments while preserving quoted hashes in the checked TOML subset."""
     out = []
     for line in text.splitlines():
         i = line.find("#")
@@ -76,29 +62,7 @@ def test_packaging():
     _m = re.search(r'^version\s*=\s*"([^"]+)"', PROJECT_SEC, re.M)
     PROJECT_VERSION = _m.group(1) if _m else None
     print("① wheel 包列表 == 磁盘事实（列错不会报错，所以必须有人看着）")
-    _pkgs = re.findall(r'"([^"]+)"', WHEEL_SEC)
-    check("pyproject 里有 wheel 包列表", bool(_pkgs), WHEEL_SEC.strip()[:60])
-    check("每一项都是**真实存在**的目录（`chains/` 就是这么被写进去的）",
-          all((ROOT / p).is_dir() for p in _pkgs),
-          "、".join(p for p in _pkgs if not (ROOT / p).is_dir()))
-    _implicit = [p for p in _pkgs if not (ROOT / p / "__init__.py").is_file()]
-    check("每一项都有 `__init__.py`（隐式命名空间包会让 mypy 拒绝整个目录）",
-          not _implicit, "、".join(_implicit))
-    _LOCAL_DIRS = {p.name for p in ROOT.iterdir()
-                   if p.is_dir() and not p.name.startswith(".")
-                   and not p.name.startswith("__")}
-    _RUNTIME_SRC = [ROOT / "agent/main.py"]
-    for _d in ("agent", "config", "models", "rag", "tools", "utils"):
-        _RUNTIME_SRC += sorted((ROOT / _d).rglob("*.py"))
-    _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
-    _used: set[str] = set()
-    for _p in _RUNTIME_SRC:
-        _used |= {m for m in _IMPORT_RE.findall(_p.read_text(encoding="utf-8"))}
-    _used &= _LOCAL_DIRS                       # 只留"是本仓顶层目录"的那些
-    _missing = sorted(_used - set(_pkgs))
-    check("生产代码 import 的本仓顶层包全在列表里（`rag/` 就是漏掉的那一个）",
-          not _missing, "漏：" + "、".join(_missing))
-    check("  对照：这个集合非空（否则上面那条是空跑）", len(_used) >= 5, str(sorted(_used)))
+    _pkgs, _RUNTIME_SRC = _check_wheel_sources(WHEEL_SEC)
     print("\n② 版本号只有一个来源：`pyproject.toml` 的 `[project].version`")
     check("pyproject 的 [project] 声明了 version", PROJECT_VERSION is not None,
           str(PROJECT_VERSION))
@@ -129,21 +93,7 @@ def test_packaging():
           "、".join(ast.unparse(kw.value) for kw in _kw_version))
     check("  它读的是安装元数据（`importlib.metadata`），不是自己解析 toml",
           "from importlib.metadata import version as _pkg_version" in _src)
-    print("\n③ SECURITY.md 说 CVE 交给 Dependabot ⇒ 那份配置必须在场")
-    _dep = ROOT / ".github" / "dependabot.yml"
-    check(".github/dependabot.yml 在位", _dep.is_file())
-    if _dep.is_file():
-        _dt = _dep.read_text(encoding="utf-8")
-        check("格式版本是 2", re.search(r"^version:\s*2\s*$", _dt, re.M) is not None)
-        check("覆盖 pip（跟着 pyproject + uv.lock）",
-              'package-ecosystem: "pip"' in _dt)
-        check("覆盖 github-actions（workflow 里钉的 action 版本没有 lock 文件管）",
-              'package-ecosystem: "github-actions"' in _dt)
-        check("  两边都有 schedule（没有 schedule 的 update 配置不生效）",
-              _dt.count("schedule:") >= 2)
-    _sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
-    check("对照：SECURITY.md 确实把这件事推给了 Dependabot（否则本套件名不副实）",
-          "Dependabot" in _sec)
+    _check_dependency_updates()
     print("\n④ 类型检查棘轮真的接在 CI 上，且 mypy 版本只有一处事实源")
     _gate = ROOT / "eval" / "type_gate.py"
     _base = ROOT / "eval" / "mypy_baseline.json"
@@ -156,16 +106,14 @@ def test_packaging():
           MYPY_PIN or "dependency-groups 里没有钉死的 mypy==")
     if _base.is_file():
         _b = json.loads(_base.read_text(encoding="utf-8"))
-        # ⚠️ 版本对不上不是"变差"而是**换了一个量**：换 mypy 版本就换了一套错误集，
-        # 拿旧账比新读数毫无意义。`eval/type_gate.py` 因此在这里也退 3（两道）。
+        # Scanner changes invalidate comparisons with the stored findings.
         check(f"⭐ 基线的 mypy 版本 == dev 分组钉的（{MYPY_PIN}）",
               _b.get("mypy_version") == MYPY_PIN,
               f"基线={_b.get('mypy_version')} dev={MYPY_PIN}")
         check("  基线里记着读数（total 与逐文件计数都在）",
               isinstance(_b.get("total"), int) and isinstance(_b.get("by_file"), dict)
               and bool(_b["by_file"]), f"total={_b.get('total')}")
-        # 查谁：基线的 targets 与棘轮里的 TARGETS 必须同源，否则"量到的面"和"账上的面"
-        # 会各自漂——两边都看不出对方变了（同 `rag/` 那个洞的形状）。
+        # The scanner scope must match the baseline scope.
         _tg = ast.parse(_gate.read_text(encoding="utf-8"))
         _targets = None
         for _n in _tg.body:
@@ -233,38 +181,7 @@ def test_packaging():
           "eval/type_gate.py" in _eval_code2)
     check("  CI 那一行不手写 mypy 版本（版本只从 dev 分组来）",
           "uvx mypy" not in _eval_code2 and "mypy==" not in _eval_code2)
-    print("\n⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）：pin 要带 extra，量的面要与打包的面同源")
-    _cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
-    check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
-          _cov_pin.group(2) if _cov_pin else "dependency-groups 里没有钉死的 coverage==")
-    check("⭐ pin 带 `[toml]` extra（3.12 上它已多余，但写下来的是「配置读得进来」这个形状）",
-          _cov_pin is not None and _cov_pin.group(1) == "[toml]",
-          _cov_pin.group(0) if _cov_pin else "—")
-    _run_sec = _section(PYPROJECT, "tool.coverage.run")
-    _src = re.search(r"^source\s*=\s*\[(?P<v>.*?)\]", _run_sec, re.M | re.S)
-    COV_SOURCE = re.findall(r'"([^"]+)"', _src.group("v")) if _src else []
-    check("⭐ `[tool.coverage.run].source` == wheel 包列表（同一件事：生产包）",
-          sorted(COV_SOURCE) == sorted(_pkgs),
-          f"覆盖={sorted(COV_SOURCE)} 打包={sorted(_pkgs)}")
-    check("  对照：那一节确实在（正则没匹配到空串时上面那条会「绿得没有理由」）",
-          bool(_run_sec.strip()), f"{len(COV_SOURCE)} 项")
-    check("`[tool.coverage.run].parallel` 开着（否则各子进程互相覆盖）",
-          re.search(r"^\s*parallel\s*=\s*true", _run_sec, re.M | re.I) is not None)
-    check("`[tool.coverage.report]` 在场（`show_missing` 那份人看的表就长在这节里）",
-          bool(_section(PYPROJECT, "tool.coverage.report").strip()))
-    _cov_sh = re.sub(r"(?m)^\s*#.*$", "",
-                     (ROOT / "scripts" / "dev" / "coverage.sh").read_text(encoding="utf-8"))
-    _gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    check("`.coverage-data/` 既在覆盖率脚本里、也在 .gitignore 里（两处同一个名字）",
-          'COV_DIR=".coverage-data"' in _cov_sh and ".coverage-data/" in _gi)
-    check("  脚本先清上一轮的数据（残片会被 combine 合进来 ⇒ 报告里混进**上一版**的行号）",
-          'rm -rf "$COV_DIR"' in _cov_sh)
-    check("  射程不在这里抄第二份（`--cov` 不带值 ⇒ 取 `[tool.coverage.run].source`）",
-          "--cov " in _cov_sh and "--cov=" not in _cov_sh)
-    check("  不再临时建 venv 挂 coverage（它已是 dev 分组的声明依赖）",
-          "uv venv" not in _cov_sh and "/tmp/cov" not in _cov_sh)
-    check("  这一档有唯一入口且文档指着它（没有第二个覆盖率配方）",
-          "scripts/dev/coverage.sh" in (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
+    _check_coverage_configuration(_pkgs, _dg_sec, PYPROJECT)
     print("\n⑥ 解释器版本只有一处事实源（六处手写 + 一份生成物，必须是同一个值）")
     _pf = re.search(r'^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"', PROJECT_SEC, re.M)
     PY_FLOOR = _pf.group(1) if _pf else None
@@ -288,7 +205,7 @@ def test_packaging():
     check(f"⭐ CI 的 `python-version` == {PY_FLOOR}",
           CI_PY == PY_FLOOR, f"CI={CI_PY}")
     if _base.is_file():
-        # 与 ④ 的 mypy 版本同款：这两项都**改变错误集**，换了就必须重出账。
+        # Scanner version and configuration define the comparable finding set.
         check(f"⭐ 棘轮基线的 `python_target` == {PY_FLOOR}（换目标就换了一套错误集）",
               _b.get("python_target") == PY_FLOOR, str(_b.get("python_target")))
     _ul = re.search(r'^requires-python\s*=\s*">=\s*([0-9]+\.[0-9]+)"',
@@ -307,8 +224,7 @@ def test_packaging():
           RUFF_PIN or "dependency-groups 里没有钉死的 ruff==")
     if _lint_base.is_file():
         _lb = json.loads(_lint_base.read_text(encoding="utf-8"))
-        # 三个量都是"换了它就不是同一个量"（同 ④ 里 mypy 版本那一条的道理）：
-        # ruff 版本换规则实现；line-length 一条 E501 就占掉全仓六成条目；select 多一族当场多一片。
+        # Rule implementation, line length and selection must remain comparable.
         check(f"⭐ 基线的 ruff 版本 == dev 分组钉的（{RUFF_PIN}）",
               _lb.get("ruff_version") == RUFF_PIN,
               f"基线={_lb.get('ruff_version')} dev={RUFF_PIN}")
@@ -317,8 +233,7 @@ def test_packaging():
         check(f"⭐ 基线的 line-length == pyproject 的（{_ll.group(1) if _ll else None}）",
               _ll is not None and _lb.get("line_length") == int(_ll.group(1)),
               f"基线={_lb.get('line_length')} pyproject={_ll.group(1) if _ll else None}")
-        # ⚠️ `select` 住在 `[tool.ruff.lint]`，**不是** `[tool.ruff]`——`_section` 按行首 `[`
-        # 截断，取错那一节会读到空串、判据当场红成"pyproject 是 None"（这条就是这么抓到的）。
+        # Rule selection belongs to tool.ruff.lint, separate from top-level options.
         _sel = re.search(r"^select\s*=\s*\[([^\]]*)\]",
                          _section(PYPROJECT, "tool.ruff.lint"), re.M)
         _sel_list = (re.findall(r'"([^"]+)"', _sel.group(1)) if _sel else None)
@@ -328,8 +243,7 @@ def test_packaging():
         check("  基线里记着读数（total 与逐文件计数都在）",
               isinstance(_lb.get("total"), int) and isinstance(_lb.get("by_file"), dict)
               and bool(_lb["by_file"]), f"total={_lb.get('total')}")
-        # 逐文件计数之和必须等于 total：两个口径分岔时棘轮会悄悄量另一个东西
-        # （`lint_gate._counts` 里那条 ValueError 是运行时的同一道，这里是落盘的这一道）。
+        # Stored totals must equal their per-file counts.
         check("  逐文件计数之和 == total（账自己得自洽）",
               sum(_lb["by_file"].values()) == _lb["total"],
               f"和={sum(_lb['by_file'].values())} total={_lb['total']}")
@@ -363,6 +277,91 @@ def test_packaging():
 
     assert not FAILED, (
         f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+
+def _check_wheel_sources(WHEEL_SEC):
+    _pkgs = re.findall(r'"([^"]+)"', WHEEL_SEC)
+    check("pyproject 里有 wheel 包列表", bool(_pkgs), WHEEL_SEC.strip()[:60])
+    check("每一项都是**真实存在**的目录（`chains/` 就是这么被写进去的）",
+          all((ROOT / p).is_dir() for p in _pkgs),
+          "、".join(p for p in _pkgs if not (ROOT / p).is_dir()))
+    _implicit = [p for p in _pkgs if not (ROOT / p / "__init__.py").is_file()]
+    check("每一项都有 `__init__.py`（隐式命名空间包会让 mypy 拒绝整个目录）",
+          not _implicit, "、".join(_implicit))
+    _LOCAL_DIRS = {p.name for p in ROOT.iterdir()
+                   if p.is_dir() and not p.name.startswith(".")
+                   and not p.name.startswith("__")}
+    _RUNTIME_SRC = [ROOT / "agent/main.py"]
+    for _d in ("agent", "config", "models", "rag", "tools", "utils"):
+        _RUNTIME_SRC += sorted((ROOT / _d).rglob("*.py"))
+    _IMPORT_RE = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_][A-Za-z0-9_]*)", re.M)
+    _used: set[str] = set()
+    for _p in _RUNTIME_SRC:
+        _used |= {m for m in _IMPORT_RE.findall(_p.read_text(encoding="utf-8"))}
+    _used &= _LOCAL_DIRS                       # 只留"是本仓顶层目录"的那些
+    _missing = sorted(_used - set(_pkgs))
+    check("生产代码 import 的本仓顶层包全在列表里（`rag/` 就是漏掉的那一个）",
+          not _missing, "漏：" + "、".join(_missing))
+    check("  对照：这个集合非空（否则上面那条是空跑）", len(_used) >= 5, str(sorted(_used)))
+
+    return _pkgs, _RUNTIME_SRC
+
+
+def _check_dependency_updates():
+    print("\n③ SECURITY.md 说 CVE 交给 Dependabot ⇒ 那份配置必须在场")
+    _dep = ROOT / ".github" / "dependabot.yml"
+    check(".github/dependabot.yml 在位", _dep.is_file())
+    if _dep.is_file():
+        _dt = _dep.read_text(encoding="utf-8")
+        check("格式版本是 2", re.search(r"^version:\s*2\s*$", _dt, re.M) is not None)
+        check("覆盖 pip（跟着 pyproject + uv.lock）",
+              'package-ecosystem: "pip"' in _dt)
+        check("覆盖 github-actions（workflow 里钉的 action 版本没有 lock 文件管）",
+              'package-ecosystem: "github-actions"' in _dt)
+        check("  两边都有 schedule（没有 schedule 的 update 配置不生效）",
+              _dt.count("schedule:") >= 2)
+    _sec = (ROOT / "SECURITY.md").read_text(encoding="utf-8")
+    check("对照：SECURITY.md 确实把这件事推给了 Dependabot（否则本套件名不副实）",
+          "Dependabot" in _sec)
+
+
+
+
+
+def _check_coverage_configuration(_pkgs, _dg_sec, PYPROJECT):
+    print("\n⑤ 覆盖率那一档（`scripts/dev/coverage.sh`）：pin 要带 extra，量的面要与打包的面同源")
+    _cov_pin = re.search(r'"coverage(\[[^\]]*\])?==([0-9][^"]*)"', _dg_sec)
+    check("pyproject 的 dev 分组钉了 coverage 版本", _cov_pin is not None,
+          _cov_pin.group(2) if _cov_pin else "dependency-groups 里没有钉死的 coverage==")
+    check("⭐ pin 带 `[toml]` extra（3.12 上它已多余，但写下来的是「配置读得进来」这个形状）",
+          _cov_pin is not None and _cov_pin.group(1) == "[toml]",
+          _cov_pin.group(0) if _cov_pin else "—")
+    _run_sec = _section(PYPROJECT, "tool.coverage.run")
+    _src = re.search(r"^source\s*=\s*\[(?P<v>.*?)\]", _run_sec, re.M | re.S)
+    COV_SOURCE = re.findall(r'"([^"]+)"', _src.group("v")) if _src else []
+    check("⭐ `[tool.coverage.run].source` == wheel 包列表（同一件事：生产包）",
+          sorted(COV_SOURCE) == sorted(_pkgs),
+          f"覆盖={sorted(COV_SOURCE)} 打包={sorted(_pkgs)}")
+    check("  对照：那一节确实在（正则没匹配到空串时上面那条会「绿得没有理由」）",
+          bool(_run_sec.strip()), f"{len(COV_SOURCE)} 项")
+    check("`[tool.coverage.run].parallel` 开着（否则各子进程互相覆盖）",
+          re.search(r"^\s*parallel\s*=\s*true", _run_sec, re.M | re.I) is not None)
+    check("`[tool.coverage.report]` 在场（`show_missing` 那份人看的表就长在这节里）",
+          bool(_section(PYPROJECT, "tool.coverage.report").strip()))
+    _cov_sh = re.sub(r"(?m)^\s*#.*$", "",
+                     (ROOT / "scripts" / "dev" / "coverage.sh").read_text(encoding="utf-8"))
+    _gi = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    check("`.coverage-data/` 既在覆盖率脚本里、也在 .gitignore 里（两处同一个名字）",
+          'COV_DIR=".coverage-data"' in _cov_sh and ".coverage-data/" in _gi)
+    check("  脚本先清上一轮的数据（残片会被 combine 合进来 ⇒ 报告里混进**上一版**的行号）",
+          'rm -rf "$COV_DIR"' in _cov_sh)
+    check("  射程不在这里抄第二份（`--cov` 不带值 ⇒ 取 `[tool.coverage.run].source`）",
+          "--cov " in _cov_sh and "--cov=" not in _cov_sh)
+    check("  不再临时建 venv 挂 coverage（它已是 dev 分组的声明依赖）",
+          "uv venv" not in _cov_sh and "/tmp/cov" not in _cov_sh)
+    check("  这一档有唯一入口且文档指着它（没有第二个覆盖率配方）",
+          "scripts/dev/coverage.sh" in (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

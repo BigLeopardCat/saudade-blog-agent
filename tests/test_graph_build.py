@@ -138,7 +138,7 @@ def test_graph_build():
         shutil.which = lambda _n: None
         gb._UV_PATH = None
         fake_dir = Path(tempfile.mkdtemp())
-        fake = fake_dir / "uv"                                 # 绝对路径 ⇒ 不碰真的 ~（回落表用 ~ 展开）
+        fake = fake_dir / "uv"
         fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         fake.chmod(0o755)
         gb.UV_FALLBACKS = (str(fake),)
@@ -244,6 +244,29 @@ def test_graph_build():
     _fresh()
     check("取消一个没在跑的任务：如实说 not_running（不假装成功）",
           gb.cancel()["reason"] == "not_running")
+    _check_graph_reports()
+    print("\n⑥ authz.holds：端点级能力只查授予表，身份不明恒 False")
+    check("管理员与超管都有 admin.console",
+          holds(Principal(1, ROLE_ADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
+          and holds(Principal(1, ROLE_SUPERADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
+    check("★ 普通用户没有（后台数据面只对管理员族开放）",
+          not holds(Principal(2, ROLE_USER, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
+          and not holds(Principal(3, "zako", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
+    check("★ 身份不明（role=None / 不认识的角色 / 根本没有 principal）⇒ False，从不默认放行",
+          not holds(Principal(9, None, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
+          and not holds(Principal(9, "谁", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
+          and not holds(None, SCOPE_ADMIN_CONSOLE))
+    check("它查的是同一张授予表（管理员在写面上也为真）",
+          holds(Principal(1, ROLE_ADMIN), SCOPE_WRITE_CONSOLE))
+    print(f"\ntest_graph_build: {'全绿' if not FAILS else str(len(FAILS)) + ' 条红'}")
+
+    assert not FAILS, (
+        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+
+
+
+
+def _check_graph_reports():
     print("\n④ 报告：dry-run 与『全命中缓存』不许长成同一句话")
     TAIL_DRY = ["② 抽词选词…", "--dry-run：不调 embedding、不写产物", "完成，用时 1.2s"]
     check("★ dry-run 的日志里根本没有那一行 ⇒ (None, None)，不报成『新增 0 条』",
@@ -267,24 +290,7 @@ def test_graph_build():
           "def start(raw_params: dict | None = None, mode: str = \"rebuild\")" in gbsrc)
     ignore = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
     check("建图任务的 logs/ 进了 .gitignore（运行时产物不入库）",
-          "logs/" in [l.strip() for l in ignore], [l for l in ignore if "log" in l])
-    print("\n⑥ authz.holds：端点级能力只查授予表，身份不明恒 False")
-    check("管理员与超管都有 admin.console",
-          holds(Principal(1, ROLE_ADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
-          and holds(Principal(1, ROLE_SUPERADMIN, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
-    check("★ 普通用户没有（后台数据面只对管理员族开放）",
-          not holds(Principal(2, ROLE_USER, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
-          and not holds(Principal(3, "zako", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE))
-    check("★ 身份不明（role=None / 不认识的角色 / 根本没有 principal）⇒ False，从不默认放行",
-          not holds(Principal(9, None, SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
-          and not holds(Principal(9, "谁", SOURCE_ASSERTION), SCOPE_ADMIN_CONSOLE)
-          and not holds(None, SCOPE_ADMIN_CONSOLE))
-    check("它查的是同一张授予表（管理员在写面上也为真）",
-          holds(Principal(1, ROLE_ADMIN), SCOPE_WRITE_CONSOLE))
-    print(f"\ntest_graph_build: {'全绿' if not FAILS else str(len(FAILS)) + ' 条红'}")
-
-    assert not FAILS, (
-        f"{len(FAILS)} 条未通过：" + "；".join(FAILS))
+          "logs/" in [line.strip() for line in ignore], [line for line in ignore if "log" in line])
 
 
 if __name__ == "__main__":
