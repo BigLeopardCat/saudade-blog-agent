@@ -13,6 +13,7 @@ from agent.products.blog.history import read_tool
 from agent.products.blog.read_tools import scoped_reads_enabled
 from agent.runtime.execution_state import capture
 from agent.runtime.memory_media import hydrate
+from agent.runtime.tool_execution import unknown_tool_result
 from agent.runtime.tool_state import activate_read
 from utils.trace import record
 
@@ -30,6 +31,10 @@ class BlogToolMiddleware(AgentMiddleware):
         call = request.tool_call
         if self._answered(request.state.get("messages", ()), call["id"]):
             return handler(request)
+        loaders = getattr(self.session, "loaders", {})
+        if call["name"] not in TOOL_SCOPE and call["name"] not in loaders:
+            return unknown_tool_result(call, (name for name in loaders
+                                              if self._allowed(name)))
         if not self._allowed(call["name"]):
             record("native", "tool_denied", name=call["name"])
             return ToolMessage(content="无权读取此数据。", status="error",
