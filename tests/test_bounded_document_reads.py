@@ -103,6 +103,23 @@ def test_all_source_types_roundtrip_long_original_text_with_one_bounded_get_per_
     assert all("/documents/" in request.url.path for request in calls)
 
 
+def test_body_continuation_omits_repeated_views_without_losing_exact_source(backend):
+    documents, calls, changes = backend
+    changes["metadata"] = {"description": "公开摘要" * 100, "tags": [], "tagsTruncated": False}
+    first = get_article_detail.invoke({"article_id": 19, "max_chars": 997}).data
+    continued = get_article_detail.invoke({"article_id": 19, "offset": first["nextOffset"],
+        "max_chars": 997, "revision": first["contentRevision"],
+        "section_schema": first["sectionSchema"]}).data
+    body = documents["note", 19][1]
+    assert continued["noteContent"] == body[997:1994]
+    assert continued["source"] == {**first["source"], "offset": 997, "end": 1994}
+    assert continued["nextOffset"] == 1994 and not continued["readComplete"]
+    assert continued["omittedViews"] == ["metadata", "outline"]
+    assert not {"description", "sections", "sectionCount"}.intersection(continued)
+    assert first["description"] and first["sections"]
+    assert len(calls) == 2
+
+
 def test_stats_is_an_independent_read_without_body_or_view_reporting(backend):
     _, calls, _ = backend
     value = get_article_stats.invoke({"article_id": 19})

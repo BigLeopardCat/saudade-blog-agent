@@ -80,7 +80,8 @@ def list_accounts(config: RunnableConfig, username: Username | None = None,
     known IDs or exact login usernames go directly to preparation, which verifies the target
     and state. A catalog miss does not prevent this server-side target check.
     For ambiguous matches show each ID, login username and nickname to distinguish candidates.
-    Returns totals, public admin fields and quotas (quotaLimit=0: unlimited turns).
+    Returns totals, ID/login/nickname, role, freeze/mute state and quotas
+    (quotaLimit=0: unlimited turns); registration timestamps are not available.
     Excludes superadmin/unknown roles and credentials; empty means no match in this scope.
     For a known ID outside this catalog, get_account_action_eligibility checks an operation
     without assuming absence or requiring a mute duration.

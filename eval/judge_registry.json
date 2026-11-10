@@ -607,7 +607,7 @@
         0
       ],
       "agent/products/blog/context.py": [
-        0,
+        1,
         0
       ],
       "agent/products/blog/editor_summary.py": [
@@ -992,7 +992,7 @@
       ]
     },
     "total": [
-      376,
+      377,
       0
     ]
   },

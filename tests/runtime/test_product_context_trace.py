@@ -39,7 +39,8 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["rendering"] == context["rendering"]
     assert facts["manual_ui"] == context["manual_ui"]
     assert facts["rendering"]["sticker_format"] == {
-        "markdown_text": "image", "inline_code": "literal", "code_block": "literal"}
+        "markdown_text": "image", "inline_code": "literal",
+        "code_block": "literal", "markdown_image_url": "image"}
 
 
 def test_only_the_time_used_in_the_prompt_is_added_to_review_facts(monkeypatch):
