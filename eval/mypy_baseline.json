@@ -10,10 +10,9 @@
     "tools",
     "utils"
   ],
-  "total": 5,
+  "total": 3,
   "files_checked": 272,
   "by_file": {
-    "agent/hostinfo.py": 2,
     "agent/reports.py": 1,
     "tools/admin_read.py": 2
   }

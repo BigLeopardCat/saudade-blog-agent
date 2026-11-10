@@ -200,7 +200,7 @@ systemctl show saudade-agent -p User -p Group -p EnvironmentFiles -p ExecStart
 curl --fail http://127.0.0.1:8010/health
 ```
 
-集成单元将 HTTP 标准输出追加到 `$APP_DIR/logs/agent/agent.log`；启动失败看 journal，scheduler 和维护任务默认使用 journal。trace 使用 `TRACE_DIR`，不上传公开 CI。`BLOG_ROOT` 只用于授权宿主日志诊断，独立服务没有宿主日志时留空；对账显式传 `--log-dir`、`--monitor-dir`，不把缺失数据计为零异常。
+集成单元将 HTTP 标准输出追加到 `$APP_DIR/logs/agent/agent.log`；启动失败看 journal，scheduler 和维护任务默认使用 journal。trace 使用 `TRACE_DIR`，不上传公开 CI。宿主状态由博客受保护诊断接口提供；对账显式传 `--log-dir`、`--monitor-dir`，不把缺失数据计为零异常。
 
 监控活动任务、排队/拒绝、数据库连接、磁盘和供应商错误/真实 usage。闲置网页不占运行许可。默认一个进程、最多 8 个活动聊天，需要按目标机器与供应商实测，不能据此宣称支持某个并发人数。`AGENT_PORT`、`AGENT_WORKERS`、`AGENT_WORKER_HEALTHCHECK_SECONDS` 由 systemd 注入；增加 worker 会放大并发和连接预算。
 

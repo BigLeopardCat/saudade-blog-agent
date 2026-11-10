@@ -183,8 +183,6 @@ class Settings(BaseSettings):
 
     # Relative storage follows the application's working directory; deployments may override it.
     trace_dir: str = "data/traces"
-    # Optional local blog checkout/deployment for host log diagnostics, never inferred from parents.
-    blog_root: str = ""
     # Optional PostgreSQL conversation persistence. Empty disables persistence;
     # invalid configuration aborts startup without an in-memory fallback.
     # Use a separate database: framework setup manages its own schema.
