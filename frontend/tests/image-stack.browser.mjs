@@ -25,7 +25,9 @@ await context.addInitScript(({token,origin})=>{
   sessionStorage.setItem('chat_open','1');
   let factory;
   Object.defineProperty(window,'__waifuStream',{configurable:true,get:()=>factory,set:value=>{
-    factory=(ctx,engine)=>{window.__imageStackChat=ctx;return value(ctx,engine);};
+    factory=(ctx,engine)=>{
+      window.__imageStackChat=ctx;window.__imageStackEngine=engine;return value(ctx,engine);
+    };
   }});
 },fixture);
 await context.route('**/*',route=>{
@@ -61,10 +63,7 @@ const open=async()=>{
   await page.waitForFunction(()=>typeof window.__chatRenderMarkdown==='function');
   await page.locator('#waifu-chat').waitFor();
   if(await page.evaluate(()=>window.__imageStackChat.state.conv)!==fixture.cid){
-    await page.locator('#conv-tasks-btn').click();
-    const task=page.locator(`[data-task-key="image:${fixture.id}"]`);
-    await task.locator('summary').click();
-    await task.getByRole('button',{name:'查看会话',exact:true}).click();
+    await page.evaluate(cid=>window.__imageStackEngine.adoptConversation(cid),fixture.cid);
   }
   await page.waitForFunction(cid=>window.__imageStackChat.state.conv===cid,fixture.cid);
   return page;
@@ -92,6 +91,9 @@ try{
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
   await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
   assert.equal(reports().length,1,'Visible completion did not initiate exactly one report');
+  await page.locator('#conv-tasks-btn').click();
+  assert.equal(await task.count(),0,'Generated image remains in the active task list');
+  await page.getByRole('button',{name:'关闭任务列表'}).click();
   const resultImage=page.locator('#chat-ask .chat-image-review img').first();
   await resultImage.waitFor();
   await page.waitForFunction(()=>[...document.querySelectorAll('#chat-ask img')]
@@ -117,13 +119,18 @@ try{
   assert.equal(reports().filter(row=>row.image_event.job_id===second.id).length,1,
     'Reload duplicated an acknowledged completion');
   await page.locator('#conv-tasks-btn').click();
-  const deleting=page.locator(`[data-task-key="image:${second.id}"]`);
-  await deleting.locator('summary').click();
-  await deleting.getByRole('button',{name:'删除任务记录',exact:true}).click();
-  await deleting.getByRole('button',{name:'确认删除',exact:true}).click();
-  await deleting.waitFor({state:'detached'});
-  await page.waitForFunction(()=>!window.__imageStackChat.state.pendingAsk);
+  assert.equal(await page.locator('#chat-task-panel [data-task-key^="image:"]').count(),0,
+    'Completed and saved image history must stay outside the task list');
   await page.getByRole('button',{name:'关闭任务列表'}).click();
+  await page.getByRole('button',{name:'暂不保留',exact:true}).click();
+  await page.waitForFunction(()=>!window.__imageStackChat.state.pendingAsk&&!window.__imageStackChat.state.isSending);
+  const deleted=await page.evaluate(async id=>{
+    const response=await fetch('/api/protect/image-generation/jobs/'+id,{
+      method:'DELETE',headers:{Authorization:'Bearer '+localStorage.getItem('tokenKey')},
+    });
+    return {status:response.status,body:await response.json()};
+  },second.id);
+  assert.equal(deleted.status,200);assert.equal(deleted.body.code,200);
   const next=await control('new');await control('complete');
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
   await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
