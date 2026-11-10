@@ -88,6 +88,9 @@ try{
   await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
   await until(()=>reports().filter(row=>row.image_event.job_id===fixture.id).length===2);
   await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
+  const savedImage=page.locator('#chat-messages img[src^="/api/public/media/"]').last();
+  await savedImage.waitFor();
+  await until(()=>savedImage.evaluate(image=>image.complete&&image.naturalWidth>0));
   const before=reports().length;
   await page.close();
   const second=await control('new');await control('complete');

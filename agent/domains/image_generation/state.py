@@ -1,6 +1,8 @@
 """Validated host job state; preview credentials remain in presentation artifacts only."""
 
 from typing import Literal
+from urllib.parse import urlsplit
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, StrictStr
 
@@ -42,11 +44,37 @@ class Job(BaseModel):
     eventVersion: StrictStr = Field(default="", pattern=r"^(?:[0-9a-f]{64})?$")
     saveStorage: Literal["local", "r2"] = "local"
 
+    def gallery_url(self):
+        if self.status != "accepted" or self.imageRemoved or self.imageId is None:
+            return None
+        url = self.previewUrl
+        if not url or any(char.isspace() for char in url):
+            return None
+        try:
+            parts = urlsplit(url)
+            if parts.query or parts.fragment or parts.username or parts.password:
+                return None
+            if parts.path.startswith("/api/public/image-generation/"):
+                return None
+            if parts.scheme == "https" and parts.hostname:
+                return url
+            prefix = "/api/public/media/"
+            if not parts.scheme and not parts.netloc and parts.path.startswith(prefix):
+                media_id = parts.path.removeprefix(prefix)
+                if str(UUID(media_id)) == media_id:
+                    return url
+        except ValueError:
+            pass
+        return None
+
     def visible(self, *, wait_outcome="observed"):
-        return {"id": self.id, "status": self.status, "imageId": self.imageId,
+        result = {"id": self.id, "status": self.status, "imageId": self.imageId,
                 "hasPreview": self.previewUrl is not None, "imageRemoved": self.imageRemoved,
                 "error": self.error,
                 "waitOutcome": wait_outcome}
+        if url := self.gallery_url():
+            result["url"] = url
+        return result
 
 
 def checked(value, job_id):
