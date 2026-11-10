@@ -51,7 +51,7 @@ def _tag(row):
 def list_notes(page: Page = 1, page_size: Limit = 5,
                category_id: Identifier | None = None) -> object:
     """分页读取公开文章元数据与总数，默认5条、最多10条，可按分类编号筛选；不读取正文。
-    可按标题和宿主sourceUrl推荐，无需为链接读正文；这些元数据不能证明正文完整度或质量。
+    一般推荐可依据标题、分类和宿主sourceUrl；未要求正文分析时不为推荐补读正文，也不评价正文完整度或质量。
     sourceUrl为空表示链接未知，不代表文章不存在。
     """
     return read_page("articles", page, page_size, {"category_id": category_id}, _article,
@@ -61,7 +61,7 @@ def list_notes(page: Page = 1, page_size: Limit = 5,
 @tool
 def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
     """分页读取公开置顶文章元数据与总数，默认5条、最多10条；不读取正文。
-    可按标题和宿主sourceUrl推荐，不判断未读正文的完整度或质量；sourceUrl为空时保持链接未知。
+    一般推荐依据标题、分类和宿主sourceUrl即可，不为此补读或评价正文；sourceUrl为空时保持链接未知。
     """
     return read_page("articles", page, page_size, {"top_only": True}, _article, {"isTop": 1})
 
