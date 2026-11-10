@@ -1,13 +1,12 @@
 {
-  "_note": "Pinned scanner findings by file; unregistered files and per-file increases fail. Tighten this ledger when findings decrease.",
+  "_note": "盲捕获（BLE001）条数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量（ruff 版本 / select / pyproject 的 lint ignore）都必须与出账时同源——任一都会改变条目集。**只记账、不批量改**：这些宽 except 大多是故意的降级路径（工具层返回 unavailable、图里少一帧），机械收窄会把降级改成崩溃。判据见 eval/except_gate.py 头注。",
   "ruff_version": "0.14.4",
   "select": [
     "BLE001"
   ],
   "project_lint_ignore": null,
-  "total": 26,
+  "total": 24,
   "by_file": {
-    "agent/checkpoint.py": 1,
     "agent/confirm.py": 5,
     "agent/moderator.py": 1,
     "eval/corpus_provenance.py": 2,
@@ -16,7 +15,7 @@
     "eval/golden_evaluation.py": 2,
     "eval/identity_preflight.py": 2,
     "eval/trace_reconcile.py": 3,
-    "rag/search.py": 2,
+    "rag/search.py": 1,
     "scripts/sticker_smoke.py": 1,
     "tests/test_checkpoint_factory.py": 2,
     "tests/test_packaging.py": 1,
