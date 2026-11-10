@@ -12,7 +12,7 @@ import jwt
 import psycopg
 
 
-def run_image_drill(agent, work, out, dsn, session_key, provider, common):
+def run_image_drill(agent, blog, work, out, dsn, session_key, provider, common):
     assert "isolated" in dsn or "chat_stack" in dsn or "stack_" in dsn
     pixels = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/"
@@ -78,7 +78,7 @@ def run_image_drill(agent, work, out, dsn, session_key, provider, common):
     provider.image_control = control
     fixture = work / "image-fixture.json"
     fixture.write_text(json.dumps({"token": token(uid, "superadmin"), "uid": uid, "cid": cid,
-        "id": current["id"], "origin": origin,
+        "id": current["id"], "origin": origin, "frontend": str(blog / "frontend"),
         "provider": f"http://127.0.0.1:{provider.server_port}"}))
     fixture.chmod(0o600)
     subprocess.run(["node", "frontend/tests/image-stack.browser.mjs"], cwd=agent,
