@@ -102,16 +102,28 @@ def test_summary_is_one_aggregate_request_with_no_content(backend):
                         ("total", "pending", "passed", "rejected")},
         "aiDecision": {key: backend["counts"][key] for key in
                        ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
-    assert data["board"] == {"scope": "all", "reviewProvenance": "not_reported", **counts}
+    assert data["board"] == {"scope": "all", "reviewProvenance": "not_reported",
+                            "manualReviewCount": None, **counts}
     assert data["comments"] == {"scope": "not_deleted",
         "finalStatus": {key: backend["comment_counts"][key] for key in
                         ("total", "pending", "passed", "rejected")},
         "aiDecision": {key: backend["comment_counts"][key] for key in
                        ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")},
-        "reviewProvenance": "not_reported"}
+        "reviewProvenance": "not_reported", "manualReviewCount": None}
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")
     assert "content" not in str(data)
+
+
+def test_passed_without_ai_record_does_not_supply_a_manual_review_count(backend):
+    backend["comment_counts"] = {
+        "total": 13, "pending": 0, "passed": 13, "rejected": 0,
+        "aiPassed": 0, "aiFlagged": 0, "aiRejected": 0, "aiUnreviewed": 13,
+    }
+    data = json.loads(str(moderation.get_moderation_status.invoke({}, config=config())))
+    assert data["comments"]["finalStatus"]["passed"] == 13
+    assert data["comments"]["aiDecision"]["aiUnreviewed"] == 13
+    assert data["comments"]["manualReviewCount"] is None
 
 
 @pytest.mark.parametrize("resource,field,value", [

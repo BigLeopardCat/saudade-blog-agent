@@ -158,6 +158,31 @@ def test_disabled_scheduler_never_issues_a_future_execution_card(monkeypatch):
     signer.assert_not_called()
 
 
+def test_scheduled_change_exposes_policy_without_claiming_execution(monkeypatch):
+    from agent.principal import Principal
+    from agent.scheduling.effects import propose
+    from config.settings import settings
+
+    monkeypatch.setattr(settings, "scheduling_enabled", True)
+    monkeypatch.setattr(settings, "confirmation_secret", "scheduling-fixture-secret-at-least-32")
+    original = {"verified_target": "category fixture"}
+    result = propose(
+        Principal(7, "admin", "assertion"), 42, "categories",
+        {"tool": "create_category", "args": change()["change"]},
+        "创建分类？", "分类", {"delay_seconds": 300}, preparation_facts=original,
+    )
+    pending = result.execution["pending_confirm"]
+    assert pending["preparation_facts"]["execution_policy"] == {
+        "target_version_guard": True,
+        "on_target_change": "stop_without_replanning",
+        "result_notification": "best_effort",
+    }
+    assert pending["preparation_facts"]["verified_target"] == original["verified_target"]
+    assert pending["preparation_facts"]["timing"]["basis"] == "after_approval"
+    assert result.execution["receipts"] == []
+    assert original == {"verified_target": "category fixture"}
+
+
 def test_optional_write_payload_does_not_change_saved_read_schedule_identity():
     from contextlib import nullcontext
     from types import SimpleNamespace

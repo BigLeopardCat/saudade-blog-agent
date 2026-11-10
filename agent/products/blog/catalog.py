@@ -37,16 +37,17 @@ DOMAIN_DESCRIPTIONS = {
     "河灯/留言 and review status.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
     "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
-    "pinning, tags or permanent deletion. Known article/image IDs need no prior lookup; "
-    "cover preparation includes layout previews.",
+    "pinning, tags or permanent deletion. Known IDs need no lookup; tag assignment creates "
+    "missing tags on approval; covers include layout previews.",
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed tag creation, edits or deletion. "
     "Article-tag assignment: admin_article_management.",
-    "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格); "
-    "no mute duration needed.",
-    "admin_account_actions": "Prepare freeze, mute or role changes; eligibility-only queries "
-    "use admin_accounts. Resolve ambiguous names first. System notices are fixed templates; "
+    "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
+    "For mute requests without a duration, check eligibility here before asking for duration.",
+    "admin_account_actions": "Prepare freeze, mute or role changes. Mute requires a duration "
+    "or explicit permanence; missing duration or eligibility checks use admin_accounts. "
+    "Resolve ambiguous names first. System notices are fixed templates; "
     "custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
