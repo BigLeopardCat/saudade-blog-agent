@@ -234,6 +234,9 @@ def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["accounts", "write_prepare"]) == "prepare"
     assert task_class(["accounts", "memory"]) == "conversation"
     assert task_class(["security", "negative"]) == "chat"
+    assert task_class(["identity", "capabilities"]) == "read"
+    assert task_class(["capabilities", "negative"]) == "read"
+    assert task_class(["capabilities", "write_prepare"]) == "prepare"
 
 
 def test_noncritical_semantic_question_stays_unverified_within_quality_budgets(tmp_path):
