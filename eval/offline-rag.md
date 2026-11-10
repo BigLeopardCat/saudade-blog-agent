@@ -22,6 +22,23 @@ python -m eval.offline_rag_eval eval/fixtures/blog_retrieval --split test --outp
 生产需求决定验收分布，不代表普通 PR 必须访问维护者的服务器。
 独立验收集应与调参材料隔离；用来调优后轮换，不能只换成 holdout 标签。
 
+## 中英文词法分析
+
+文档与查询共用 jieba 搜索分词、Snowball 英文词干和 Unicode 归一化。
+技术标识保留有意义的标点，区分 C++、C# 和 C；中文单字可参与检索。
+索引保留原词；查询优先内容特征，纯停用词查询保留完整特征以支持真实标题检索。
+中文使用有界二字回退保留跨词边界的召回，同一原文位置的相同特征去重，不生成全部三字组合。
+证据摘录使用分词时保留的原文坐标，大小写、重音、兼容字符及词干变化不改变源偏移。
+分词策略与依赖版本记录于 lexical_backend；词法索引随进程重建，向量空间及已有向量不变。
+中英文同语种检索与共享技术标识由词法覆盖，跨语言语义检索仍依赖向量能力。
+
+```sh
+python -m eval.offline_rag_eval eval/fixtures/bilingual_retrieval --output /tmp/rag-bilingual.json
+```
+
+这组材料是公开的中英文开发回归集，包含技术名词、英文词形、Unicode、中文单字和无答案，
+不作为独立验收集或跨语言语义检索成绩。评估时同时保留现有中文技术集的逐题退化检查。
+
 ## 数据和指标
 
 目录包含 corpus.jsonl、queries.jsonl、qrels/<split>.tsv 和 manifest.json。

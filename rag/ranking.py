@@ -3,10 +3,9 @@
 from __future__ import annotations
 
 import math
-import re
 
 from rag.sections import PARSER_VERSION
-from rag.tokenization import tokenize
+from rag.tokenization import analyzed, tokenize
 
 EXCERPT_CHARS = 240
 MATCH_FIELDS = ("title", "heading", "body")
@@ -37,17 +36,13 @@ def _annotate(chunk: dict, match: dict, score: float, retriever: str, query_term
     body = text[prefix:]
     terms = set(query_terms)
     fields = {"title": str(chunk.get("title", ""))[:400], "heading": text[:prefix], "body": body}
-    matched = {field: terms.intersection(tokenize(value)) for field, value in fields.items()}
+    body_features = list(analyzed(body))
+    matched = {field: terms.intersection(
+        (term for term, _, _ in body_features) if field == "body" else tokenize(value))
+        for field, value in fields.items()}
     match["matched_fields"] = [field for field in MATCH_FIELDS if matched[field]]
     match["retrieval_scores"] = {retriever: float(score)}
-    positions = []
-    for term in matched["body"]:
-        pattern = re.escape(term)
-        if term.isascii():
-            pattern = r"(?<![a-zA-Z0-9_.])" + pattern + r"(?![a-zA-Z0-9_.])"
-        found = re.search(pattern, body, re.IGNORECASE | re.ASCII)
-        if found:
-            positions.append(found.start())
+    positions = [start for term, start, _ in body_features if term in matched["body"]]
     start = max(0, min(positions, default=0) - EXCERPT_CHARS // 3)
     snippet = body[start:start + EXCERPT_CHARS]
     if snippet:
