@@ -60,7 +60,8 @@ DOMAIN_DESCRIPTIONS = {
     "records, anonymous publishers (list_admin_board), confirmed moderation/deletion.",
     "admin_reports": "Article view/like/favorite rankings and totals (get_note_stats), "
     "period reports, user statistics and server health.",
-    "site": "Author profile, social links, site map and page controls.",
+    "site": "Current site feature guide, caller navigation availability, "
+    "author profile and social links.",
     "favorites": "Your favorites and confirmed additions/removals.",
     "notifications": "Your notices/unread, read-state and deletion, including announcement "
     "copies; deletion preserves global originals and others' copies.",
