@@ -1,6 +1,13 @@
-"""Native authorization contract without planner or graph imports."""
+"""Blog authorization and unknown-tool recovery through actual framework middleware."""
 
+import json
+
+import pytest
+from _memory_support import Capture
+from _own_support import config
 from _tool_catalog import permission_names
+from langchain_core.messages import AIMessageChunk, HumanMessage, ToolMessage
+from langchain_core.tools import tool
 
 from agent import authz
 from agent.principal import (
@@ -14,6 +21,8 @@ from agent.principal import (
     UNKNOWN,
     Principal,
 )
+from agent.products.blog.tool_policy import BlogToolMiddleware
+from agent.runtime.session import ToolSession
 
 
 def principal(role, uid=7):
@@ -53,3 +62,44 @@ def test_native_write_classification_is_explicit():
     assert authz.required_scope("account_mute") == authz.SCOPE_WRITE_CONSOLE
     assert authz.required_scope("account_unmute") == authz.SCOPE_WRITE_CONSOLE
     assert authz.required_scope("set_account_role") == authz.SCOPE_WRITE_CONSOLE
+
+
+def test_unknown_name_feedback_does_not_disclose_forbidden_domains():
+    @tool
+    def get_blog_info():
+        """Public fixture, never invoked by this test."""
+        raise AssertionError("Unknown name must not execute")
+
+    @tool
+    def list_accounts():
+        """Private fixture, never invoked by this test."""
+        raise AssertionError("Unknown name must not execute")
+
+    model = Capture(AIMessageChunk(content="", tool_calls=[{
+        "name": "invented_tool", "args": {}, "id": "unknown"}]),
+        AIMessageChunk(content="unavailable"))
+    ToolSession(model, config(), {}, {"public": {"get_blog_info": get_blog_info},
+                "admin_accounts": {"list_accounts": list_accounts}},
+                middleware=(BlogToolMiddleware,)).run([HumanMessage(content="read")])
+    result = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
+    assert json.loads(result.content) == {"error": "unknown_tool", "tool": "invented_tool",
+                                         "discovery_tools": ["load_public_info_tools"]}
+
+
+@pytest.mark.parametrize("name", ["list_accounts", "add_favorite"])
+def test_known_forbidden_read_and_unapproved_write_remain_denied(name):
+    invoked = []
+
+    @tool(name)
+    def forbidden():
+        """A known tool whose execution must stay denied."""
+        invoked.append(True)
+        return "must not execute"
+
+    model = Capture(AIMessageChunk(content="", tool_calls=[{
+        "name": name, "args": {}, "id": "denied"}]), AIMessageChunk(content="denied"))
+    ToolSession(model, config(), {name: forbidden}, {}, middleware=(BlogToolMiddleware,)).run(
+        [HumanMessage(content="execute")])
+    result = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
+    assert result.status == "error" and result.content == "无权读取此数据。"
+    assert not invoked
