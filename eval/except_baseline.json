@@ -1,5 +1,5 @@
 {
-  "_note": "盲捕获（BLE001）条数的棘轮基线。只许变小；--update 是唯一放宽通道。三个量（ruff 版本 / select / pyproject 的 lint ignore）都必须与出账时同源——任一都会改变条目集。**只记账、不批量改**：这些宽 except 大多是故意的降级路径（工具层返回 unavailable、图里少一帧），机械收窄会把降级改成崩溃。判据见 eval/except_gate.py 头注。",
+  "_note": "Pinned scanner findings by file; unregistered files and per-file increases fail. Tighten this ledger when findings decrease.",
   "ruff_version": "0.14.4",
   "select": [
     "BLE001"
