@@ -27,7 +27,8 @@ def test_empty_matches_preserve_the_actual_query_and_public_scope(monkeypatch):
     assert json.loads(str(result)) == result.data == {
         "resource": "articles", "scope": "public_articles_keyword_matches",
         "query": "巧克力蛋糕", "searchedFields": ["title", "body", "tags"],
-        "items": [], "returnedCount": 0}
+        "items": [], "returnedCount": 0,
+        "resultSummary": "本次查询在当前检索范围内未命中；相关内容是否存在仍未知。"}
 
 
 def test_blank_search_does_not_turn_into_an_unbounded_catalog_read(monkeypatch):
@@ -68,6 +69,7 @@ def test_scoped_metadata_reaches_the_actual_model_and_article_evidence(monkeypat
     messages = [m for m in requests[-1]["messages"] if m["role"] == "tool"]
     content = json.loads(messages[-1]["content"])
     assert content["query"] == "候选" and content["returnedCount"] == 1
+    assert "resultSummary" not in content
     assert content["items"][0]["tags"] == [{"id": 7, "level": 1, "name": "标签"}]
     assert "private-body-canary" not in str(requests)
     assert result.reply == "找到《真实候选》。" and len(reads) == 1

@@ -46,6 +46,7 @@ def _get(
 
 
 _NOTE_COUNT_KEYS = ("views", "likes", "favorites")
+_NO_MATCH_SUMMARY = "本次查询在当前检索范围内未命中；相关内容是否存在仍未知。"
 
 
 def _note_counts(row) -> dict:
@@ -110,6 +111,8 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     value = {"resource": "articles", "scope": "public_articles_keyword_matches",
              "query": keyword, "searchedFields": ["title", "body", "tags"],
              "items": slim, "returnedCount": len(slim)}
+    if not slim:
+        value["resultSummary"] = _NO_MATCH_SUMMARY
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return ok(text, data=value) if slim else empty(text, data=value)
 
@@ -255,7 +258,7 @@ def rag_search(
             if meta["retrieval"]["semantic"] == "incomplete" or corpus["stale"]:
                 return unavailable(search_text(
                     meta, "本次未取得候选，检索尚未完整完成，不能据此判断无相关文章。"), meta=meta)
-            return empty(search_text(meta, "本次查询在当前检索范围内未命中。"), meta=meta)
+            return empty(search_text(meta, _NO_MATCH_SUMMARY), meta=meta)
         try:
             verified = current_public(hits, _get)
         except VisibilityUnavailable as error:
