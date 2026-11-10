@@ -28,9 +28,12 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
         return
     overview = initial["get_agent_capabilities"].invoke({})
     assert overview["grants_authorization"] is False
-    assert {row["name"]: row["available_tools"] for row in overview["domains"]} == {
+    assert {row["name"]: list(row["tools"]) for row in overview["domains"]} == {
         name: list(tools) for name, tools in domains.items() if tools}
-    shown = {name for row in overview["domains"] for name in row["available_tools"]}
+    for row in overview["domains"]:
+        for name, summary in row["tools"].items():
+            assert summary == domains[row["name"]][name].description.split("\n", 1)[0]
+    shown = {name for row in overview["domains"] for name in row["tools"]}
     assert ("prepare_user_notice" in shown) == (role == "admin" and available)
     assert ("get_moderation_status" in shown) == (role == "admin")
     assert ("prepare_favorite_change" in shown) == available
@@ -39,7 +42,13 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
         assert not any(row["name"].startswith("admin_") for row in overview["domains"])
     text = json.dumps(overview, ensure_ascii=False)
     assert '"parameters"' not in text and '"properties"' not in text
-    assert estimate_tokens([ToolMessage(content=text, tool_call_id="overview")]) < 4096
+    overview_size = estimate_tokens([ToolMessage(content=text, tool_call_id="overview")])
+    schemas = json.dumps([convert_to_openai_tool(tool)
+                          for tools in domains.values() for tool in tools.values()],
+                         ensure_ascii=False)
+    schema_size = estimate_tokens([ToolMessage(content=schemas, tool_call_id="schemas")])
+    assert overview_size < 8192
+    assert overview_size < schema_size / 4
     schema = convert_to_openai_tool(initial["get_agent_capabilities"])
     assert not schema["function"]["parameters"].get("properties")
 

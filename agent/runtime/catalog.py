@@ -12,7 +12,9 @@ def capability_overview(initial, domains):
             "grants_authorization": False,
             "initial_tools": [{"name": name, "summary": tool.description.split("\n", 1)[0]}
                               for name, tool in initial.items()],
-            "domains": [{"name": name, "available_tools": list(tools)}
+            "domains": [{"name": name, "tools": {
+                tool_name: tool.description.split("\n", 1)[0]
+                for tool_name, tool in tools.items()}}
                         for name, tools in domains.items() if tools],
         }
 
