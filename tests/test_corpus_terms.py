@@ -1,12 +1,4 @@
-"""语料术语派生（`eval/corpus_terms.py`）的离线自测：S1–S5 五条过滤规则逐条锁，
-外加判据接线（`golden_evaluation.check_gold` 的 `require_doc_terms`，含「未评估 ≠ 通过」）。
-
-秒级、无网络；由 eval.yml 在 push 时跑。
-
-五篇内联夹具（不联网），设计成每条规则**至少有一条词专门踩它**：
-
-用法：.venv/bin/python tests/test_corpus_terms.py
-"""
+"""Offline coverage of corpus-term derivation, assertion wiring and exposure accounting."""
 
 
 from __future__ import annotations
@@ -104,14 +96,13 @@ def test_corpus_terms():
     DOCS = [
         {"type": "note", "id": 1,
          "title": "OTA 记录",
-         "content": "esp_https_ota 轮询 8010 v1.2 累加和 分块 怎么 这个 a ... 1."},
+         "content": "esp_https_ota 轮询 8010 v1.2 数据库 分块 怎么 这个 a ... 1."},
         {"type": "note", "id": 2,
          "title": "另一篇",
          "content": "esp_https_ota 这个"},
         {"type": "note", "id": 3, "title": "第三篇", "content": "分块"},
         {"type": "note", "id": 4, "title": "第四篇", "content": "分块"},
-        # 第五篇专门用来喂"派生集为空"：内容只剩纯数字与单字符（S2/S1 全拦），
-        # 标题也是 3-gram 以外没有可用的词。
+        # Numeric, single-character and function terms leave no assertion candidates.
         {"type": "note", "id": 5, "title": "", "content": "8010 a 这个"},
     ]
     print("① 默认档（df_max=2）：放行该放行的、拦下该拦的")
@@ -159,8 +150,8 @@ def test_corpus_terms():
     print("\n④ S5：非词形只标记不排除")
     check("含 `.` 的词标 `id_like` 且**留在**结果里",
           "v1.2" in terms and "v1.2" in diag["marks"]["id_like"], str(terms))
-    check("纯 CJK 3-gram 标 `gram3` 且留在结果里",
-          "累加和" in terms and "累加和" in diag["marks"]["gram3"])
+    check("三字中文术语标 `gram3` 且留在结果里",
+          "数据库" in terms and "数据库" in diag["marks"]["gram3"])
     check("标记集是结果集的子集（标记的是**返回的**词，不是另一批）",
           set(diag["marks"]["id_like"]) <= set(terms)
           and set(diag["marks"]["gram3"]) <= set(terms))
@@ -214,7 +205,8 @@ def test_corpus_terms():
     _LONG = " ".join(f"verylongtoken_identifier_{i:02d}" for i in range(60))
     _CAPDOC = [{"type": "note", "id": 7, "title": "", "content": _LONG + " zebra"}]
     check("判据侧用的是不截断的派生集（cap=40 是回显口径，不能拿来判诚实回答）",
-          _judge({"require_doc_terms": [{"doc": "note:7", "min_terms": 1}]}, "这题说的是 zebra", _CAPDOC) == []
+          _judge({"require_doc_terms": [{"doc": "note:7", "min_terms": 1}]},
+                 "这题说的是 zebra", _CAPDOC) == []
           and ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:1] != ["zebra"],
           str(ct.derive(["note:7"], docs=_CAPDOC, min_doc_chars=0)[0][:2]))
     print("\n⑧ 判据暴露度（`--exposure`）：把今天的判据跑在归档回复上，逐条锁口径")

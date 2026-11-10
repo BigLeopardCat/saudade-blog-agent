@@ -4,6 +4,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
 from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from eval.offline_rag_eval import bm25_run, evaluate
@@ -29,6 +30,15 @@ def test_bilingual_technical_queries_rank_relevant_documents_and_reject_absent_t
     assert set(run["csharp"]) == {"cn_csharp", "en_csharp"}
     result = evaluate(data, run, [1, 3])
     assert result["summary"]["all"]["R@3"]["value"] == 1
+
+
+@pytest.mark.parametrize("title", ["How", "Why"])
+def test_common_english_words_remain_searchable_as_actual_titles(title):
+    document = {"type": "note", "id": 1, "title": title, "content": "An essay about curiosity."}
+    index = RagIndex(corpus_loader=lambda: [document], vector_warmer=lambda _: None)
+    assert index.build()
+    assert [row["id"] for row in index._lexical_ranked(title, 1)] == [1]
+    assert index._lexical_ranked(title + " photosynthesisxyz", 1) == []
 
 
 def test_document_features_keep_frequency_and_technical_identities():

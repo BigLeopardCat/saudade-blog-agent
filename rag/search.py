@@ -21,7 +21,7 @@ from rag.embedding_inputs import InputProfileError, vector_chunks
 from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
 from rag.sections import reading_revision
-from rag.tokenization import tokenize
+from rag.tokenization import query_features, tokenize
 from rag.vector_index import (
     chunk_text,
     corpus_fingerprint,
@@ -254,12 +254,12 @@ class RagIndex:
         assert lexical is not None
         vocabulary = lexical.vocabulary
         # Deduplicate query terms without changing corpus frequencies.
-        q_toks = list(dict.fromkeys(t for t in tokenize(query) if t in vocabulary))
+        q_toks = list(dict.fromkeys(t for t in query_features(query) if t in vocabulary))
         if _EXPANSION_ENABLED:
             for _pair in _QUERY_SYNONYMS:
                 if _pair["key"] in query:
                     q_toks += [
-                        t for t in tokenize(query.replace(_pair["key"], _pair["val"]))
+                        t for t in query_features(query.replace(_pair["key"], _pair["val"]))
                         if t not in q_toks and t in vocabulary]
         q_toks = list(dict.fromkeys(q_toks))
         if not q_toks:
@@ -356,7 +356,7 @@ class RagIndex:
             store.record_failure()
             return [], "vector_database_unavailable", len(store.missing())
         ranked = rank_documents(chunks, scores, revision, retriever="vector",
-                                query_terms=tokenize(query), limit=top_k)
+                                query_terms=query_features(query), limit=top_k)
         for r in ranked:
             r["score"] = round(r["score"], 4)
         return ranked, (None if ranked else "no_vector_hits"), len(store.missing())

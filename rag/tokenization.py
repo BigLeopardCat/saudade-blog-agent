@@ -7,7 +7,7 @@ from functools import cache
 from importlib.metadata import version
 
 import regex
-from bm25s.stopwords import STOPWORDS_CHINESE, STOPWORDS_EN
+from bm25s.stopwords import STOPWORDS_CHINESE, STOPWORDS_EN_PLUS
 
 POLICY_VERSION = "bilingual-search-v1"
 _START = r"[\p{L}\p{N}--\p{Script=Han}]"
@@ -19,7 +19,7 @@ _UNITS = regex.compile(
 )
 _PARTS = regex.compile(r"[._/:-]+")
 _STOP_ZH = frozenset(STOPWORDS_CHINESE)
-_STOP_EN = frozenset(STOPWORDS_EN)
+_STOP_EN = frozenset(STOPWORDS_EN_PLUS)
 _LOCAL = threading.local()
 
 
@@ -49,8 +49,6 @@ def _normalize(word):
 
 def _word_features(word):
     word = _normalize(word)
-    if word in _STOP_EN:
-        return
     if word.isalpha():
         yield _english(word)
         return
@@ -60,38 +58,32 @@ def _word_features(word):
             yield _english(part)
 
 
+def _chinese_features(word):
+    seen = set()
+    for term, start, end in _chinese().tokenize(word, mode="search"):
+        feature = (unicodedata.normalize("NFKC", term), start, end)
+        if feature not in seen:
+            seen.add(feature)
+            yield feature
+    for start in range(len(word) - 1):
+        term = unicodedata.normalize("NFKC", word[start:start + 2])
+        feature = (term, start, start + 2)
+        if term not in _STOP_ZH and feature not in seen:
+            yield feature
+
+
 def analyzed(text: str) -> Iterator[tuple[str, int, int]]:
     """Yield features and their original Python Unicode source spans.
 
-    Whole technical identifiers retain punctuation. Chinese search segmentation
-    adds bigrams for unknown words and adjacent single-character segments.
+    Technical identifiers retain punctuation. Chinese search words have a bounded
+    bigram backoff, deduplicated by occurrence to preserve document frequencies.
     Normalization changes features, never the source coordinates.
     """
     for match in _UNITS.finditer(text):
         word = match.group()
         if regex.fullmatch(r"\p{Script=Han}+", word):
-            tokenizer = _chinese()
-            previous_single = None
-            for term, start, end in tokenizer.tokenize(word, mode="search"):
-                feature = unicodedata.normalize("NFKC", term)
-                if feature in _STOP_ZH:
-                    previous_single = None
-                    continue
-                if end - start == 1:
-                    if previous_single is not None and previous_single[1] == start:
-                        low = previous_single[0]
-                        yield (unicodedata.normalize("NFKC", word[low:end]),
-                               match.start() + low, match.start() + end)
-                    previous_single = (start, end)
-                else:
-                    previous_single = None
+            for feature, start, end in _chinese_features(word):
                 yield feature, match.start() + start, match.start() + end
-                if len(term) > 2 and not tokenizer.FREQ.get(term):
-                    for offset in range(len(term) - 1):
-                        gram = unicodedata.normalize("NFKC", term[offset:offset + 2])
-                        if gram not in _STOP_ZH:
-                            absolute = match.start() + start + offset
-                            yield gram, absolute, absolute + 2
         else:
             for feature in _word_features(word):
                 yield feature, match.start(), match.end()
@@ -100,6 +92,16 @@ def analyzed(text: str) -> Iterator[tuple[str, int, int]]:
 def tokenize(text: str) -> list[str]:
     """Keep document term frequencies; query consumers may deduplicate features."""
     return [term for term, _, _ in analyzed(text)]
+
+
+def query_features(text: str) -> list[str]:
+    """Prefer content terms without making an all-stopword title unsearchable."""
+    features = tokenize(text)
+    if not hasattr(_LOCAL, "stop_features"):
+        _LOCAL.stop_features = frozenset(_english(word) for word in _STOP_EN)
+    content = [term for term in features
+               if term not in _STOP_ZH and term not in _LOCAL.stop_features]
+    return content or features
 
 
 @cache
