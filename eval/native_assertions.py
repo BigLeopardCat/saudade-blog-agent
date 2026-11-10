@@ -450,6 +450,19 @@ def _conversation_failures(gold, result, events, calls):
     return failures
 
 
+def _single_confirmation_intent(wanted, result):
+    payloads = result.get("confirm_payloads") or []
+    if len(payloads) != 1 or payloads[0].get("workflow") != wanted["workflow"]:
+        return False
+    specs = payloads[0].get("specs") or []
+    if len(specs) != 1 or specs[0].get("tool") != wanted["tool"]:
+        return False
+    actual = (specs[0].get("args") or {}).get("intent")
+    # Match complete intents, including field sets, list lengths and boolean types.
+    return any(contains(actual, expected) and contains(expected, actual)
+               for expected in wanted["one_of"])
+
+
 def check(gold, result):
     keys = {
         "max_model_calls", "max_tool_calls", "max_article_body_chars",
@@ -458,6 +471,7 @@ def check(gold, result):
         "require_todo_schedule",
         "require_automation_schedule",
         "require_confirm_specs",
+        "require_confirm_intent",
         "require_confirm_preview",
         "forbid_runtime_stop",
         "forbid_business_write",
@@ -480,6 +494,9 @@ def check(gold, result):
     failures.extend(_compaction_failures(gold, events))
     failures.extend(_answer_failures(gold, result, calls))
     failures.extend(_conversation_failures(gold, result, events, calls))
+    if gold.get("require_confirm_intent") and not _single_confirmation_intent(
+            gold["require_confirm_intent"], result):
+        failures.append("确认卡数量、工具或完整变更意图不符")
     for wanted in gold.get("require_observations", []):
         if not any(_matches_observation(wanted, event) for event in calls):
             failures.append(f"缺少实际工具观察：{wanted}")
