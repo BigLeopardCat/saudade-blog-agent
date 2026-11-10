@@ -198,7 +198,7 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
     if kind == "note" and view == "outline":
         data.update(noteId=page.id, noteTitle=page.title)
     elif kind == "note":
-        scoped_body = view == "body" and (offset > 0 or bool(section))
+        scoped_body = view == "body" and page.source is not None and (offset > 0 or bool(section))
         if scoped_body:
             # Selected body ranges retain their exact content and provenance.
             # Display metadata and the full directory have dedicated views.
