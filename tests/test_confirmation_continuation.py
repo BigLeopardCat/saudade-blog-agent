@@ -323,7 +323,7 @@ def test_feedback_revokes_old_card_and_replans_the_remaining_actions(backend):
     replacement = run(selected, "改成收藏文章20，不要标记通知已读。")
     replacement_grant = confirm.verify(replacement.execution["pending_confirm"]["token"], 7, 42)
     assert replacement.execution["pending_event"]["jti"] == grant["jti"]
-    assert selected.store.load(config()).run["id"] == task
+    assert selected.store.load(config()).run["id"] != task
     assert not run(selected, grant=grant).execution["receipts"]
     selected.model_factory = lambda **_: Model(AIMessage(content="已收藏文章20。"))
     completed = run(selected, grant=replacement_grant)
@@ -499,12 +499,12 @@ def test_feedback_revokes_approval_after_time_budget_is_unavailable(backend, his
     task = selected.store.load(config()).run
     if historical_time is not None:
         usage.save(task, {**usage.load(task), "active_seconds": historical_time})
-    model = Model()
+    model = Model(AIMessage(content="原操作已取消。"))
     selected.model_factory = lambda **_: model
     budget = TaskBudget(BudgetLimits(task_seconds=300))
     with request_scope(RequestControl(Event(), time.monotonic() + 90, budget)):
         result = run(selected, text="取消刚才操作，不执行其他改动。")
-    assert not state["writes"] and not model.prompts
+    assert not state["writes"] and len(model.prompts) == 1
     assert result.execution["pending_event"]["jti"] == grant["jti"]
     assert not selected.store.load(config()).has_pending
     assert not selected.store.load(config()).unfinished
@@ -615,6 +615,28 @@ def test_confirmation_does_not_reset_an_exhausted_model_budget(backend):
     assert len(state["writes"]) == 1 and not model.prompts
 
 
+def test_new_user_request_after_exhausted_task_keeps_context_but_gets_own_budget(backend):
+    from agent.runtime.task_budget import for_saver
+
+    state, _ = backend
+    selected = runtime(Model())
+    _, grant, _ = prepare(selected, FAVORITE)
+    original = selected.store.load(config()).run
+    usage = for_saver(selected.saver)
+    usage.save(original, {**usage.load(original), "model_calls": 12})
+    model = Model(AIMessage(content="先不收藏，等你下一步要求。"))
+    selected.model_factory = lambda **_: model
+    with budget_scope(TaskBudget(BudgetLimits(model_calls=12))):
+        result = run(selected, "先不收藏，等我下一步要求。")
+    assert result.reply == "先不收藏，等你下一步要求。"
+    assert len(model.prompts) == 1
+    assert any("收藏文章19" in str(message.content) for message in model.prompts[0])
+    assert usage.load(original)["model_calls"] == 12
+    assert result.execution["pending_event"]["jti"] == grant["jti"]
+    assert not state["writes"]
+    assert not run(selected, grant=grant).execution["receipts"]
+
+
 def test_closing_confirmed_stream_preserves_write_facts_without_replaying_continuation(backend):
     state, _ = backend
     selected = runtime(Model())
@@ -642,7 +664,7 @@ def test_incomplete_later_tool_request_does_not_deny_the_completed_write(backend
     assert len(state["writes"]) == 1 and not state["read"]
 
 
-def test_repeated_feedback_preserves_the_task_and_requires_fresh_approval(backend):
+def test_repeated_user_revisions_replace_the_task_and_require_fresh_approval(backend):
     state, _ = backend
     selected = runtime(Model())
     _, grant, _ = prepare(selected)
@@ -655,7 +677,8 @@ def test_repeated_feedback_preserves_the_task_and_requires_fresh_approval(backen
         text = f"第{index}次修改，改成收藏文章{target}，其他操作先不做。"
         revised = run(selected, text)
         assert selected.store.load(config()).run and (
-            selected.store.load(config()).run["id"] == task_id), revised
+            selected.store.load(config()).run["id"] != task_id), revised
+        task_id = selected.store.load(config()).run["id"]
         assert not run(selected, grant=grant).execution["receipts"]
         grant = confirm.verify(revised.execution["pending_confirm"]["token"], 7, 42)
         assert not state["writes"] and not state["read"]

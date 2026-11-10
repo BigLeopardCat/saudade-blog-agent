@@ -10,6 +10,19 @@ const { createStream } = globalThis.__waifuChatProtocol;
 const frame = (type, data, nl = '\n') => `event: ${type}${nl}data: ${JSON.stringify(data)}${nl}${nl}`;
 const done = frame('done', {});
 
+test('image work events expose bounded references and never become chat text or approval', () => {
+  const job = {id:'6b9e2bf1-56af-428c-8177-e3ad0641e036',status:'review',eventVersion:'a'.repeat(64)};
+  for (let at=0; at<frame('image_job',job).length; at++) {
+    const seen=[], parser=globalThis.__waifuChatProtocol.createImageStream(value=>seen.push(value));
+    const wire=frame('image_job',{...job,request:{prompt:'not a user instruction'}});
+    parser.feed(wire.slice(0,at));parser.feed(wire.slice(at));
+    assert.deepEqual(seen,[job]);
+  }
+  for (const invalid of [{...job,id:'other'},{...job,eventVersion:''},{...job,status:'executed'}]) {
+    assert.throws(()=>globalThis.__waifuChatProtocol.createImageStream(()=>{}).feed(frame('image_job',invalid)));
+  }
+});
+
 test('confirmation content keeps literal fields and rejects ambiguous markup controls', () => {
   const base = {q:'请核对',token:'opaque',exp:123,opts:[]};
   const details = {fields:[{label:'服务地址',value:'https://api.openai.com/v1'},

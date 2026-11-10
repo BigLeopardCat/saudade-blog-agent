@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessageChunk
 from openai import OpenAIError
 
 from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
-from agent.runtime.memory_media import stage
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
 from agent.runtime.task_inputs import InputConflict, TaskInputEvent, for_saver
@@ -76,6 +75,9 @@ class AgentRuntime:
             yield TurnResult("该轮次已丢弃，请重新发送新的请求。",
                              {"blocked": [{"reason": "turn_discarded"}]})
             return
+        if state.get("system_event"):
+            yield from self._system_event(state, snapshot, config)
+            return
         grant = state.get("confirm_grant")
         if grant is not None:
             yield from self._confirmed(state, config, snapshot, grant)
@@ -98,20 +100,17 @@ class AgentRuntime:
         task_id = state.get("task_id") or uuid.uuid4().hex
         incoming = memory.identify_turn(incoming, state.get("turn_id") or task_id)
         if pending:
-            session = self._session(config, snapshot, pending)
-            session.task = snapshot.run
-            session.receipts = list(snapshot.receipts)
-            prompt = self.application.prompt(incoming, principal)
-            record("native", "task_feedback", task_id=session.task["id"])
-            yield from self._feedback(session, prompt, pending, incoming)
+            yield from self._replace_pending(snapshot, pending, incoming, config, task_id)
             return
         yield from self._new_turn(snapshot, incoming, config, task_id)
 
-    def _new_turn(self, snapshot, incoming, config, task_id):
+    def _new_turn(self, snapshot, incoming, config, task_id, *, effects=None, event_seed=None):
         principal = ((config or {}).get("configurable") or {}).get("principal")
         incoming = [*recovery.input_context(snapshot, config), *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
         session = self._session(config, snapshot, None)
+        session.state["effects"].update(effects or {})
+        session.event_seed = event_seed
         session.turn_input = incoming
         session.task = recovery.new_run(config, incoming, task_id)
         if (self.inputs and snapshot.run and session.task
@@ -131,6 +130,22 @@ class AgentRuntime:
         record("native", "turn_completed", chars=len(outcome.reply))
         yield outcome
 
+    def _system_event(self, state, snapshot, config):
+        plan = self.application.system_event(state["system_event"], snapshot, config)
+        if isinstance(plan, TurnResult):
+            if plan.reply:
+                yield AIMessageChunk(content=plan.reply)
+            yield plan
+            return
+        config = {**config, "configurable": {**config["configurable"],
+                  "system_event_id": state["task_id"]}}
+        if snapshot.unfinished:
+            if snapshot.run["id"] != state["task_id"] or snapshot.has_pending:
+                raise ValueError("image_event_deferred")
+            yield from self._resume_task(snapshot, state["task_id"], config)
+            return
+        yield from self._new_turn(snapshot, [], config, state["task_id"], event_seed=plan)
+
     def _discarded_turn(self, state, config, snapshot):
         turn_id = state.get("turn_id") or state.get("task_id")
         candidates = [turn_id]
@@ -141,15 +156,18 @@ class AgentRuntime:
         thread_id = ((config or {}).get("configurable") or {}).get("thread_id")
         return checkpoint_store.turns_deleted(self.saver, thread_id, candidates)
 
-    def _feedback(self, session, prompt, pending, incoming):
-        session.turn_input = incoming
-        if (session.config.get("configurable") or {}).get("task_inputs"):
-            yield TaskInputEvent({"task_id": session.task["id"], "ready": False})
-        result = yield from self._run(session, prompt, resume={
-            "kind": "feedback", "jti": pending.grant["jti"],
-            "model_input": stage([m for m in prompt[1:] if not memory.is_context(m)],
-                                 session.transient)}, approval_input=incoming)
-        yield result
+    def _replace_pending(self, snapshot, pending, incoming, config, task_id):
+        from agent.runtime.results import cancellation_observations
+
+        revoked = pending.feedback(config, self.saver)
+        if self.inputs:
+            self.inputs.finish(snapshot.run, set())
+        self.store.clear_pending(config, pending.grant["jti"], observations=(
+            cancellation_observations("用户提出了新要求，原待确认操作已撤销，未执行改动。")))
+        previous = snapshot.run["id"]
+        snapshot = self.store.load(config)
+        record("native", "task_replaced", prior_task_id=previous, task_id=task_id)
+        yield from self._new_turn(snapshot, incoming, config, task_id, effects=revoked.execution)
 
     def _resume_task(self, snapshot, task_id, config):
         resumable = (replace(snapshot, pending_confirm=None, pending_action=None)

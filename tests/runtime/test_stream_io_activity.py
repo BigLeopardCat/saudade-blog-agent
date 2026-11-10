@@ -62,7 +62,7 @@ def test_real_api_observes_io_activity_but_preserves_timeout_and_cancel(monkeypa
                         pass
                 yield TurnResult("完成。")
             else:
-                result = tools.get_image_generation.invoke({"job_id": ID}, config=config)
+                result = tools.get_image_generation.invoke({"job_id": ID, "wait_seconds": 240}, config=config)
                 yield TurnResult("核实完成。" if result.kind == "ok" else str(result))
 
     monkeypatch.setattr(app.state, "runtime", Runtime())

@@ -63,10 +63,12 @@ def service(monkeypatch):
             if state.get("mismatch"):
                 data["requestHash"] = "d" * 64
         elif path.endswith("/accept"):
-            assert json.loads(request.content) == {"version": "b" * 64}
+            storage = state.get("storage", "local")
+            assert json.loads(request.content) == {"version": "b" * 64, "storage": storage}
             state["accepts"] += 1
             status = state.get("accept_status", "accepted")
             state["job"].update(status=status,
+                saveStorage=storage,
                 imageId=state.get("accept_image", 31) if status == "accepted" else None,
                 imageRemoved=state.get("accept_removed", False),
                 previewUrl=None if status == "accepted" else state["job"]["previewUrl"])
@@ -124,11 +126,28 @@ def test_actual_pixels_need_a_distinct_result_approval(service, tmp_path):
     assert "token=" not in card.reply and not service["accepts"]
     signed = grant(card)
     assert signed["workflow"] == "image_acceptance"
+    assert signed["specs"][0]["args"]["storage"] == "local"
     ledger = Ledger(str(tmp_path / "acceptance.sqlite3"))
     for _ in range(2):
         outcome = transactions.execute(signed, admin(), None, ledger=ledger)
         assert len(outcome["receipts"]) == 1
     assert service["accepts"] == 1 and service["paid_calls"] == 0
+
+
+def test_explicit_r2_destination_is_visible_and_bound_to_the_signed_acceptance(service, tmp_path):
+    prepare()
+    service["job"].update(status="review", outputHash="b" * 64,
+        previewUrl=f"/api/public/image-generation/{ID}/preview?token=result")
+    service["storage"] = "r2"
+    card = tools.prepare_generated_image_acceptance.invoke(
+        {"job_id": ID, "storage": "r2"}, config=admin())
+    fields = card.execution["pending_confirm"]["details"]["fields"]
+    assert {"label": "保存位置", "value": "R2"} in fields
+    signed = grant(card)
+    assert signed["specs"][0]["args"]["storage"] == "r2"
+    ledger = Ledger(str(tmp_path / "r2-acceptance.sqlite3"))
+    assert transactions.execute(signed, admin(), None, ledger=ledger)["receipts"]
+    assert service["accepts"] == 1 and not service["paid_calls"]
 
 
 def test_storage_started_receipt_is_not_gallery_completion_and_replay_does_not_resave(

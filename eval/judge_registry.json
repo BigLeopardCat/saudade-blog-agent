@@ -363,7 +363,7 @@
         0
       ],
       "agent/domains/image_generation/tools.py": [
-        6,
+        7,
         0
       ],
       "agent/domains/image_generation/transactions.py": [
@@ -968,7 +968,7 @@
       ]
     },
     "total": [
-      368,
+      369,
       0
     ]
   },
