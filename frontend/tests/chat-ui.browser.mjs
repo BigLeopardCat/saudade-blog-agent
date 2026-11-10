@@ -1444,13 +1444,9 @@ try {
     run_at:new Date(Date.now()-60000).toISOString(),version:'b'.repeat(64)}];
   await page.evaluate(()=>window.__chatTest.ctx.ui.reloadTasks());
   assert.equal(await page.locator('#chat-schedule-chip').isVisible(),false);
-  await page.locator('#chat-task-panel summary').filter({hasText:'待核对公告'}).click();
-  const attentionRow=page.locator('#chat-task-panel details').filter({hasText:'待核对公告'});
-  assert.match(await attentionRow.textContent(),/操作结果待核实，请勿重复执行/);
-  await attentionRow.getByRole('button',{name:'移除提醒',exact:true}).click();
-  await attentionRow.getByRole('button',{name:'确认移除',exact:true}).click();
-  await page.waitForFunction(()=>!document.querySelector('#chat-task-panel details'));
-  assert.equal(taskDeletes,3);
+  assert.equal(await page.locator('#chat-task-panel details').count(),0,
+    'ended schedule outcomes belong to results, not the active task list');
+  assert.equal(taskDeletes,2,'hiding an ended task must not delete its execution record');
   serviceReady=false;
   await page.evaluate(()=>window.__chatTest.ctx.ui.checkService());
   assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'offline');
@@ -1459,8 +1455,11 @@ try {
   assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'ready');
   await page.evaluate(()=>{window.__chatTest.ctx.state.isSending=true;window.__chatTest.ctx.ui.refreshComposer();});
   assert.equal(await page.locator('#chat-service-indicator').getAttribute('data-state'),'busy');
+  assert.equal(await page.locator('#chat-task-panel details[data-task-key^="running:"]').count(),1);
   await page.evaluate(()=>{window.__chatTest.ctx.state.isSending=false;window.__chatTest.ctx.ui.refreshComposer();});
-  passed('task chips, server-owned deletion, four-state health signal and read-only countdown notch');
+  assert.equal(await page.locator('#chat-task-panel details').count(),0,
+    'finished foreground work leaves the list immediately');
+  passed('active tasks, server-owned deletion, status signal and countdown notch');
   await page.getByRole('button',{name:'关闭任务列表',exact:true}).click();
   nextMode='agent-pause';
   await page.locator('#chat-input').fill('讲零知识证明，先挂起');

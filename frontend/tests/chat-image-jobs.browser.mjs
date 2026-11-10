@@ -5,6 +5,7 @@ export async function assertImageJobReports({browser, origin}) {
   const page = await context.newPage();
   const id='6b9e2bf1-56af-428c-8177-e3ad0641e036', version='a'.repeat(64);
   let status='generating', reported=false;
+  let taskSnapshotStatus=null;
   const reports=[], confirmations=[];
   const history=[];
   let pendingConfirmation=null;
@@ -14,7 +15,9 @@ export async function assertImageJobReports({browser, origin}) {
     task_id:pendingConfirmation?.task_id||null,confirmation:pendingConfirmation,
   }}));
   await page.route('**/api/chat/tasks',route=>route.fulfill({json:{paused:{items:[]},schedules:{items:[]},
-    images:{items:[{id,title:'后台生成样例',conversationId:1,status,eventVersion:version,reportPending:!reported}]}}}));
+    images:{items:[{id,title:'后台生成样例',conversationId:1,status:taskSnapshotStatus||status,
+      eventVersion:version,reportPending:!reported},
+      {id:'72d3214c-d763-4d23-9480-18403203fc76',title:'已保存的旧图片',status:'accepted'}]}}}));
   await page.route('**/api/protect/image-generation/chat-jobs?*',route=>route.fulfill({json:{
     code:200,data:reported?[]:[{id,status,eventVersion:version}],
   }}));
@@ -66,6 +69,8 @@ export async function assertImageJobReports({browser, origin}) {
     const task=page.locator(`[data-task-key="image:${id}"]`);
     await task.locator('summary').click();
     await task.getByText('正在生成图片',{exact:true}).waitFor();
+    assert.equal(await page.locator('#chat-task-panel details').count(),1,
+      'saved image history must not occupy the active task list');
     await page.getByRole('button',{name:'关闭任务列表'}).click();
     await page.locator('#chat-close').click();
     status='review';
@@ -78,11 +83,21 @@ export async function assertImageJobReports({browser, origin}) {
     assert.equal(await work.first().getAttribute('data-work-stage'),'review');
     assert.equal(await work.first().textContent(),'图片已生成，等待确认是否保留');
     assert.equal(reports.length,1);
+    taskSnapshotStatus='generating';
+    await page.evaluate(()=>window.__chatTest.ctx.ui.reloadTasks());
+    await page.locator('#conv-tasks-btn').click();
+    assert.equal(await task.count(),0,'a stale GET cannot resurrect a completed image task');
+    await page.getByRole('button',{name:'关闭任务列表'}).click();
+    taskSnapshotStatus=null;
     assert.equal(await page.evaluate(()=>window.__chatTest.ctx.state.items
       .filter(item=>item.type==='user').length),1,'completion fabricated a human message');
     await page.getByRole('button',{name:'保留到图库',exact:true}).click();
     await page.getByText('图片已保存。',{exact:true}).waitFor();
     assert.equal(confirmations.length,1);
+    await page.evaluate(()=>window.__chatTest.ctx.ui.reloadTasks());
+    await page.locator('#conv-tasks-btn').click();
+    assert.equal(await page.locator('#chat-task-panel details').count(),0);
+    await page.getByRole('button',{name:'关闭任务列表'}).click();
     await page.reload();
     await page.waitForFunction(()=>window.__chatTest?.ctx.state.conv);
     await page.waitForTimeout(1200);
