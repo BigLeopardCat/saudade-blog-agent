@@ -46,8 +46,16 @@ const control=async action=>{
 };
 const open=async()=>{
   const page=await context.newPage();await page.goto(fixture.origin+'/stack-fixture.html');
-  await page.waitForFunction(cid=>window.__imageStackChat?.state.conv===cid,fixture.cid);
-  await page.locator('#waifu-chat').waitFor();return page;
+  await page.waitForFunction(()=>!!window.__imageStackChat);
+  await page.locator('#waifu-chat').waitFor();
+  if(await page.evaluate(()=>window.__imageStackChat.state.conv)!==fixture.cid){
+    await page.locator('#conv-tasks-btn').click();
+    const task=page.locator(`[data-task-key="image:${fixture.id}"]`);
+    await task.locator('summary').click();
+    await task.getByRole('button',{name:'查看会话',exact:true}).click();
+  }
+  await page.waitForFunction(cid=>window.__imageStackChat.state.conv===cid,fixture.cid);
+  return page;
 };
 const reports=()=>requests.filter(row=>row.image_event);
 const until=async predicate=>{
@@ -59,7 +67,7 @@ try{
   let page=await open();
   await page.locator('#conv-tasks-btn').click();
   const task=page.locator(`[data-task-key="image:${fixture.id}"]`);
-  await task.locator('summary').click();
+  if(await task.getAttribute('open')===null)await task.locator('summary').click();
   await task.getByText('正在生成图片',{exact:true}).waitFor();
   assert.equal(await task.getByRole('button',{name:'删除任务记录'}).count(),0);
   await page.getByRole('button',{name:'关闭任务列表'}).click();
@@ -93,5 +101,18 @@ try{
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
   assert.equal(reports().filter(row=>row.image_event.job_id===second.id).length,1,
     'Reload duplicated an acknowledged completion');
+  await page.locator('#conv-tasks-btn').click();
+  const deleting=page.locator(`[data-task-key="image:${second.id}"]`);
+  await deleting.locator('summary').click();
+  await deleting.getByRole('button',{name:'删除任务记录',exact:true}).click();
+  await deleting.getByRole('button',{name:'确认删除',exact:true}).click();
+  await deleting.waitFor({state:'detached'});
+  await page.waitForFunction(()=>!window.__imageStackChat.state.pendingAsk);
+  await page.getByRole('button',{name:'关闭任务列表'}).click();
+  const next=await control('new');await control('complete');
+  await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
+  await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
+  assert.equal(reports().filter(row=>row.image_event.job_id===next.id).length,1,
+    'Deleting a review left its approval blocking the next completion');
   assert.deepEqual(errors,[]);
 }finally{await context.close();await browser.close();}

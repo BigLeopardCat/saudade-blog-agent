@@ -66,6 +66,22 @@
     const hide = () => { viewer.hidden = true; returnFocus?.focus({ preventScroll: true }); };
     close.addEventListener('click', hide);
     viewer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); hide(); } });
+    const removeImage = async row => {
+      if (row.status === 'review' && row.conversationId != null) {
+        const pending = await request('/api/chat/task/confirmation', {
+          conversation_id: row.conversationId,
+        });
+        const card = pending.confirmation;
+        if (card?.image_review?.job_id === row.id) {
+          const result = await request('/api/chat/confirmation/cancel', {
+            conversation_id: row.conversationId, token: card.token,
+          });
+          if (result.cancelled !== true) throw new Error('无法核实审批撤销，尚未删除任务记录');
+          ctx.ui.dismissManagedTask?.(card.task_id);
+        }
+      }
+      await request('/api/protect/image-generation/jobs/' + row.id, null, 'DELETE');
+    };
     const removeControl = (actions, row, scheduled, image = false) => {
       const group = document.createElement('div'); group.className = 'chat-task-delete';
       const removeLabel = image ? '删除任务记录' : scheduled && row.needs_attention ? '移除提醒' : '删除任务';
@@ -82,7 +98,7 @@
         yes.disabled = no.disabled = true;
         const tk = token();
         try {
-          if (image) await request('/api/protect/image-generation/jobs/' + row.id, null, 'DELETE');
+          if (image) await removeImage(row);
           else if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
           else await request('/api/chat/tasks/cancel', { conversation_id: row.conversation_id, task_id: row.task_id });
           if (token() !== tk) return;
