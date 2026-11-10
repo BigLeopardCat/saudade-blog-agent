@@ -76,8 +76,9 @@ def list_accounts(config: RunnableConfig, username: Username | None = None,
                    page: Page = 1, limit: CatalogLimit = 20,
                    account_id: Identifier | None = None, query: SearchText | None = None) -> object:
     """Search account metadata: query matches login/nickname substrings; username/account_id
-    match exactly. Combined filters use AND. Disambiguate names before preparation;
-    known IDs can go directly to preparation, which verifies the target and state.
+    match exactly. Combined filters use AND. Disambiguate ambiguous names only;
+    known IDs or exact login usernames go directly to preparation, which verifies the target
+    and state. A catalog miss does not prevent this server-side target check.
     For ambiguous matches show each ID, login username and nickname to distinguish candidates.
     Returns totals, public admin fields and quotas (quotaLimit=0: unlimited turns).
     Excludes superadmin/unknown roles and credentials; empty means no match in this scope.

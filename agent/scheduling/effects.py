@@ -200,7 +200,14 @@ def propose(
         executor="automations",
         target=target,
         timing=timing_facts(definition),
-        preparation_facts=preparation_facts,
+        preparation_facts={
+            **(preparation_facts or {}),
+            "execution_policy": {
+                "target_version_guard": True,
+                "on_target_change": "stop_without_replanning",
+                "result_notification": "best_effort",
+            },
+        },
         notices=notices,
         details=review,
         question=f"{description}\n"
