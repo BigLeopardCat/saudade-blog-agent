@@ -145,5 +145,6 @@ def test_oversize_preparation_context_does_not_leak_partial_facts(monkeypatch):
 
     events = []
     monkeypatch.setattr("agent.runtime.tool_evidence.record", lambda *_, **kw: events.append(kw))
-    preparation_context({"id": "large"}, 3, {"preparation_facts": {"x": "private" * MAX_FACT_CHARS}})
+    preparation_context({"id": "large"}, 3,
+                        {"preparation_facts": {"x": "private" * MAX_FACT_CHARS}})
     assert events == [{"call_id": "large", "round": 3, "facts": None, "complete": False}]

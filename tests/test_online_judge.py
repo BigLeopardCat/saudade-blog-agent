@@ -539,7 +539,8 @@ def test_runtime_rejections_preserve_failed_attempts_without_claiming_business_e
 def test_preparation_context_cannot_replace_verified_service_facts(tmp_path):
     events = [{"node": "native", "event": "call", "kind": "prepared", "call_id": "a"},
               {"node": "native", "event": "preparation_context", "call_id": "a",
-               "complete": True, "facts": {"execution_policy": {"result_notification": "best_effort"}}}]
+               "complete": True, "facts": {"execution_policy": {
+                   "result_notification": "best_effort"}}}]
     case = recorded(tmp_path, trace_extra={"events": events})
     with pytest.raises(ValueError, match="validated preparation facts"):
         online_judge.material(case, case["result"]["rounds"])

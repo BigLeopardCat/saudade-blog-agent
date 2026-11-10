@@ -30,6 +30,7 @@ def preparation_context(call, round_index, popup):
     facts = popup.get("preparation_facts")
     if facts is None:
         return
-    complete = isinstance(facts, dict) and len(json.dumps(facts, ensure_ascii=False)) <= MAX_FACT_CHARS
+    complete = (isinstance(facts, dict)
+                and len(json.dumps(facts, ensure_ascii=False)) <= MAX_FACT_CHARS)
     record("native", "preparation_context", call_id=call["id"], round=round_index,
            facts=facts if complete else None, complete=complete)
