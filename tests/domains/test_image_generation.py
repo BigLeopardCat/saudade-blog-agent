@@ -58,7 +58,7 @@ def service(monkeypatch):
         elif path.endswith("/approve"):
             assert json.loads(request.content) == {"version": "a" * 64}
             state["paid_calls"] += 1
-            state["job"]["status"] = "generating"
+            state["job"]["status"] = state.get("approve_status", "generating")
             data = copy.deepcopy(state["job"])
             if state.get("mismatch"):
                 data["requestHash"] = "d" * 64
@@ -132,6 +132,20 @@ def test_actual_pixels_need_a_distinct_result_approval(service, tmp_path):
         outcome = transactions.execute(signed, admin(), None, ledger=ledger)
         assert len(outcome["receipts"]) == 1
     assert service["accepts"] == 1 and service["paid_calls"] == 0
+
+
+def test_fast_generation_returns_without_claiming_a_result_card_or_waiting(service, tmp_path):
+    signed = grant(prepare())
+    service["approve_status"] = "review"
+    outcome = transactions.execute(signed, admin(), None,
+        ledger=Ledger(str(tmp_path / "fast-generation.sqlite3")))
+    receipt = outcome["receipts"][0]
+    assert receipt["background_work"] == {"kind": "image_generation", "job_id": ID}
+    assert "独立对话" in receipt["result"]
+    assert "没有展示图片或创建保存确认卡" in receipt["result"]
+    assert not outcome.get("pending_confirm")
+    assert not any(request.url.path.endswith("/events") for request in service["requests"])
+    assert service["paid_calls"] == 1 and service["accepts"] == 0
 
 
 def test_explicit_r2_destination_is_visible_and_bound_to_the_signed_acceptance(service, tmp_path):
