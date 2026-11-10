@@ -35,7 +35,7 @@ fi
 (cd "$release" && uv "${uv_args[@]}")
 if [[ -n "${DEPLOY_RUNTIME_STATE:-}" ]]; then
   runtime_state="$(realpath -e -- "$DEPLOY_RUNTIME_STATE")"
-  for path in logs output_audio eval/cache; do
+  for path in logs eval/cache; do
     mkdir -p "$runtime_state/$path" "$(dirname -- "$release/$path")"
     if [[ -e "$release/$path" && ! -L "$release/$path" ]]; then
       echo "Refusing to replace release content: $path" >&2

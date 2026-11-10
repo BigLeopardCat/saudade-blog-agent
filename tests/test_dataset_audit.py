@@ -23,3 +23,16 @@ def test_multi_turn_decision_gaps_and_duplicate_inputs_remain_visible():
     assert result["text_rounds"] == 4 and result["unannotated_text_decisions"] == 2
     assert result["missing_source_groups"] == ["first", "second"]
     assert result["exact_duplicate_inputs"] == [["first", "second"]]
+
+
+def test_release_text_suite_has_a_decision_annotation_for_every_round():
+    from eval.online_baseline import load_suite
+
+    cases = load_suite()
+    for case in cases:
+        if "vision" in case.get("tags", []):
+            continue
+        rounds = case.get("rounds") or [case]
+        labels = case.get("decision_expectations") or [case.get("first_action")]
+        assert len(labels) == len(rounds) and all(labels), case["id"]
+    assert audit(cases)["unannotated_text_decisions"] == 0

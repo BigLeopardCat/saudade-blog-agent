@@ -8,7 +8,7 @@
     "I",
     "W"
   ],
-  "total": 119,
+  "total": 118,
   "by_file": {
     "agent/hostinfo.py": 1,
     "eval/admin_write_probe.py": 29,
@@ -28,7 +28,6 @@
     "tests/test_judge_offline.py": 25,
     "tests/test_module_budget.py": 2,
     "tests/test_reconcile_offline.py": 6,
-    "tests/test_widget_pin_drift.py": 1,
-    "utils/tts.py": 1
+    "tests/test_widget_pin_drift.py": 1
   }
 }
