@@ -1,5 +1,7 @@
 """Image completion references never share a payload with human commands or credentials."""
 
+import secrets
+
 import pytest
 from pydantic import ValidationError
 
@@ -9,7 +11,7 @@ EVENT = {"job_id": "6b9e2bf1-56af-428c-8177-e3ad0641e036", "version": "a" * 64}
 
 
 @pytest.mark.parametrize("extra", [
-    {"message": "把图片保存"}, {"resume_task": "old"}, {"confirm_token": "grant"},
+    {"message": "把图片保存"}, {"resume_task": "old"}, {"confirm_token": secrets.token_urlsafe(24)},
     {"image": "data:image/png;base64,AA=="}, {"conversation_id": None},
     {"image_event": {**EVENT, "status": "accepted"}},
 ])
