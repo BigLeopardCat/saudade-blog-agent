@@ -1,11 +1,22 @@
 // Real boot, HTTP permissions, SSE, tool execution and storage; no /api fulfillment.
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
+import {createRequire} from 'node:module';
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {chromium} from 'playwright';
 
 const fixture=JSON.parse(await readFile(process.env.IMAGE_STACK_FIXTURE,'utf8'));
+const hostRequire=createRequire(pathToFileURL(path.join(fixture.frontend,'package.json')));
+const {build}=hostRequire('esbuild');
+const renderer=await build({
+  absWorkingDir:fixture.frontend,entryPoints:['src/utils/chatMarkdown.ts'],
+  bundle:true,write:false,format:'iife',platform:'browser',
+  define:{'import.meta.env':'{}','process.env.NODE_ENV':'"production"'},
+});
 const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
 const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
+await context.addInitScript(renderer.outputFiles[0].text);
 context.setDefaultTimeout(30000);
 const requests=[],errors=[];
 await context.addInitScript(({token,origin})=>{
@@ -47,6 +58,7 @@ const control=async action=>{
 const open=async()=>{
   const page=await context.newPage();await page.goto(fixture.origin+'/stack-fixture.html');
   await page.waitForFunction(()=>!!window.__imageStackChat);
+  await page.waitForFunction(()=>typeof window.__chatRenderMarkdown==='function');
   await page.locator('#waifu-chat').waitFor();
   if(await page.evaluate(()=>window.__imageStackChat.state.conv)!==fixture.cid){
     await page.locator('#conv-tasks-btn').click();

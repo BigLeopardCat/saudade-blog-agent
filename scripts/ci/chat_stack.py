@@ -510,7 +510,7 @@ http {{
         assert sum(event.get("event") == "jobs_drained" for event in events) >= 4
         from image_job_drill import run_image_drill
 
-        run_image_drill(AGENT, work, out, blog_dsn, session_key, provider, common)
+        run_image_drill(AGENT, blog, work, out, blog_dsn, session_key, provider, common)
         status = provider.status()
         assert set(status["closed"]) == {"STACK_MAIN", "STACK_DROP"}
         (out / "summary.json").write_text(
