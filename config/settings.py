@@ -84,8 +84,8 @@ class Settings(BaseSettings):
     llm_temperature: float = 0.7
     llm_max_tokens: int = 8192
     llm_streaming: bool = True
-    # LLM 无数据超时（秒）：API 偶发无响应时结束生成，避免调用无限挂起占满线程池
-    llm_timeout: float = 120.0
+    # End a stalled model request before the outer stream idle deadline can disconnect it.
+    llm_timeout: float = Field(default=45.0, gt=0)
     # Defaults for direct SDK clients. Runtime and side tasks set their own modes.
     llm_enable_thinking: bool = True
     # Zero leaves sampling to the provider.
