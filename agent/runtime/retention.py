@@ -4,6 +4,7 @@ import json
 
 from langchain_core.messages import HumanMessage, messages_to_dict
 
+from agent.runtime.memory import is_event_input
 from utils.trace import record
 
 MAX_BYTES = 16 * 1024 * 1024
@@ -15,7 +16,7 @@ def retain(messages):
     for message in messages:
         if message.additional_kwargs.get("memory_retention"):
             continue
-        if isinstance(message, HumanMessage):
+        if isinstance(message, HumanMessage) or is_event_input(message):
             turns.append([])
         if turns:
             turns[-1].append(message)

@@ -5,7 +5,7 @@ import uuid
 from dataclasses import replace
 from functools import partial
 
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessageChunk, SystemMessage
 from openai import OpenAIError
 
 from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
@@ -157,17 +157,28 @@ class AgentRuntime:
         return checkpoint_store.turns_deleted(self.saver, thread_id, candidates)
 
     def _replace_pending(self, snapshot, pending, incoming, config, task_id):
-        from agent.runtime.results import cancellation_observations
+        from agent.runtime.approval_messages import supersede
+        from agent.runtime.task_budget import for_saver as task_usage
 
         revoked = pending.feedback(config, self.saver)
+        incoming = [message for message in self.application.prompt(
+            incoming, config["configurable"]["principal"])
+            if not isinstance(message, SystemMessage) and not memory.is_context(message)]
+        task = {**recovery.new_run(config, incoming, task_id), "input_saved": True,
+                "initial_effects": revoked.execution}
+        usage = task_usage(self.saver)
+        if not usage.load(task):
+            usage.save(task, {"tokens": 0, "model_calls": 0, "tool_calls": 0, "active_seconds": 0})
         if self.inputs:
             self.inputs.finish(snapshot.run, set())
-        self.store.clear_pending(config, pending.grant["jti"], observations=(
-            cancellation_observations("用户提出了新要求，原待确认操作已撤销，未执行改动。")))
-        previous = snapshot.run["id"]
-        snapshot = self.store.load(config)
-        record("native", "task_replaced", prior_task_id=previous, task_id=task_id)
-        yield from self._new_turn(snapshot, incoming, config, task_id, effects=revoked.execution)
+            self.inputs.open(task, retry=True)
+        messages = supersede(snapshot.messages, incoming, pending.grant,
+                             config["configurable"]["principal"])
+        self.store.replace_pending(config, pending.grant["jti"], task, messages)
+        record("native", "approval_feedback", facts={key: value
+            for key, value in approval.superseded_fact().items() if key != "result"})
+        record("native", "task_replaced", prior_task_id=snapshot.run["id"], task_id=task_id)
+        yield from self._resume_task(self.store.load(config), task_id, config)
 
     def _resume_task(self, snapshot, task_id, config):
         resumable = (replace(snapshot, pending_confirm=None, pending_action=None)
@@ -179,12 +190,13 @@ class AgentRuntime:
                              "该任务已结束、被替换或当前身份已变化，没有恢复执行。",
                              {"blocked": True})
             return
-        incoming = snapshot.run["input"]
+        incoming = [] if snapshot.run.get("input_saved") else snapshot.run["input"]
         prompt = self.application.prompt([*snapshot.messages, *incoming],
                                         config["configurable"]["principal"])
         session = self._session(config, replace(snapshot, messages=[*snapshot.messages, *incoming]),
                                 self.application.pending(snapshot.pending, config))
         session.task = snapshot.run
+        session.state["effects"].update(snapshot.run.get("initial_effects") or {})
         session.receipts = list(snapshot.receipts)
         record("native", "task_resumed", task_id=task_id, engine="langgraph")
         outcome = yield from self._run(session, prompt, recover=True)

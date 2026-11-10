@@ -1,4 +1,4 @@
-"""User feedback resumes the original durable task and supersedes its old preview."""
+"""New user requests supersede old approvals and resume within their own durable task."""
 
 import json
 
@@ -9,7 +9,7 @@ from test_confirmation_continuation import FAVORITE, LOAD, Model, call, prepare,
 from test_confirmation_continuation import backend as backend_fixture
 
 from agent import confirm
-from agent.runtime import approval, writes
+from agent.runtime import writes
 from agent.runtime.task_inputs import TaskInputEvent
 from agent.runtime.turns import AgentCancelled
 
@@ -21,7 +21,7 @@ class StoppedModel(Model):
         raise AgentCancelled()
 
 
-def test_feedback_stop_reconstruct_and_reconfirm_keeps_one_task_and_write(backend):
+def test_feedback_stop_reconstruct_and_reconfirm_keeps_new_task_and_one_write(backend):
     state, _ = backend
     selected = runtime(Model())
     _, old_grant, _ = prepare(selected, FAVORITE)
@@ -31,7 +31,8 @@ def test_feedback_stop_reconstruct_and_reconfirm_keeps_one_task_and_write(backen
     with pytest.raises(AgentCancelled):
         run(selected, text)
     saved = selected.store.load(config())
-    assert saved.run["id"] == task and saved.unfinished and not saved.has_pending
+    assert saved.run["id"] != task and saved.unfinished and not saved.has_pending
+    task = saved.run["id"]
     replacement = Model(AIMessage(content="", tool_calls=[call(
         "prepare_favorite_change", "revised", action="add", article_id=20)]))
     rebuilt = runtime(replacement, selected.saver)
@@ -50,29 +51,27 @@ def test_feedback_review_failure_retries_revocation_without_repeating_it(backend
     state, ledger = backend
     selected = runtime(Model())
     prepare(selected, FAVORITE)
-    task = selected.store.load(config()).run["id"]
-    review, finish = approval.review, ledger.finish
+    checkpoint, finish = selected.store._state.update_state, ledger.finish
     revoked = []
 
     def counted(*args, **kwargs):
         revoked.append(1)
         return finish(*args, **kwargs)
 
-    def failed(state, config, **kwargs):
-        review(state, config, **kwargs)
+    def failed(*args, **kwargs):
         raise OSError("feedback checkpoint unavailable")
 
     monkeypatch.setattr(ledger, "finish", counted)
-    monkeypatch.setattr(approval, "review", failed)
+    monkeypatch.setattr(selected.store._state, "update_state", failed)
     unused_model = Model()
     selected.model_factory = lambda **_: unused_model
     text = "先不要收藏，解释一下。"
     with pytest.raises(OSError):
         run(selected, text)
     assert not unused_model.prompts
-    monkeypatch.setattr(approval, "review", review)
+    monkeypatch.setattr(selected.store._state, "update_state", checkpoint)
     rebuilt = runtime(Model(AIMessage(content="这项操作没有执行。")), selected.saver)
-    result = list(rebuilt.stream_events({"resume_task": task}, config()))[-1]
+    result = run(rebuilt, text)
     assert result.reply
     assert revoked == [1] and not state["writes"]
     assert sum(isinstance(m, HumanMessage) and m.content == text
@@ -89,7 +88,8 @@ def test_feedback_navigation_keeps_interrupt_and_rejects_the_old_grant(backend):
         call("navigate_page", "navigation", path="/guestbook")]))
     paused = run(selected, "先去留言板，不收藏了。", cfg=config(browser_feedback=True))
     command = paused.execution["client_action"]
-    assert command["task_id"] == task and selected.get_state(config(), subgraphs=True).interrupts
+    assert command["task_id"] != task and selected.get_state(config(), subgraphs=True).interrupts
+    task = command["task_id"]
     assert not run(selected, grant=grant).execution["receipts"]
     assert selected.store.load(config()).run["id"] == task
     cfg = config(browser_feedback=True, browser_result={
@@ -113,7 +113,7 @@ def test_unknown_operation_cannot_be_superseded_or_reported_cancelled(backend):
     assert selected.store.load(config()).has_pending and not state["writes"]
 
 
-def test_feedback_reports_original_task_identity_and_seals_inputs_after_recovery(backend):
+def test_feedback_reports_new_task_identity_and_seals_both_input_queues(backend):
     cfg = config(task_inputs=True)
     selected = runtime(Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE])))
     run(selected, "收藏文章19", cfg=cfg)
@@ -123,12 +123,13 @@ def test_feedback_reports_original_task_identity_and_seals_inputs_after_recovery
     stream = selected.stream_events({"messages": [HumanMessage(content="先解释一下")],
                                      "task_id": "new-http-request"}, cfg)
     event = next(stream)
-    assert isinstance(event, TaskInputEvent) and event.data["task_id"] == task["id"]
+    assert isinstance(event, TaskInputEvent) and event.data["task_id"] == "new-http-request"
     with pytest.raises(AgentCancelled):
         list(stream)
     rebuilt = runtime(Model(AIMessage(content="这项操作需要你的明确确认。")), selected.saver)
-    list(rebuilt.stream_events({"resume_task": task["id"]}, cfg))
+    list(rebuilt.stream_events({"resume_task": "new-http-request"}, cfg))
     assert rebuilt.inputs.read(task["id"], task["scope"])["phase"] == "completed"
+    assert rebuilt.inputs.read("new-http-request", task["scope"])["phase"] == "completed"
 
 
 def test_feedback_preserves_the_user_request_and_its_observed_page_data(backend):

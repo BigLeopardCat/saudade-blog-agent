@@ -67,11 +67,8 @@ def review(state, config, *, feedback=None):
         if feedback is None:
             raise ValueError("approval_feedback_not_available")
         execution = feedback(config).execution
-        observed = {**cancellation_fact(), "status": "superseded"}
-        feedback_fact = {**observed,
-            "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"
-                      "如仍需执行，必须重新准备确认卡；普通聊天文字不构成批准。"}
-        content = json.dumps(feedback_fact, ensure_ascii=False)
+        observed = superseded_fact()
+        content = json.dumps(observed, ensure_ascii=False)
         observations = []
         for spec in action["specs"]:
             observations.extend(memory.observation({"name": spec["tool"], "args": spec["args"],
@@ -81,7 +78,7 @@ def review(state, config, *, feedback=None):
         record("native", "approval_feedback", facts=observed)
         return {"pending_confirm": None, "pending_action": None, "approval": None,
                 "approved_result": {**facts, "execution": execution,
-                                    "operation_feedback": feedback_fact},
+                                    "operation_feedback": observed},
                 "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
     if not has_result(facts.get("execution", {}), action["specs"], jti=action["jti"]):
         raise ValueError("确认恢复需要当前操作的真实执行回执")
@@ -98,6 +95,12 @@ def review(state, config, *, feedback=None):
 
 def _commit(state):
     return {}
+
+
+def superseded_fact():
+    return {**cancellation_fact(), "status": "superseded",
+            "result": "本次待确认操作已撤销，原确认卡已失效，未执行改动；目标当前状态未查询。"
+                      "如仍需执行，必须重新准备确认卡；普通聊天文字不构成批准。"}
 
 
 def _execution_required(state):

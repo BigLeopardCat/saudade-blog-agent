@@ -46,13 +46,13 @@ def main():
             else:
                 list(selected.stream_events(inputs, config()))
                 old_token = selected.store.load(config()).pending_confirm["token"]
-                original = selected.store.clear_pending
+                original = selected.store.replace_pending
 
                 def record_revocation(*args, **kwargs):
                     original(*args, **kwargs)
                     Path(marker).write_text(old_token)
 
-                selected.store.clear_pending = record_revocation
+                selected.store.replace_pending = record_revocation
                 model.stream = crash
                 inputs = {"messages": [HumanMessage(content="先不收藏，解释一下。")],
                           "task_id": "feedback-request"}

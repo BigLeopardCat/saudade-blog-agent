@@ -125,3 +125,16 @@ def test_another_completion_waits_without_revoking_the_current_human_approval(sc
         list(runtime.stream_events(newer, cfg))
     assert runtime.store.load(cfg).pending_confirm == original.execution["pending_confirm"]
     assert len(model.calls) == 1
+
+
+def test_completion_survives_empty_human_history_without_fabricating_a_user_turn(scenario):
+    _, cfg, event, _, model, _ = scenario
+    runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+        application=BlogApplication(), model_factory=lambda **_: model)
+    first = list(runtime.stream_events(event, cfg))[-1]
+    saved = runtime.store.load(cfg)
+    assert not any(isinstance(message, HumanMessage) for message in saved.messages)
+    assert saved.messages[0].additional_kwargs["memory_actor"] == {"uid": 7, "role": "admin"}
+    second = list(runtime.stream_events(event, cfg))[-1]
+    assert first.execution["pending_confirm"] == second.execution["pending_confirm"]
+    assert len(model.calls) == 1

@@ -43,6 +43,17 @@ class Body(httpx.SyncByteStream):
         self.closed = True
 
 
+def assert_operations_once(calls, streams, interrupted, ledger, cfg, *grants):
+    assert all(body.closed for body in streams)
+    assert sum(path.endswith("/approve") for _, path in calls) == 1
+    assert sum(path.endswith("/accept") for _, path in calls) == 1
+    assert sum(path.endswith("/events") for _, path in calls) == 2 + int(interrupted)
+    before = len(calls)
+    for grant in grants:
+        assert transactions.execute(grant, cfg, None, ledger=ledger)["receipts"]
+    assert len(calls) == before
+
+
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_sdk_explicit_waits_resume_without_replaying_paid_calls_or_preview_credentials(
         monkeypatch, tmp_path, interrupted):
@@ -152,14 +163,8 @@ def test_sdk_explicit_waits_resume_without_replaying_paid_calls_or_preview_crede
         final = run({"messages": [HumanMessage(content="请等保存完成后告诉我。")],
                      "task_id": "image-explicit-save-wait"})
         assert final.reply == "图片已保留到图库，编号31。"
-        assert job["status"] == "accepted" and all(body.closed for body in streams)
-        assert sum(path.endswith("/approve") for _, path in calls) == 1
-        assert sum(path.endswith("/accept") for _, path in calls) == 1
-        assert sum(path.endswith("/events") for _, path in calls) == 2 + int(interrupted)
-        before = len(calls)
-        assert transactions.execute(first_grant, cfg, None, ledger=ledger)["receipts"]
-        assert transactions.execute(second_grant, cfg, None, ledger=ledger)["receipts"]
-        assert len(calls) == before
+        assert job["status"] == "accepted"
+        assert_operations_once(calls, streams, interrupted, ledger, cfg, first_grant, second_grant)
     wire = json.dumps(model_requests, ensure_ascii=False)
     assert "token=private" not in wire and "result_url" not in wire
     assert "正在写入图库，尚未核实入库完成" in wire

@@ -36,6 +36,26 @@ def runtime(model, tools=(), saver=None):
         model_factory=lambda **_: model)
 
 
+def test_staged_input_retry_keeps_identity_text_and_completed_task_guards():
+    from agent.runtime.task_input_store import MemoryInputs
+    from agent.runtime.task_inputs import TaskInputs
+
+    inbox = TaskInputs(MemoryInputs())
+    task = {"id": "staged", "scope": {"uid": 7, "conversation_id": 42, "role": "user"},
+            "input": [HumanMessage(content="只做这项新请求")]}
+    assert inbox.open(task)
+    with pytest.raises(InputConflict, match="task_id_already_used"):
+        inbox.open(task)
+    assert inbox.open(task, retry=True)
+    with pytest.raises(InputConflict):
+        inbox.open({**task, "input": [HumanMessage(content="换成另一项操作")]}, retry=True)
+    with pytest.raises(InputConflict):
+        inbox.open({**task, "scope": {**task["scope"], "uid": 8}}, retry=True)
+    inbox.finish(task, set())
+    with pytest.raises(InputConflict):
+        inbox.open(task, retry=True)
+
+
 class Model:
     max_tokens = 128
 

@@ -6,6 +6,7 @@ from langchain_core.messages import AIMessage
 
 from agent.domains.image_generation.tools import read
 from agent.principal import ADMIN_ROLES
+from agent.runtime.memory import bind_actor
 from agent.runtime.results import TurnResult
 from agent.runtime.writes import bound_context
 from tools import base
@@ -34,6 +35,7 @@ def prepare(event, snapshot, config):
     args = {"job_id": job.id}
     if job.status == "review":
         args["storage"] = job.saveStorage
-    return AIMessage(content="", id="event:" + event_id, tool_calls=[{
+    message = AIMessage(content="", id="event:" + event_id, tool_calls=[{
         "type": "tool_call", "id": event_id, "name": name, "args": args}],
         additional_kwargs={"runtime_event": {"kind": "image_generation", "id": event_id}})
+    return bind_actor([message], principal)[0]

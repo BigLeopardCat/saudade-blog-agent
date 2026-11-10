@@ -79,6 +79,17 @@ class CheckpointConversationStore:
                 self.update_state(config, saved)
                 self.prune(config)
 
+    def replace_pending(self, config, jti, run, messages):
+        with self.guard(config) as config:
+            previous = self.load(config)
+            if (previous.pending_action or {}).get("jti") != jti:
+                raise ValueError("approval_changed")
+            # Commit the already revoked grant and accepted input even if stop arrived
+            # after revocation. This bounded checkpoint never dispatches tools or models.
+            self._state.update_state(config, {"pending_confirm": None, "pending_action": None,
+                "approval": None, "approved_result": None, "run": run,
+                "receipts": [], "messages": messages}, as_node="commit")
+
     @contextmanager
     def guard(self, config, *, timeout=60):
         if not self.available:

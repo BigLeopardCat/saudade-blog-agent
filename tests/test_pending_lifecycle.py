@@ -168,11 +168,11 @@ def test_cancel_boundary_survives_stop_and_resumes_without_reviving_approval(
             execute(selected, cfg, text="取消旧收藏，再收藏文章20")
     saved = selected.store.load(cfg)
     assert not saved.has_pending and not saved.approval
-    assert saved.unfinished and saved.run["id"] == "original"
+    assert saved.unfinished and saved.run["id"] == "replacement"
     stop.clear()
     resumed_model = Model(batch(REPLACE))
     restored = runtime(resumed_model)
-    final = execute(restored, cfg, resume="original")
+    final = execute(restored, cfg, resume="replacement")
     assert final.execution["pending_event"]["jti"] == grant["jti"]
     new = confirm.verify(final.execution["pending_confirm"]["token"], 7, 42)
     assert new["specs"][0]["args"] == {"article_id": 20}
@@ -211,7 +211,7 @@ def test_reads_after_revocation_are_checkpointed_before_the_next_model_round(pen
     before = len(requests)
     model = Model(AIMessage(content="已取消旧操作，收藏夹目前为空。"))
     restored = runtime(model)
-    result = execute(restored, cfg, resume="original")
+    result = execute(restored, cfg, resume="replacement")
     assert len(requests) == before
     assert result.execution["pending_event"]["jti"] == grant["jti"]
     assert not restored.store.load(cfg).has_pending
@@ -226,15 +226,11 @@ def test_failed_boundary_checkpoint_cannot_reenable_the_revoked_signature(
     runtime, cfg, _, original, grant, _, requests, _ = pending_task
 
     with monkeypatch.context() as changes:
-        from agent.runtime import approval
-        review = approval.review
-
-        def failed_review(state, config, **kwargs):
-            review(state, config, **kwargs)
+        def failed_checkpoint(*args, **kwargs):
             raise RuntimeError("checkpoint unavailable")
 
-        changes.setattr(approval, "review", failed_review)
         selected = runtime(Model())
+        changes.setattr(selected.store._state, "update_state", failed_checkpoint)
         with pytest.raises(RuntimeError, match="checkpoint unavailable"):
             execute(selected, cfg, text="取消刚才的收藏")
     # The old display checkpoint remains, but its authorization was durably revoked.

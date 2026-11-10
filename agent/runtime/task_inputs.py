@@ -38,7 +38,7 @@ class TaskInputs:
         if not state or state["scope"] != scope:
             raise InputConflict("task_not_available")
 
-    def open(self, task, *, resume=False):
+    def open(self, task, *, resume=False, retry=False):
         original = next((text_content(message.content)
                          for message in reversed(task.get("input", []))
                          if isinstance(message, HumanMessage)), "")
@@ -47,7 +47,10 @@ class TaskInputs:
                    "created_at": time.time(), "expires": None}
         with self.storage.edit(task["id"], None if resume else initial) as state:
             self._check(state, task["scope"])
-            if state["phase"] != "new" and not resume:
+            retrying = (retry and state["phase"] == "running" and not state["inputs"]
+                        and state["original_text"] == original
+                        and state.get("turn_id") == initial["turn_id"])
+            if state["phase"] != "new" and not resume and not retrying:
                 raise InputConflict("task_id_already_used")
             if state["phase"] in {"completed", "superseded"}:
                 raise InputConflict("task_finished")
