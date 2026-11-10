@@ -153,6 +153,7 @@ def test_accepted_completion_delivers_real_image_once_in_stream_and_checkpoint(s
     result = events[-1]
     streamed = "".join(str(item.content) for item in events if isinstance(item, AIMessageChunk))
     assert result.reply.count(f"]({url})") == 1
+    assert result.reply.count("![") == 1
     assert "PLACEHOLDER" not in result.reply + streamed
     assert streamed == result.reply
     assert runtime.store.load(cfg).messages[-1].content == result.reply
@@ -202,3 +203,17 @@ def test_removed_saved_image_is_not_attached(scenario):
     result = list(runtime.stream_events(event, cfg))[-1]
     assert "![" not in result.reply
     assert "imageRemoved" in str(model.calls)
+
+
+def test_removed_image_status_invalidates_earlier_saved_link():
+    from langchain_core.messages import ToolMessage
+
+    from agent.domains.gallery.display import snapshot
+
+    messages = [ToolMessage(content="", name="get_image_generation", tool_call_id="old",
+        artifact={"kind": "ok", "data": {"imageId": 77, "imageRemoved": False},
+            "meta": {"gallery_display": {"image_id": 77, "url": "https://images.test/old.png"}}})]
+    assert snapshot(messages, 77)["imageUrl"] == "https://images.test/old.png"
+    messages.append(ToolMessage(content="", name="get_image_generation", tool_call_id="new",
+        artifact={"kind": "ok", "data": {"imageId": None, "imageRemoved": True}}))
+    assert snapshot(messages, 77) is None

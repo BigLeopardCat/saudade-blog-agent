@@ -26,6 +26,9 @@ def snapshot(messages, image_id):
         artifact = message.artifact if isinstance(message.artifact, dict) else {}
         if message.status != "success" or artifact.get("kind") != "ok":
             return None
+        if (message.name == "get_image_generation"
+                and (artifact.get("data") or {}).get("imageRemoved")):
+            return None
         value = (artifact.get("data") if message.name == "get_gallery_image_metadata"
                  else (artifact.get("meta") or {}).get("gallery_display"))
         if not isinstance(value, dict) or type(value.get("image_id")) is not int:
