@@ -101,6 +101,10 @@ def verify_case(case, turn, state):
                 raise ValueError('Cancelled or unconfigured generation produced an approval')
             if item.get('expected_unconfigured') and state['draft']:
                 raise ValueError('Unconfigured generation created a job')
+            if item.get('expected_unconfigured') and not any(
+                    request.url.path == '/api/protect/image-generation/options'
+                    for request in state['requests']):
+                raise ValueError('Service-unavailable case never checked the actual service')
             continue
         expected = item['expected_draft']
         if len(result['confirm_tokens']) != 1 or not state['draft']:

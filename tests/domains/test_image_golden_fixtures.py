@@ -33,3 +33,21 @@ def test_unconfigured_golden_has_no_prepared_job_or_approval():
         result = prepare_image_generation.invoke({'prompt': 'Synthetic prompt'},
             config=config(principal=Principal(7, 'admin', SOURCE_ASSERTION)))
         assert result.kind == 'unavailable' and not state['jobs']
+
+
+@pytest.mark.parametrize('attempted', [False, True])
+def test_unconfigured_contract_cannot_pass_without_exercising_the_failure(attempted):
+    case = next(row for row in contracts.GOLDEN_CASES
+                if row['id'] == 'image_unconfigured_fails_without_card')
+    with contracts.backend(configured=False) as state:
+        def turn(_):
+            if attempted:
+                prepare_image_generation.invoke({'prompt': 'Synthetic prompt'},
+                    config=config(principal=Principal(7, 'admin', SOURCE_ASSERTION)))
+            return {'exec_rows': [], 'confirm_tokens': [], 'native_events': []}
+
+        if attempted:
+            contracts.verify_case(case, turn, state)
+        else:
+            with pytest.raises(ValueError, match='never checked the actual service'):
+                contracts.verify_case(case, turn, state)
