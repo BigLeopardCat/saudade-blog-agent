@@ -125,9 +125,10 @@ def _server_status(data):
     if host.cpu_sample_at is not None:
         lines.append(f"- CPU 采样：{_observed(host.cpu_sample_at)}，"
                      f"跨度 {host.cpu_sample_window_seconds:.2f} 秒")
+    lines.append("- 挂载点容量（磁盘卷归属未观测）：")
     for disk in host.disks:
         mount = disk.mount.replace("\n", " ").replace("\r", " ")
-        lines.append(f"- 磁盘 {mount}：总 {_bytes(disk.total_bytes)}，"
+        lines.append(f"  {mount}：总 {_bytes(disk.total_bytes)}，"
                      f"可用 {_bytes(disk.available_bytes)}")
     if host.disks_truncated:
         lines.append("- 磁盘列表已截取前 16 项。")
