@@ -6,7 +6,7 @@ import json
 import pytest
 from _own_support import config
 from _service import app
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
@@ -42,6 +42,23 @@ class Model:
     def invoke(self, prompt):
         self.calls.append(list(prompt))
         return self.responses.pop(0)
+
+
+def test_invented_preparation_name_can_recover_without_a_false_permission_denial(site):
+    model = Model()
+    model.responses.insert(1, AIMessage(content="", tool_calls=[{
+        "name": "prepare_favorite_add", "args": {"article_id": 19}, "id": "invented"}]))
+    runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
+                           application=BlogApplication(), model_factory=lambda **_: model)
+    result = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="先准备收藏文章19，不执行")]}, config()))[-1]
+    error = next(m for m in model.calls[2] if isinstance(m, ToolMessage)
+                 and m.tool_call_id == "invented")
+    assert error.status == "error" and json.loads(error.content)["error"] == "unknown_tool"
+    grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+    assert grant["specs"] == [{"tool": "add_favorite", "args": {"article_id": 19}}]
+    assert len(model.calls) == 3
+    assert all(request.method == "GET" for request in site["requests"])
 
 
 def test_preparation_signs_real_target_without_writing_or_exposing_token(site, monkeypatch):

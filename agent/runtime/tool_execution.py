@@ -46,6 +46,15 @@ def render_result(call, value, limit):
     return value.model_copy(update={"content": body})
 
 
+def unknown_tool_result(call, discovery_tools, *, round_index=None):
+    """Reject invented names with recovery metadata, without claiming a permission failure."""
+    record("native", "tool_error", name=call["name"], call_id=call["id"],
+           reason="unknown_tool", round=round_index)
+    return ToolMessage(content=json.dumps({"error": "unknown_tool", "tool": call["name"],
+                       "discovery_tools": list(discovery_tools)}), name=call["name"],
+                       tool_call_id=call["id"], status="error")
+
+
 def append_result(session, request, handler, prompt, round_index, attachments):
     call = request.tool_call
     name = call["name"]
@@ -75,13 +84,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                                       name=name, tool_call_id=call["id"], artifact={"kind": "ok"}))
         return None
     if name not in session.execution_tools:
-        reason = "unknown_tool"
-        body = json.dumps({"error": reason, "tool": name,
-                           "discovery_tools": list(session.loaders)})
-        prompt.append(ToolMessage(content=body, name=name,
-                                  tool_call_id=call["id"], status="error"))
-        record("native", "tool_error", name=name, call_id=call["id"],
-               reason=reason, round=round_index)
+        prompt.append(unknown_tool_result(call, session.loaders, round_index=round_index))
         return None
     session.calls_used += 1
     tool_state.use(session, name, prompt)

@@ -42,12 +42,14 @@ DOMAIN_DESCRIPTIONS = {
     "admin_notices": "Prepare a personal notification: recipient and body; "
     f"default title: {DEFAULT_TITLE}.",
     "admin_tags": "Tag dictionary and confirmed edits/deletion. "
-    "Creation: ask for a missing name before loading; color is optional. "
+    "Create with a name and optional full parent name; preparation resolves the parent. "
+    "Ask for a missing name before loading; color is optional. "
     "Article-tag assignment: admin_article_management.",
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",
-    "admin_account_actions": "Prepare freeze, mute or role changes. Mute requires a duration "
-    "or explicit permanence; missing duration or eligibility checks use admin_accounts. "
+    "admin_account_actions": "Prepare freeze, mute or role changes directly with a known ID "
+    "or full username; preparation verifies the target and eligibility. "
+    "Mute needs duration or explicit permanence; missing duration uses admin_accounts. "
     "Resolve ambiguous names first. System notices are fixed templates; "
     "custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
