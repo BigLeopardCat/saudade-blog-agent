@@ -1,13 +1,4 @@
-"""词表闸的**判据与反控**。
-
-十一节：
-
-⚠️ **登记表的 category 是复核物、不是防篡改锁**：把一条 `open` 手改成 `closed` 能让闸门变绿，
-本套件拦不住，也不打算拦（同 `eval/complexity_baseline.json` —— 基线类产物一律靠 reviewer
-读 diff）。闸门能拦的是**代码侧**：新表长出来、老表变大、`open` 不写出路。
-
-用法：.venv/bin/python tests/test_wordlist_gate.py
-"""
+"""Vocabulary registration checks and controls for unregistered or expanded matching rules."""
 
 
 from __future__ import annotations
@@ -283,6 +274,19 @@ def render(i: int) -> str:
           str([e["id"] for e in _real["entries"] if e["file"] in _new]))
     shutil.rmtree(_d3, ignore_errors=True)
     shutil.rmtree(_d4, ignore_errors=True)
+    _check_evaluation_vocabulary(_g, REGISTRY, _real, _d5)
+    print()
+    if FAILED:
+        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
+        sys.exit(1)
+    print("全部通过")
+
+    assert not FAILED, (
+        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
+
+
+
+def _check_evaluation_vocabulary(_g, REGISTRY, _real, _d5):
     print("\n⑪ eval 侧（判据的**判据**）的棘轮：加一条负正则/一个豁免/一个族元素 ⇒ 都要红")
     _snap5 = snapshot_of(_g, _d5, targets=["agent"])
     _reg5 = write_reg(_d5, _snap5, "_ev_ok.json")
@@ -414,14 +418,6 @@ def render(i: int) -> str:
           "_shrunk_files(metric[" in _src12 and "_stale_metric_keys(metric[" in _src12
           and "metric_shrunk, metric_stale)" in _src12)
     shutil.rmtree(_t12, ignore_errors=True)
-    print()
-    if FAILED:
-        print(f"失败 {len(FAILED)} 项：" + "；".join(FAILED))
-        sys.exit(1)
-    print("全部通过")
-
-    assert not FAILED, (
-        f"{len(FAILED)} 条未通过：" + "；".join(FAILED))
 
 
 if __name__ == "__main__":

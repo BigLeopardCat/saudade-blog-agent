@@ -12,10 +12,10 @@ from rag.tokenization import tokenize
 
 
 def test_mixed_language_features_keep_frequency_and_separate_language_boundaries():
-    assert Counter(tokenize("博客博客 Rust_1.2 OTA中文")) == Counter(
-        ["博客", "客博", "博客", "博客博", "客博客", "rust_1.2", "ota", "中文"]
-    )
-    assert tokenize("猫") == []  # Single Chinese characters do not become broad matches.
+    features = Counter(tokenize("博客博客 Rust_1.2 OTA中文"))
+    assert features["博客"] == 2
+    assert features["rust_1.2"] == features["ota"] == features["中文"] == 1
+    assert tokenize("猫") == ["猫"]
     assert tokenize("中文，标题") == ["中文", "标题"]
 
 

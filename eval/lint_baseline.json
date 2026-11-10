@@ -8,10 +8,8 @@
     "I",
     "W"
   ],
-  "total": 100,
+  "total": 67,
   "by_file": {
-    "agent/hostinfo.py": 1,
-    "eval/admin_write_probe.py": 29,
     "eval/corpus_terms.py": 6,
     "eval/golden_fixture.py": 1,
     "eval/identity_preflight.py": 1,
@@ -21,7 +19,6 @@
     "eval/wordlist_gate.py": 6,
     "tests/test_action_text.py": 2,
     "tests/test_artifact_retention.py": 1,
-    "tests/test_complexity_budget.py": 3,
     "tests/test_corpus_terms.py": 1,
     "tests/test_golden_family_policy.py": 3,
     "tests/test_golden_fixture.py": 4,

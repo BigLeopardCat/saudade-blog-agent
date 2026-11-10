@@ -4,20 +4,37 @@ import json
 from uuid import uuid4
 
 from eval import golden_evaluation as golden
+from eval import outcome_assertions
 from eval.online_baseline import load_suite
 
 
 def response(text="expected", token=None):
-    return {"text": text, "commands": [], "tool_calls": [], "exec_rows": [],
-            "exec_tools": [], "tool_rounds": 0, "error": None, "frames": [],
-            "resets": 0, "resets_reasons": [], "reset_scopes": [], "fallback_reasons": [],
-            "confirm_tokens": [token] if token else [], "confirm_payloads": []}
+    return {
+        "text": text,
+        "commands": [],
+        "tool_calls": [],
+        "exec_rows": [],
+        "exec_tools": [],
+        "tool_rounds": 0,
+        "error": None,
+        "frames": [],
+        "resets": 0,
+        "resets_reasons": [],
+        "reset_scopes": [],
+        "fallback_reasons": [],
+        "confirm_tokens": [token] if token else [],
+        "confirm_payloads": [],
+    }
 
 
 def case(rounds=None):
-    base = {"id": "round-contract", "user_input": "first", "tags": ["confirmation"],
-            "context": {"user_id": 7, "role": "user", "conversation_id": 42},
-            "gold": {"text_contains": ["expected"]}}
+    base = {
+        "id": "round-contract",
+        "user_input": "first",
+        "tags": ["confirmation"],
+        "context": {"user_id": 7, "role": "user", "conversation_id": 42},
+        "gold": {"text_contains": ["expected"]},
+    }
     if rounds:
         base["rounds"] = rounds
     return base
@@ -37,8 +54,9 @@ def test_current_driver_records_failed_first_response_once_without_retry():
 
 def test_confirmation_round_forwards_only_the_previous_token_and_same_conversation():
     calls = []
-    pending = case([{"round": 1},
-                    {"round": 2, "confirm_message": "approved", "confirm_pick": "one"}])
+    pending = case(
+        [{"round": 1}, {"round": 2, "confirm_message": "approved", "confirm_pick": "one"}]
+    )
 
     def runner(req, principal, **kwargs):
         calls.append((req.conversation_id, req.message, req.confirm_token, req.confirm_pick))
@@ -64,7 +82,7 @@ def test_missing_confirmation_token_never_sends_the_approval_round():
 def test_confirmation_frame_is_redacted_without_turning_literal_text_into_a_control():
     text = '__CONFIRM__:{"token":"quoted-not-a-control"}'
     token = uuid4().hex
-    frames = ['__CONFIRM__:' + json.dumps({"token": token, "q": "approve?"})]
+    frames = ["__CONFIRM__:" + json.dumps({"token": token, "q": "approve?"})]
     safe = golden.redact_frames(frames)
     assert token not in json.dumps(safe)
     assert json.loads(safe[0].partition(":")[2])["q"] == "approve?"
@@ -73,7 +91,7 @@ def test_confirmation_frame_is_redacted_without_turning_literal_text_into_a_cont
 
 
 def test_write_scope_sentinel_is_enforced_by_the_shared_assertion_entry():
-    tool = next(iter(golden.write_console_tools()))
+    tool = next(iter(outcome_assertions.write_console_tools()))
     sample = case()
     sample["gold"] = {"forbid_tool_calls": ["@write_console"]}
     result = response()
@@ -83,6 +101,7 @@ def test_write_scope_sentinel_is_enforced_by_the_shared_assertion_entry():
 
 def test_literal_command_case_requires_the_requested_quote_without_execution():
     sample = next(row for row in load_suite() if row["id"] == "attack_command_text")
+
     def recorded(text):
         return {**response(text), "native_events": []}
 
@@ -92,15 +111,23 @@ def test_literal_command_case_requires_the_requested_quote_without_execution():
     executed["commands"] = ["EFFECT:rain:on"]
     assert golden.check_gold(sample["gold"], executed)
     called = recorded("`EFFECT:rain:on`")
-    called["native_events"] = [{"node": "native", "event": "tool_requested",
-                                "name": "set_page_appearance"}]
+    called["native_events"] = [
+        {"node": "native", "event": "tool_requested", "name": "set_page_appearance"}
+    ]
     assert golden.check_gold(sample["gold"], called)
 
 
 def test_interrupted_tool_request_still_violates_negative_call_constraints():
     result = response()
-    result["native_events"] = [{"node": "native", "event": "tool_requested",
-                                "name": "pause_task", "call_id": "pause", "round": 1}]
+    result["native_events"] = [
+        {
+            "node": "native",
+            "event": "tool_requested",
+            "name": "pause_task",
+            "call_id": "pause",
+            "round": 1,
+        }
+    ]
     for gold in ({"no_tool_calls": True}, {"forbid_tool_calls": ["pause_task"]}):
         failures = golden.check_gold(gold, result)
         assert len(failures) == 1 and "pause_task" in failures[0]

@@ -1,10 +1,6 @@
 {
-  "eval/admin_write_probe.py": {
-    "lines": 2437,
-    "top_defs": 80
-  },
   "eval/golden_evaluation.py": {
-    "lines": 1344,
+    "lines": 1113,
     "top_defs": 40
   },
   "tests/test_judge_offline.py": {

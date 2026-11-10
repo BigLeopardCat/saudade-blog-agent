@@ -1,101 +1,59 @@
-# frontend/ —— 看板娘与对话面板
+# 看板娘与聊天组件
 
-博客页面上那只 Live2D 看板娘「泠月喵」，以及挂在它旁边的网页对话面板（会话抽屉、流式
-回复、命令执行、停止生成）。它是纯静态资源：没有生产构建步骤或生产 npm 依赖，浏览器直接按
-`<script>` + ES module 加载。构建与部署这一半发生在博客仓，这里只放源码。
+本目录维护独立发布的看板娘静态资源与聊天交互。博客通过
+`frontend/widget.lock.json` 固定本仓提交和资源子树哈希，构建前拉取组件。
+生产部署直接使用已提交的静态文件，不依赖运行时 CDN 或生产环境的 npm。
 
-## 许可
+## 源码与产物
 
-**本目录的代码以 MIT 分发**（见 [LICENSE](LICENSE)），与本仓其余部分同一份许可——它要被
-博客仓拉过去内嵌分发，MIT 与博客仓的 GPL-2.0 兼容。
+- `src/chat/`：聊天流的 ES module 源码、TypeScript 协议及宿主接口类型。
+- `public/live2d-widgets/chat-stream.js`、`chat-protocol.js`：esbuild 生成的静态入口，禁止手改。
+- `public/live2d-widgets/` 其余文件：看板娘加载、渲染、会话、卡片与布局资源。
+- `public/live2d_model/`：模型与贴图。
+- `scripts/build.mjs`：根据锁定的 npm 依赖生成入口与第三方许可；`--check` 拒绝过期产物。
+- `tests/`：协议、跨窗口同步、确认、恢复和真实浏览器回归。
 
-**美术资源不按 MIT**，按 CC BY-NC-SA 4.0 分发（署名 · 非商业性使用 · 相同方式共享）——
-见 [ASSETS-LICENSE.md](ASSETS-LICENSE.md)。代码随便用（可商用）；形象能用、能改，
-但不能拿去卖，改完还得用同样的协议放回公共池子。
-（"禁止作恶"是 README 里的一条社区约定，不写进协议正文——CC 不允许在协议上叠加额外限制。）
+聊天流按轮次编排、回复展示、失败恢复、确认操作、图片附件、页面外观和窗口交互划分。
+协议只在 `src/chat/protocol.ts` 定义和验证；模型正文不参与命令分派。
+宿主工厂及 `__chatRenderMarkdown` 等接入点保持稳定，内部模块不另外维护一套会话状态机。
 
-生产使用的第三方资源：
+## 开发与验证
 
-| 组件 | 许可 | 在哪 |
-|---|---|---|
-| [pixi.js](https://github.com/pixijs/pixijs) 7.x | MIT | 消费端构建前由 `npm run vendor:live2d` 从 node_modules 拷进 `live2d-widgets/vendor/` |
-| [pixi-live2d-display](https://github.com/guansss/pixi-live2d-display) 0.4.x | MIT | 同上 |
-| Live2D Cubism Core 运行时 | 专有 | **不在本仓、也不在博客仓**——消费端构建前从 Live2D 官方 CDN 取并按 sha256 校验 |
-
-Cubism Core 单独拎出来说：它是专有许可，**只允许在消费端构建时从官方源取**，放进任何一个
-git 仓库都等于那个仓在分发它。所以这里没有它，博客仓也没有它。
-
-模型与贴图（`live2d_model/agent_2.*`）与面板图标（`live2d-widgets/lingyue-toggle.png`）是本项目
-自有的美术资源，不是 MIT——按 [ASSETS-LICENSE.md](ASSETS-LICENSE.md) 的 CC BY-NC-SA 4.0 分发。
-
-## 目录
-
-```
-frontend/public/live2d-widgets/
-  boot.js          加载器：统一静态资源版本，管理看板娘显隐/拖拽/工具条
-  renderer.js      模型渲染、参数注入与口型
-  chat-stream.js   SSE 请求、命令调度和暂停续接
-  chat-approval.js 确认卡来源、历史展示与服务端状态恢复
-  chat-navigation.js  浏览器导航完成或超时后的原任务接续
-  chat-engine.js   会话状态、历史拉取、滚动与缓存
-  chat-session.js  会话抽屉、命名、置顶与搜索
-  chat-core.js     加载期与网络层公共件
-  chat-render.js   Markdown、消息增强与面板模板
-  chat-ui.js       输入交互、状态反馈、空态与复制回复
-  widget.css      看板娘及原有面板基础样式
-  chat-ui.css     对话工作区样式（在 widget.css 后加载）
-  lingyue-toggle.png
-frontend/public/live2d_model/
-  agent_2.model3.json / .moc3 / .cdi3.json / .physics3.json / 2048/texture_00.png
-```
-
-> 路径故意与消费端（博客仓）完全一致——`frontend/public/live2d-widgets/` 在两边是同一个
-> 相对路径，消费端的稀疏检出因此可以直接落位、不需要任何路径映射表。
-
-## 谁在用、怎么用
-
-博客仓不复制这些文件。它按提交号钉住：
-
-- 博客仓的 `frontend/widget.lock.json` 记着本仓的一个 commit sha（以及这两棵子树的 tree sha
-  作为强判据）；
-- 博客仓的 `npm run fetch:widget`（`frontend/scripts/fetch-widget.mjs`）在构建前
-  `git sparse-checkout` 出这两棵树，落到与上面完全相同的路径；
-- 因此**改了这里，博客要跟着动的是那个 lock 文件**：推本仓 → 拿新的 sha 与两棵 tree sha →
-  更新博客仓的 `frontend/widget.lock.json`。那条 push 会触发一次部署。
-
-**别 force-push / 改写本仓 main 的历史**：lock 钉的是具体提交，被改写的提交在消费端就取不到了。
-
-## 改这里的几条约定
-
-1. `?v=` 缓存版本：宿主使用 `widget.lock.json` 的提交号加载 `boot.js`，入口将同一版本传给全部子脚本和样式。更新组件时同步锁文件的提交与树哈希，无需手工维护日期版本；未带版本的独立开发入口使用 `dev`。
-   同步点在消费端：博客仓 `Live2dAgent/index.tsx` 的 `?v=`、以及设备控制台页面
-   （随博客仓的 `iot/` 一起收编，见那边 `frontend/README.md` 的五个同步点表）。
-2. **口型接口签名与净效果一字不能改**：`window.__setMouthOpen` / `__mouthOverride` /
-   `__setMouthClose` 是 `chat-stream.js` 与渲染层之间的契约（`__setMouthClose` 的净效果是
-   "钉死在闭合"而不是字面语义）。
-3. 命名 SSE 事件由 Python（`agent/api/events.py`、`agent/transport.py`）、Rust（博客仓
-   `src/routes/chat.rs`）和 `chat-stream.js` 共同消费。正文保持 JSON 字符串，确认卡、
-   页面命令、回执与回复撤回使用独立事件；修改协议时同步三端并运行对应契约测试。
-4. `#waifu` 的层级交给宿主页面：`widget.css` 里是 `z-index: var(--z-agent, 1000)`
-   —— 宿主页面自己在 `:root` 定义 `--z-agent` 就能把看板娘放进它的层级阶梯
-   （博客仓定义在 `frontend/src/index.css`，个人中心 1200 / 公告 1300 都压在看板娘之上）。
-   **别再写回一个天文数字**：2147483000 那种值会让宿主页面上任何弹窗都盖不住它，
-   而"面板永远在最上层"从来不是需求。
-   兜底 1000 只保证"脱离本站时仍浮在常规内容之上"，不保证"最高"。
-
-## 对话体验与验证
-
-布局、键盘交互、状态反馈与宿主接入步骤见 [对话 UI](CHAT-UI.md)。
-
-## 浏览器回归
-
-使用 `.node-version` 中的 Node 版本，在本目录执行：
+使用 `.node-version` 固定的 Node 版本：
 
 ```sh
 npm ci
-npx playwright install --with-deps chromium
+npm run typecheck
+npm run build
+npm run check:generated
 npm test
+```
+
+源码与生成物一起提交。CI 验证 TypeScript、JavaScript 边界、产物一致性和行为回归。
+浏览器验证使用锁定的 Playwright：
+
+```sh
+npx playwright install --with-deps chromium
 npm run test:browser
 ```
 
-Playwright 只用于开发验证，采用 Apache-2.0 许可，版本固定在锁文件。公开 CI 自动验证聊天、确认、图片布局、暂停接续及执行中补充要求；全部接口使用隔离本地夹具，不调用模型或线上业务。截图只含合成数据。
+普通回归使用合成数据和隔离接口，不调用线上模型或业务写入。截图和临时日志不入库。
+共享生产主机不安装浏览器、不跑完整构建，完整矩阵交给 CI。
+
+## 宿主接入
+
+修改静态资源后，先推送本仓提交，再更新博客 `frontend/widget.lock.json` 的提交号与
+`live2d-widgets`、`live2d_model` 两棵树哈希。宿主执行 `fetch:widget` 后再执行 `vendor:live2d`。
+只修改源码而未重新生成静态入口会被 CI 拒绝。
+
+`boot.js?v=<提交号>` 将同一版本传给子脚本和样式。聊天模块内部依赖打包进入静态入口，
+不额外加载无版本的依赖文件。命名 SSE 事件、身份、确认与浏览器回执变更需同时验证
+Python Agent、Rust 宿主和浏览器；协议见[流式交付](../docs/chat-stream-protocol.md)。
+
+宿主负责 Markdown 渲染器、自动主题、页面层级和 SPA 导航桥。组件负责面板交互与结构化
+事件展示。口型接口 `__setMouthOpen`、`__mouthOverride`、`__setMouthClose` 属于渲染桥契约。
+
+## 许可
+
+代码按 [MIT](LICENSE) 分发，美术资源按 [CC BY-NC-SA 4.0](ASSETS-LICENSE.md) 分发。
+第三方依赖与静态分发许可见 [THIRD-PARTY.md](THIRD-PARTY.md)。
