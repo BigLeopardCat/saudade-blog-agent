@@ -54,9 +54,8 @@ def test_explicit_type_roots_exclude_evaluation_and_keep_new_application_files(r
     assert [p.relative_to(repository).as_posix() for p in selected] == ["agent/new.py", "app.py"]
 
 
-@pytest.mark.parametrize("name", ["test_module_budget", "test_complexity_budget"])
-def test_size_scans_are_unchanged_by_ignored_snapshots(repository, monkeypatch, name):
-    check = load_check(name)
+def test_size_scans_are_unchanged_by_ignored_snapshots(repository, monkeypatch):
+    check = load_check("test_module_budget")
     monkeypatch.setattr(check, "ROOT", repository)
     original = check.scan()
     snapshot = repository / "eval/report/frozen/evaluator/oversize.py"

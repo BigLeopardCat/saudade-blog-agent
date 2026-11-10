@@ -188,8 +188,7 @@ def _moderation_list_text(label: str, args: dict, preview: bool) -> str:
     return f"查看{label}（{'，'.join(filters)}）" if filters else f"查看{label}"
 
 
-def _operation_text(name: str, a: dict, m: dict, preview: bool):
-    """Render recognized operations; let the caller label unsupported tools."""
+def _tag_action(name: str, a: dict, m: dict, preview: bool):
     if name == "create_tag":
         if preview:
             title = _leaf(a.get("title"))
@@ -237,6 +236,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
             return f"{head}：{change}" if change else head
         head = f"修改标签「{title}」" if title else "修改标签"
         return f"{head}：{change}" if change else head
+    return None
+
+
+def _category_action(name: str, a: dict, m: dict, preview: bool):
     if name in ("create_category", "update_category", "delete_category"):
         title = _leaf(a.get("new_title") or a.get("title") or a.get("name"))
         if preview:
@@ -263,7 +266,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
             return f"{verb}「{cname}」" if cname else verb
         head = f"{verb}「{cname}」" if cname else verb
         return f"{head}：{change}" if change else head
+    return None
 
+
+def _announcement_action(name: str, a: dict, m: dict, preview: bool):
     if name in ("delete_notifications", "delete_announcements"):
         label = "全站公告" if name == "delete_announcements" else "本人通知"
         ids = _ids_arg(a)
@@ -293,7 +299,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
             return f"删除公告「{title}」" if title else "删除公告"
         head = f"修改公告「{title}」" if title else "修改公告"
         return f"{head}：{change}" if change else head
+    return None
 
+
+def _moderation_action(name: str, a: dict, m: dict, preview: bool):
     if name in ("audit_board_comment", "delete_board_comment"):
         if preview:
             quote = _leaf(a.get("quote"))
@@ -332,7 +341,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         if who:
             head = f"{head}（{who} 的评论）"
         return f"{head}：{change}" if change else head
+    return None
 
+
+def _article_action(name: str, a: dict, m: dict, preview: bool):
     if name == "set_article_status":
         if preview:
             aid = _leaf(a.get("article_id"))
@@ -364,7 +376,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         head = f"修改文章 {aid} 的标签" if aid else "修改文章标签"
         act = _arrow(m)
         return f"{head}：{act}" if act else head
+    return None
 
+
+def _client_action(name: str, a: dict, m: dict, preview: bool):
     if name == "navigate_to":
         path = _raw(a.get("path"))
         if not path:
@@ -388,7 +403,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         if not text:
             return "屏幕显示"
         return f"屏幕显示「{text[:24] if preview else text}」"
+    return None
 
+
+def _read_action(name: str, a: dict, m: dict, preview: bool):
     if name == "rag_search":
         q = _raw(a.get("query"))
         if not q:
@@ -426,7 +444,17 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
         return head if preview else f"{head}{_title_suffix(m)}"
     if name in _NOARG_VERB:
         return _NOARG_VERB[name]
+    if name == "list_quota_requests":
+        return ("查看额度重置申请（连已处理的一起）"
+                if _raw(a.get("status")).lower() in ("all", "全部", "所有")
+                else "查看额度重置申请（只看待处理的）")
+    if name == "get_weather":
+        loc = _leaf(a.get("location"))
+        return f"查看天气「{loc}」" if loc else "查看天气"
+    return None
 
+
+def _account_action(name: str, a: dict, m: dict, preview: bool):
     if name in ("freeze_account", "unfreeze_account"):
         verb = "冻结账号" if name == "freeze_account" else "解冻账号"
         if preview:
@@ -470,11 +498,10 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
                   "reject_quota_request": "驳回额度重置申请",
                   "reset_user_quota": "重置账号的对话额度"}[name]
         return said if acct else unsaid
-    if name == "list_quota_requests":
-        return ("查看额度重置申请（连已处理的一起）"
-                if _raw(a.get("status")).lower() in ("all", "全部", "所有")
-                else "查看额度重置申请（只看待处理的）")
+    return None
 
+
+def _personal_action(name: str, a: dict, m: dict, preview: bool):
     if name in ("add_favorite", "remove_favorite"):
         aid = _raw(a.get("article_id"))
         change = _m(m, "change")
@@ -502,10 +529,27 @@ def _operation_text(name: str, a: dict, m: dict, preview: bool):
             more = f" 等 {len(ids)} {unit}" if len(ids) > 3 else ""
             return f"标记{who}已读（{shown}{more}）"
         return f"标记{who}已读（未选择目标）"
+    return None
 
-    if name == "get_weather":
-        loc = _leaf(a.get("location"))
-        return f"查看天气「{loc}」" if loc else "查看天气"
+
+_ACTION_RENDERERS = (
+    _tag_action,
+    _category_action,
+    _announcement_action,
+    _moderation_action,
+    _article_action,
+    _client_action,
+    _read_action,
+    _account_action,
+    _personal_action,
+)
+
+
+def _operation_text(name: str, a: dict, m: dict, preview: bool):
+    """Render the recognized operation through its presentation family."""
+    for renderer in _ACTION_RENDERERS:
+        if (text := renderer(name, a, m, preview)) is not None:
+            return text
     return _todo_text(name, a, preview)
 
 

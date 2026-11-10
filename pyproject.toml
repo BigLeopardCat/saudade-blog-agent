@@ -101,6 +101,13 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W"]
+extend-select = ["C901", "PLR0915"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 30
+
+[tool.ruff.lint.pylint]
+max-statements = 150
 
 [tool.mypy]
 # 与运行环境和类型检查基线使用同一 Python 版本。

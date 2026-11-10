@@ -57,6 +57,9 @@ jobs:
       - name: 未定义名静态扫描（ruff F821，秒级）
         run: uv run --frozen ruff check --select F821 --no-cache .
 
+      - name: Standard function complexity and statement limits
+        run: uv run --frozen ruff check --select C901,PLR0915 .
+
       - name: 类型检查棘轮（mypy 错误数只许变小）
         run: uv run --frozen python eval/type_gate.py
 

@@ -1,11 +1,10 @@
-"""未定义名（ruff F821）**在本地也要有人跑**——CI 有这一步，而整套离线套件不含它。
-"""
+"""Validate the CI undefined-name check with actual Ruff positive and negative controls."""
 
 
 from __future__ import annotations
 
 import pathlib
-import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -27,11 +26,7 @@ _ARGS = ["check", "--select", _SELECT, "--no-cache", _TARGET]
 
 
 def _ruff() -> str | None:
-    """ruff 的可执行文件：先看 PATH，再看**当前解释器旁边那个**（本机 `.venv/bin/python`）。
-
-    刻意不 import ruff（它是 lint 工具不是库）：判据要跑的是**与 CI 同一个二进制**，
-    走 import 就变成"解释器里那份 ruff 的版本"，而 CI 用的是 `uv run --frozen ruff`。
-    """
+    """Resolve the Ruff executable from PATH or the current interpreter's environment."""
     found = shutil.which("ruff")
     if found:
         return found
@@ -51,25 +46,43 @@ def _scan(files: dict[str, str]) -> tuple[int, str]:
         return p.returncode, (p.stdout or "") + (p.stderr or "")
 
 
+def _f821_commands(workflow: str) -> list[list[str]]:
+    commands = []
+    for line in workflow.splitlines():
+        if "ruff" not in line:
+            continue
+        code = shlex.split(line, comments=True)
+        if "ruff" not in code:
+            continue
+        args = code[code.index("ruff") + 1:]
+        if args[:1] != ["check"] or "--select" not in args:
+            continue
+        selected = args[args.index("--select") + 1].split(",")
+        if "F821" in selected:
+            commands.append(args)
+    return commands
+
+
+def test_ci_selection_distinguishes_rule_families_and_disabled_commands():
+    f821 = "run: uv run --frozen ruff check --select F821 --no-cache ."
+    complexity = "run: uv run --frozen ruff check --select C901,PLR0915 ."
+    assert _f821_commands(f821 + "\n" + complexity) == [_ARGS]
+    assert _f821_commands("# " + f821 + "\n" + complexity) == []
+    assert _f821_commands(f821 + "\n" + f821) == [_ARGS, _ARGS]
+    assert _f821_commands(f821.replace("--no-cache", "--ignore F821")) != [_ARGS]
+
+
 def test_undefined_names():
-    ROOT = pathlib.Path(__file__).resolve().parent.parent  # 仓根（套件统一住在 tests/）
+    ROOT = pathlib.Path(__file__).resolve().parent.parent
     EVAL_YML = ROOT / ".github" / "workflows" / "eval.yml"
     print("\n① 判据与 CI 同源（命令从 eval.yml 里读出来，不各写一份）")
     check("ruff 在位（找不到 ⇒ 红；跑不起来 ≠ 通过）", RUFF is not None,
           RUFF or f"PATH 与 {pathlib.Path(sys.executable).parent} 都没有")
     check("eval.yml 在位", EVAL_YML.is_file())
-    _yml_cmds: list[str] = []
-    if EVAL_YML.is_file():
-        for ln in EVAL_YML.read_text(encoding="utf-8").splitlines():
-            # 只看**真的会执行**的行：YAML 里 `#` 之后是注释（本仓 CI 的注释里就提到过 ruff）。
-            code = ln.split("#", 1)[0]
-            m = re.search(r"ruff\s+(check\b.*)$", code)
-            if m:
-                _yml_cmds.append(m.group(1).strip())
-    check("eval.yml 里只有一条 ruff 调用（两条 ⇒ 本套件不知道该跟哪一条）",
-          len(_yml_cmds) == 1, str(_yml_cmds))
-    check("★ CI 那条命令与本套件跑的**逐字一致**（收窄选择集而这里不跟 ⇒ 又一条「本地绿、CI 红」）",
-          _yml_cmds == [" ".join(_ARGS)], f"CI={_yml_cmds} 本套件={' '.join(_ARGS)}")
+    commands = _f821_commands(EVAL_YML.read_text(encoding="utf-8")) if EVAL_YML.is_file() else []
+    check("CI contains one active F821 command", len(commands) == 1, str(commands))
+    check("CI and the offline F821 scan use identical arguments", commands == [_ARGS],
+          f"CI={commands} offline={_ARGS}")
     print("\n② 全仓扫一遍（就是 CI 那一条，只是不带 uv 前缀）")
     _rc, _out = None, ""
     if RUFF:
@@ -90,9 +103,7 @@ def test_undefined_names():
         _ok_rc, _ok_out = _scan({"clean.py": "import os\n\n\ndef f():\n    return os.getcwd()\n"})
         check("  干净文件 ⇒ 退 0（不是「见谁都红」）", _ok_rc == 0, f"rc={_ok_rc} {_ok_out[:120]}")
 
-        # ④ 射程划界：**属性名不在 F821 的射程里**。这一条要真跑出来，不是嘴上说——
-        # 撤档那批的另一半残留正是这个形状（删了 `settings.agent_task_state`，别处还读它），
-        # 而 F821 对此**一声不吭**。它归 mypy 棘轮（`eval/type_gate.py`）与运行时。
+        # Attribute validation belongs to type checking and runtime contracts, not F821.
         _attr_rc, _attr_out = _scan(
             {"attr.py": "import os\n\n\nX = os.this_attribute_does_not_exist\n"})
         check("  ④ 射程：**属性名写错它看不见**（rc=0）——别把这一套读成「残留都被它兜住了」",

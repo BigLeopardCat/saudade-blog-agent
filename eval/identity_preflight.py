@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """Verify current actor metadata through host-issued tool credentials; never mint login tokens."""
 import json
 import time
 import urllib.error
 import urllib.request
 
-# 三态（返回值第一个元素）。字符串常量而不是 Enum：报告要直接落进 JSON。
+# String states are serialized directly in evaluation reports.
 OK = "ok"
 UNUSABLE = "unusable"
 UNKNOWN = "unknown"
 
-# 只读、管理员域、负载极小（一次 SELECT，返回主人那几行待办）。选它而不是
-# /api/protected/notes/list 是因为那条要扫全表文章，而这里只想问一句"你是谁"。
+# Use a bounded administrator-only read to distinguish user and administrator roles.
 PROBE_PATH = "/api/protected/todos"
 
 
 def classify(*, role_expected: str, status: int | None) -> tuple[str, str]:
-    """把一次探测的 HTTP 状态码判成 (状态, 说明)。**纯函数**——离线测的就是它。
-
-    `status=None` 表示根本没拿到响应（连接被拒/超时）。"""
+    """Classify the host response; None means no HTTP response was received."""
     if status is None:
         return UNKNOWN, "读不到后台（连接失败或超时）"
     if status == 401:
@@ -39,14 +35,9 @@ def classify(*, role_expected: str, status: int | None) -> tuple[str, str]:
 
 def probe(uid: int, *, role_expected: str, timeout: int = 10,
           retries: int = 2) -> tuple[str, str]:
-    """以 `uid` 的身份打一次管理员域只读接口，返回 `classify` 的结论。
-
-    重试只给「读不到」用（部署/重启会让 3000 短暂不可达，一次误判就把十几条用例摘掉
-    太贵了）；401/403 是后端明确回答，不重试。
-    """
+    """Read actor privileges, retrying transport failures but never explicit authorization denials."""
     try:
-        # 与真链路同源：同一个签名函数、同一个后台地址。lazy import 的理由同
-        # admin_write_probe（import 顺序/副作用），且 import 失败本身要能报出来。
+        # Resolve the same delegated credential and host address used by tools.
         from tools.base import ADMIN_BASE, host_credential
     except Exception as exc:  # Credential setup errors leave identity unverified.
         return UNKNOWN, f"无法获取主机委托或后台地址（{exc}）"
@@ -71,7 +62,7 @@ def probe(uid: int, *, role_expected: str, timeout: int = 10,
 
 
 def main() -> int:
-    """命令行单独验一次（不经过 golden）：`.venv/bin/python eval/identity_preflight.py 721 admin`。"""
+    """Run an explicit actor preflight from the command line."""
     import sys
     if len(sys.argv) < 3:
         print("用法: identity_preflight.py <uid> <admin|user>")
