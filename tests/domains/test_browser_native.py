@@ -123,6 +123,7 @@ def test_site_guide_separates_features_from_caller_navigation(
     assert result.kind == "ok" and data == result.data and not result.meta
     assert data["coverage"] == "documented_features" and data["exhaustive"] is False
     assert data["grantsAuthorization"] is False
+    assert data["articleTags"] == {"display": True, "filterPage": False}
     pages = {row["path"]: row for row in data["pages"]}
     assert pages["/"]["navigationAvailable"] is can_navigate
     assert pages["/article/<id>"]["navigationAvailable"] is can_navigate
@@ -153,6 +154,7 @@ def test_site_guide_metadata_reaches_the_same_framework_tool_exchange(monkeypatc
                     if isinstance(message, ToolMessage) and message.name == "get_site_map")
     data = json.loads(observed.content)
     assert data["exhaustive"] is False
+    assert data["articleTags"] == {"display": True, "filterPage": False}
     assert next(row for row in data["pages"] if row["path"] == "/dashboard")[
         "navigationAvailable"] is False
     assert not events[-1].execution or not events[-1].execution.get("receipts")

@@ -119,3 +119,14 @@ def test_current_framework_receives_typed_host_evidence(backend):
     evidence = tool_messages[0]["content"]
     assert "博客宿主" in evidence and "2026-11-10" in evidence
     assert "8.0 GB" in evidence and "尚无完整采样" in evidence
+
+
+def test_equal_mount_capacities_do_not_assert_shared_volume_identity(backend):
+    data, requests = backend
+    first = data["host"]["disks"][0]
+    data["host"]["disks"].append({**first, "mount": "/srv/data"})
+    result = get_server_status.func(admin())
+    assert result.kind == "ok" and len(requests) == 1
+    assert [row["mount"] for row in result.data["host"]["disks"]] == ["/", "/srv/data"]
+    assert str(result).count("40.0 GB") == 2
+    assert "磁盘卷归属未观测" in str(result)
