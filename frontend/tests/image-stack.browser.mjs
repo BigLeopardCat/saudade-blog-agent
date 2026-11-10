@@ -70,6 +70,7 @@ try{
   assert.equal(reports().length,0,'Running image occupied a model turn');
   await control('complete');
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
+  await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
   assert.equal(reports().length,1,'Visible completion did not initiate exactly one report');
   const resultImage=page.locator('#chat-ask .chat-image-review img').first();
   await resultImage.waitFor();
@@ -86,6 +87,7 @@ try{
   assert.equal(reports().length,before,'Closed dialog invoked a completion report');
   page=await open();
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
+  await page.waitForFunction(()=>!window.__imageStackChat.state.isSending);
   assert.equal(reports().filter(row=>row.image_event.job_id===second.id).length,1);
   await page.reload();
   await page.getByRole('button',{name:'保留到图库',exact:true}).waitFor();
