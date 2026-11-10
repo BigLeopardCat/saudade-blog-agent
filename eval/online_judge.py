@@ -144,11 +144,23 @@ def runtime_context(events):
         "permissions": callers[-1].get("permissions") if callers else None,
         "turn_phase": phases[-1].get("phase") if phases else "not_recorded",
         "receipt_count": phases[-1].get("receipt_count") if phases else None,
+        "execution_controls": _execution_controls(events),
         "available_tools": contracts,
         "used_tool_contracts": [item for item in contracts if item["name"] in used],
         "missing": [name for name, present in (("caller", callers), ("phase", phases),
                                                ("tool_contracts", contracts)) if not present],
     }
+
+
+def _execution_controls(events):
+    """Project recorded controls, without inferring authority from tool reply text."""
+    fields = {("native", "budget_stop"): ("reason",),
+              ("native", "llm_start"): ("round", "phase"),
+              ("model", "wire_request"): ("tool_choice",)}
+    return [{"event": event["event"],
+             **{key: event[key] for key in fields[event["node"], event["event"]]
+                if key in event}}
+            for event in events if (event.get("node"), event.get("event")) in fields]
 
 
 def _observations(trace):
@@ -336,8 +348,9 @@ def _visible_blocks(markdown):
 
 def validate_excerpts(verdict, text):
     current = json.loads(text)["turns"][-1]
+    proposed = current.get("proposed_actions_not_facts", [])
     outputs = [current["assistant_reply_to_review"],
-               json.dumps(current["proposed_actions_not_facts"], ensure_ascii=False)]
+               json.dumps(proposed, ensure_ascii=False)]
     # JSON escaping must not hide a draft's original line breaks from validation.
     def strings(value):
         if isinstance(value, str):
@@ -349,12 +362,12 @@ def validate_excerpts(verdict, text):
             for item in value:
                 yield from strings(item)
 
-    outputs.extend(strings(current["proposed_actions_not_facts"]))
+    outputs.extend(strings(proposed))
     outputs.extend(strings(current.get("confirmation_controls", [])))
     reviews = current.get("interactive_image_reviews_to_review", [])
     outputs.append(json.dumps(reviews, ensure_ascii=False, separators=(",", ":")))
     outputs.extend(strings(reviews))
-    outputs.extend(current["confirmation_previews_to_review"])
+    outputs.extend(current.get("confirmation_previews_to_review", []))
     outputs.extend(block for output in list(outputs) for block in _visible_blocks(output))
     if (not isinstance(verdict["reason"], str) or not verdict["reason"].strip()
             or len(verdict["unsupported"]) > 5
