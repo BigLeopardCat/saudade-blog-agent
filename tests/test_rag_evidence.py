@@ -102,16 +102,25 @@ def test_failed_body_read_cannot_satisfy_evidence_contract():
     assert evidence.issue("答案是42", SITE_BASE) == "article_body_missing"
 
 
-def test_successful_body_read_adds_real_source_and_rejects_unread_articles():
+def test_successful_body_read_permits_real_source_and_rejects_unread_articles():
     evidence = ArticleEvidence()
     evidence.observe("rag_search", {}, ok("candidate"))
     data = {"noteId": 1, "noteTitle": "Verified", "noteContent": "actual evidence"}
     evidence.observe("get_article_detail", {"article_id": 1}, ok(str(data), data=data))
     assert evidence.issue("回答", SITE_BASE) is None
-    assert "/article/1" in evidence.sources("回答", SITE_BASE)
+    assert evidence.issue(f"来源 {SITE_BASE}/article/1", SITE_BASE) is None
     assert evidence.issue(f"来源 {SITE_BASE}/article/99", SITE_BASE) == "unread_article_reference"
     assert evidence.issue("来源 https://untrusted.invalid/article/1", SITE_BASE)
     assert evidence.issue("来源 [伪造](/article/99)", SITE_BASE)
+
+
+def test_read_documents_are_not_mechanically_appended_as_answer_sources():
+    reply = "图片正在后台生成，完成后再展示。"
+    model = Model([call("get_article_detail", {"article_id": 1}, "read"), AIMessage(content=reply)])
+    data = {"noteId": 1, "noteTitle": "Architecture", "noteContent": "Actual evidence"}
+    session = ToolSession(model, {}, {"get_article_detail": Tool("get_article_detail",
+        ok("Actual evidence", data=data))}, {}, middleware=(ArticleMiddleware,))
+    assert session.run([]).reply == reply
 
 
 def test_render_budget_keeps_valid_data_and_cursor_at_visible_end():

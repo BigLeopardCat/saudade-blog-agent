@@ -114,7 +114,7 @@ def test_actual_tool_result_provenance_reaches_semantic_context(monkeypatch):
         def __init__(self):
             self.responses = iter([AIMessage(content="", tool_calls=[{
                 "name": "get_article_detail", "args": {"article_id": 19}, "id": "read"}]),
-                AIMessage(content="本次只读取了开头片段。")])
+                AIMessage(content="本次只读取了开头片段。[来源](/article/19)")])
 
         def bind_tools(self, *args, **kwargs):
             return self

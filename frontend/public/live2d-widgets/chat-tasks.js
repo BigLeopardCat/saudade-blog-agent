@@ -1,4 +1,4 @@
-/* Task presentation consumes server-owned checkpoint/DBOS state; it never schedules work. */
+/* Task presentation consumes checkpoint, scheduler and image-job state. */
 (function (g) {
   'use strict';
   const signal = ({ ready, busy, paused }) => ready === false ? 'offline'
@@ -40,11 +40,13 @@
     const body = document.createElement('div'); body.className = 'chat-task-list';
     viewer.append(heading, body); panel.append(viewer);
     const token = () => { try { return localStorage.getItem('tokenKey') || ''; } catch (_) { return ''; } };
-    let ready = null, paused = [], schedules = [], failed = false, scheduleFailed = false;
+    let ready = null, paused = [], schedules = [], images = [], failed = false;
+    let scheduleFailed = false, pausedFailed = false, imageFailed = false, imageMore = false;
     let lastToken = token(), sequence = 0, refreshing = false, lastFetch = 0, clockOffset = 0;
     let returnFocus, lastHealth = 0;
-    const request = async (path, data) => {
-      const response = await fetch(path, { method: data ? 'POST' : 'GET',
+    let rendered = '';
+    const request = async (path, data, method = data ? 'POST' : 'GET') => {
+      const response = await fetch(path, { method,
         credentials: 'same-origin', cache: 'no-store', signal: AbortSignal.timeout(12000),
         headers: { Authorization: 'Bearer ' + token(), ...(data ? { 'Content-Type': 'application/json' } : {}) },
         ...(data ? { body: JSON.stringify(data) } : {}) });
@@ -52,7 +54,9 @@
         const error = new Error(response.status === 409 ? '任务状态已变化，请核对最新状态后再试' : '任务请求失败，请稍后重试');
         error.status = response.status; throw error;
       }
-      return response.json();
+      const body = await response.json();
+      if (body.code != null && body.code !== 200) throw new Error('任务操作未成功，请刷新核对');
+      return body;
     };
     const appendText = (parent, tag, text, cls) => {
       const element = document.createElement(tag); element.textContent = text;
@@ -62,9 +66,9 @@
     const hide = () => { viewer.hidden = true; returnFocus?.focus({ preventScroll: true }); };
     close.addEventListener('click', hide);
     viewer.addEventListener('keydown', e => { if (e.key === 'Escape') { e.stopPropagation(); hide(); } });
-    const removeControl = (actions, row, scheduled) => {
+    const removeControl = (actions, row, scheduled, image = false) => {
       const group = document.createElement('div'); group.className = 'chat-task-delete';
-      const removeLabel = scheduled && row.needs_attention ? '移除提醒' : '删除任务';
+      const removeLabel = image ? '删除任务记录' : scheduled && row.needs_attention ? '移除提醒' : '删除任务';
       const yes = appendText(group, 'button', removeLabel); yes.type = 'button';
       const no = appendText(group, 'button', '保留', 'chat-task-keep'); no.type = 'button';
       let armed = false;
@@ -78,12 +82,14 @@
         yes.disabled = no.disabled = true;
         const tk = token();
         try {
-          if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
+          if (image) await request('/api/protect/image-generation/jobs/' + row.id, null, 'DELETE');
+          else if (scheduled) await request('/api/chat/schedules/cancel', { schedule_id: row.id, version: row.version });
           else await request('/api/chat/tasks/cancel', { conversation_id: row.conversation_id, task_id: row.task_id });
           if (token() !== tk) return;
           // Acknowledged deletion invalidates any older list snapshot before refetching.
           sequence++;
-          if (scheduled) schedules = schedules.filter(item => item.id !== row.id);
+          if (image) images = images.filter(item => item.id !== row.id);
+          else if (scheduled) schedules = schedules.filter(item => item.id !== row.id);
           else { paused = paused.filter(item => item.task_id !== row.task_id); ctx.ui.dismissManagedTask?.(row.task_id); }
           update(); render(); await refresh(true);
         } catch (error) {
@@ -95,8 +101,12 @@
       });
       actions.append(group);
     };
-    function render() {
+    function render(force = false) {
       if (viewer.hidden) return;
+      const fingerprint = JSON.stringify([paused,schedules,images,failed,scheduleFailed,
+        pausedFailed,imageFailed,imageMore,!!token(),refreshing&&!paused.length&&!schedules.length&&!images.length]);
+      if (!force && fingerprint === rendered) return;
+      rendered = fingerprint;
       const opened = new Set([...body.querySelectorAll('details[open]')].map(item => item.dataset.taskKey));
       body.replaceChildren();
       if (!token()) { appendText(body, 'p', '登录后可以查看任务。'); return; }
@@ -104,9 +114,16 @@
         appendText(body, 'p', '任务列表暂时无法读取，未将它视作空列表。', 'chat-task-error');
         const retry = appendText(body, 'button', '重新加载'); retry.onclick = () => refresh(true); return;
       }
-      if (refreshing && !paused.length && !schedules.length) { appendText(body, 'p', '正在读取任务…'); return; }
+      if (refreshing && !paused.length && !schedules.length && !images.length) { appendText(body, 'p', '正在读取任务…'); return; }
       if (scheduleFailed) appendText(body, 'p', '定时任务服务暂不可用，挂起任务仍可查看。', 'chat-task-error');
-      if (!paused.length && !schedules.length) appendText(body, 'p', '目前没有待执行或挂起的任务。');
+      if (pausedFailed) appendText(body, 'p', '挂起任务暂时无法读取。', 'chat-task-error');
+      if (imageFailed) appendText(body, 'p', '生图任务暂时无法读取。', 'chat-task-error');
+      if (imageMore) {
+        const more = appendText(body, 'a', '当前展示 20 条生图任务，更多记录请到图库查看。');
+        more.href = '/dashboard/albums';
+      }
+      if (!paused.length && !schedules.length && !images.length && !pausedFailed && !imageFailed)
+        appendText(body, 'p', '目前没有待执行或挂起的任务。');
       const add = (row, scheduled) => {
         const details = document.createElement('details'); details.className = 'chat-task-item';
         details.dataset.taskKey = (scheduled ? 'schedule:' + row.id : 'paused:' + row.task_id);
@@ -136,13 +153,49 @@
         details.append(actions); body.append(details);
       };
       schedules.forEach(row => add(row, true)); paused.forEach(row => add(row, false));
+      images.forEach(row => {
+        const shown = g.__waifuImageJobs.describe(row);
+        if (!shown) return;
+        const details = document.createElement('details'); details.className = 'chat-task-item';
+        details.dataset.taskKey = 'image:' + row.id; details.open = opened.has(details.dataset.taskKey);
+        const summary = document.createElement('summary');
+        appendText(summary, 'span', '▧', 'chat-task-kind');
+        appendText(summary, 'span', 'AI 生图 · ' + (row.title || '生成图片'));
+        details.append(summary);
+        appendText(details, 'p', shown.text, 'chat-task-meta');
+        const actions = document.createElement('div'); actions.className = 'chat-task-actions';
+        if (row.conversationId != null) {
+          const view = appendText(actions, 'button', '查看会话'); view.type = 'button';
+          view.disabled = !!ctx.state.isSending || !!Object.keys(ctx.state.remoteRounds || {}).length;
+          view.addEventListener('click', () => {
+            if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) return;
+            hide();
+            if (row.conversationId !== ctx.state.conv) engine.adoptConversation(row.conversationId);
+          });
+        } else {
+          const view = appendText(actions, 'a', '查看图库'); view.href = '/dashboard/albums';
+        }
+        if (row.reportPending && terminalImage(row.status))
+          appendText(details, 'p', '结果待汇报：打开所属会话后自动展示。', 'chat-task-meta');
+        if (['generating', 'saving'].includes(row.status))
+          appendText(details, 'p', '在后台继续执行，可以正常聊天；关闭对话框不会取消。', 'chat-task-meta');
+        else {
+          appendText(details, 'p', row.status === 'review'
+            ? '删除记录会清除这次未保存的生成结果。'
+            : '删除任务记录不会删除已经存入图库的图片。', 'chat-task-meta');
+          removeControl(actions, row, false, true);
+        }
+        details.append(actions);
+        body.append(details);
+      });
     }
     function update() {
       if (token() !== lastToken) {
-        lastToken = token(); sequence++; paused = []; schedules = []; failed = false;
+        lastToken = token(); sequence++; paused = []; schedules = []; images = []; failed = false;
         lastFetch = 0; queueMicrotask(() => refresh(true)); render();
       }
-      const busy = !!(ctx.state.isSending || ctx.state.approvalBusy || ctx.ui.isResumingTask?.()
+      const busy = !!(images.some(row => ['generating','saving'].includes(row.status))
+        || ctx.state.isSending || ctx.state.approvalBusy || ctx.ui.isResumingTask?.()
         || Object.keys(ctx.state.remoteRounds || {}).length);
       const pausedCount = paused.length + schedules.filter(row => row.status === 'paused').length;
       const state = signal({ ready, busy, paused: pausedCount || ctx.ui.currentPausedTask?.() });
@@ -167,10 +220,15 @@
           if (seq !== sequence || token() !== tk) return;
           paused = data.paused.items;
           schedules = [...data.schedules.items, ...(data.schedules.recent_results || [])];
+          images = Array.isArray(data.images?.items) ? data.images.items : [];
+          imageMore = data.images?.has_more === true;
+          pausedFailed = !!data.paused.unavailable;
+          imageFailed = !Array.isArray(data.images?.items) || !!data.images?.unavailable;
+          ctx.ui.observeImageJobs?.(images);
           scheduleFailed = !!data.schedules.unavailable; failed = false;
           const server = Date.parse(data.server_time);
           if (Number.isFinite(server)) clockOffset = server - Date.now();
-        } else { paused = []; schedules = []; }
+        } else { paused = []; schedules = []; images = []; }
       } catch (_) { if (seq === sequence) failed = true; }
       finally {
         if (seq === sequence) { refreshing = false; update(); render(); }
@@ -187,13 +245,27 @@
     };
     const open = e => {
       e?.stopPropagation(); returnFocus = e?.currentTarget;
-      ctx.ui.expandChat?.(); viewer.hidden = false; render(); close.focus({ preventScroll: true }); void refresh(true);
+      ctx.ui.expandChat?.(); viewer.hidden = false; render(true); close.focus({ preventScroll: true }); void refresh(true);
     };
     scheduledChip.addEventListener('click', open); pausedChip.addEventListener('click', open);
     panel.querySelector('#conv-tasks-btn').addEventListener('click', open);
     ctx.ui.refreshTaskStatus = update;
     ctx.ui.reloadTasks = () => refresh(true);
     ctx.ui.checkService = () => health(true);
+    const terminalImage = row => ['review','accepted','failed','unknown'].includes(row);
+    ctx.ui.imageJobChanged = row => {
+      let changed = false;
+      images = images.map(item => {
+        if (item.id !== row.id) return item;
+        const next = {...item};
+        for (const key of ['status','eventVersion','reportPending','error','imageRemoved']) {
+          if (row[key] === undefined || next[key] === row[key]) continue;
+          next[key] = row[key]; changed = true;
+        }
+        return next;
+      });
+      if (changed) { update(); render(); }
+    };
     document.addEventListener('visibilitychange', () => { if (!document.hidden) { void health(); void refresh(); } });
     new MutationObserver(() => { if (panel.classList.contains('active')) { void health(); void refresh(); } })
       .observe(panel, { attributes: true, attributeFilter: ['class'] });

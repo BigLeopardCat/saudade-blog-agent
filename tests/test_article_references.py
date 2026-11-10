@@ -26,11 +26,10 @@ def observed(body):
 @pytest.mark.parametrize("link", ["/article/2", SITE_BASE + "/article/2?section=3#part"])
 def test_visible_same_site_reference_is_allowed_without_claiming_a_body_read(link):
     evidence = observed(f"Original body. See [Related]({link}).")
-    reply = f"已读文章提到 [Related]({link})，未读取它的正文。"
+    reply = f"[Source](/article/1) 提到 [Related]({link})，未读取后者的正文。"
     assert evidence.issue(reply, SITE_BASE) is None
     assert evidence.documents == {1: "Source"}
-    assert "/article/1" in evidence.sources(reply, SITE_BASE)
-    assert evidence.sources(reply, SITE_BASE).count(link) == 1
+    assert reply.count(link) == 1 and 2 not in evidence.documents
 
 
 def test_invented_and_foreign_links_remain_rejected_even_when_body_has_other_references():
@@ -52,14 +51,14 @@ def test_unseen_or_failed_read_cannot_authorize_a_reference():
     assert evidence.issue("[Failed](/article/10)", SITE_BASE) == "unread_article_reference"
 
 
-def test_missing_read_sources_are_appended_even_if_reply_already_links_a_different_article():
+def test_multiple_reads_validate_the_selected_citation_without_requiring_every_source():
     evidence = observed("Original body.")
     data = {"noteTitle": "Second", "noteContent": "Other body."}
     evidence.observe("get_article_detail", {"article_id": 2}, ok(str(data), data=data))
     reply = "[Source](/article/1)"
-    rendered = evidence.sources(reply, SITE_BASE)
-    assert rendered.count("/article/1") == 1 and rendered.count("/article/2") == 1
-    assert evidence.sources(rendered, SITE_BASE) == rendered
+    assert evidence.issue(reply, SITE_BASE) is None
+    assert set(evidence.documents) == {1, 2}
+    assert evidence.invalid_references(reply, SITE_BASE) == []
 
 
 @pytest.mark.parametrize("reference,allowed,finish", [
@@ -90,7 +89,7 @@ def test_direct_article_answer_is_validated_before_its_chunks_become_visible(
                 yield AIMessageChunk(content="", tool_calls=[{
                     "name": "get_article_detail", "args": {"article_id": 1}, "id": "read"}])
             else:
-                yield AIMessageChunk(content=f"已读文章引用 [Related]({reference})。",
+                yield AIMessageChunk(content=f"[Source](/article/1) 引用 [Related]({reference})。",
                                      response_metadata={"finish_reason": finish})
                 assert visible == [], "article answer leaked before source validation"
 
@@ -214,4 +213,4 @@ def test_cited_canonical_link_does_not_get_an_internal_transport_link_appended()
         {"id": 1, "title": "Source", "sourceUrl": "https://canonical.example/article/1"}]}))
     reply = "[Source](https://canonical.example/article/1)"
     assert evidence.issue(reply, "http://127.0.0.1:3000") is None
-    assert evidence.sources(reply, "http://127.0.0.1:3000") == reply
+    assert evidence.invalid_references(reply, "http://127.0.0.1:3000") == []

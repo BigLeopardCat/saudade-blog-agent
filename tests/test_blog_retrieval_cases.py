@@ -117,7 +117,8 @@ def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpu
             "max_chars": 1024}
     model = Capture(AIMessage(content="", tool_calls=[{
         "name": "get_article_detail", "id": "located-read", "args": args}]),
-        AIMessage(content="正文中的原话是：" + expected["quote"] + "。"))
+        AIMessage(content="正文中的原话是：" + expected["quote"]
+                  + f"。[来源](/article/{source['id']})"))
     runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
         application=BlogApplication(ToolCatalog(
             read_tools={get_article_detail.name: get_article_detail})),

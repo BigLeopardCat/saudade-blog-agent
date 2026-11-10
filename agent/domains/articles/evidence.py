@@ -241,17 +241,3 @@ class ArticleEvidence:
             if ident not in available or (
                 host and host != origin and (host, ident) not in self.catalog_references)
         ]
-
-    def sources(self, reply: str, site: str) -> str:
-        origin = urlsplit(site).netloc.casefold()
-        cited = {ident for host, ident in _article_links(reply)
-                 if not host or host == origin or (host, ident) in self.catalog_references}
-        if not self.documents or set(self.documents).issubset(cited):
-            return reply
-        refs = []
-        for article_id, title in self.documents.items():
-            if article_id in cited:
-                continue
-            label = re.sub(r"[\[\]\r\n]", "", title)[:80]
-            refs.append(f"[{label}]({site.rstrip('/')}/article/{article_id})")
-        return reply + "\n\n来源：" + "、".join(refs)

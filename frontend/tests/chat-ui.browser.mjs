@@ -18,7 +18,7 @@ const { chromium } = await import(modulePath ? pathToFileURL(modulePath) : 'play
 const requests = [];
 let nextMode = 'reply';
 let serviceReady = true;
-let managedTasks = {paused:{items:[]},schedules:{items:[]}};
+let managedTasks = {paused:{items:[]},schedules:{items:[]},images:{items:[]}};
 let taskDeletes = 0;
 let holdTaskList = null;
 let conversation = 1;
@@ -1383,7 +1383,7 @@ try {
   await reset();
   managedTasks={paused:{items:[{task_id:'paused-ui',conversation_id:1,title:'继续阅读文章',expires_at:Date.now()/1000+3600}]},
     schedules:{items:[{id:'sc_'+'a'.repeat(32),title:'稍后提醒',instruction:'提醒休息',status:'scheduled',
-      next_run_at:new Date(Date.now()+480000).toISOString(),version:'b'.repeat(64)}]}};
+      next_run_at:new Date(Date.now()+480000).toISOString(),version:'b'.repeat(64)}]},images:{items:[]}};
   await page.evaluate(async()=>{await window.__chatTest.ctx.ui.reloadTasks();await window.__chatTest.ctx.ui.checkService();});
   await page.waitForFunction(()=>document.querySelector('#chat-service-indicator').dataset.state==='paused');
   await page.locator('#chat-restore').click({position:{x:8,y:18}});

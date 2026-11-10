@@ -1,0 +1,59 @@
+[
+  {
+    "status": "pending",
+    "text": "等待批准生图",
+    "workStatus": "waiting"
+  },
+  {
+    "status": "generating",
+    "text": "正在生成图片",
+    "workStatus": "running"
+  },
+  {
+    "status": "review",
+    "text": "图片已生成，等待确认是否保留",
+    "workStatus": "waiting"
+  },
+  {
+    "status": "saving",
+    "text": "正在保存图片到图库",
+    "workStatus": "running"
+  },
+  {
+    "status": "accepted",
+    "text": "图片已保存到图库",
+    "workStatus": "completed"
+  },
+  {
+    "status": "rejected",
+    "text": "本次图片未保留",
+    "workStatus": "cancelled"
+  },
+  {
+    "status": "failed",
+    "text": "图片生成失败",
+    "workStatus": "failed"
+  },
+  {
+    "status": "unknown",
+    "text": "生图结果尚未核实",
+    "workStatus": "unknown"
+  },
+  {
+    "status": "expired",
+    "text": "生图任务已过期",
+    "workStatus": "cancelled"
+  },
+  {
+    "status": "review",
+    "error": "storage unavailable",
+    "text": "保存未完成，图片仍可审阅并重试保留",
+    "workStatus": "failed"
+  },
+  {
+    "status": "accepted",
+    "imageRemoved": true,
+    "text": "生成已完成，但图片已不在图库。",
+    "workStatus": "completed"
+  }
+]
