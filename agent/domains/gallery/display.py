@@ -1,8 +1,17 @@
 """Reuse verified gallery links for presentation, never for mutation validation."""
 
+from urllib.parse import quote
+
 from langchain_core.messages import ToolMessage
 
 from agent.authz import TOOL_SCOPE, WRITE_SCOPES
+
+
+def markdown(image_id, url, name=None):
+    name = name or f"图库图片 #{image_id}"
+    name = "".join("\\" + char if char in "\\[]" else char
+                   for char in name.replace("\n", " ").replace("\r", " "))
+    return f"![{name}]({quote(url, safe='/:%?=&')})"
 
 
 def snapshot(messages, image_id):
@@ -11,7 +20,8 @@ def snapshot(messages, image_id):
             continue
         if TOOL_SCOPE.get(message.name) in WRITE_SCOPES:
             return None
-        if message.name not in {"get_gallery_image_metadata", "show_gallery_image"}:
+        if message.name not in {"get_gallery_image_metadata", "show_gallery_image",
+                                "get_image_generation"}:
             continue
         artifact = message.artifact if isinstance(message.artifact, dict) else {}
         if message.status != "success" or artifact.get("kind") != "ok":

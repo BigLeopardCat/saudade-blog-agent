@@ -1,4 +1,4 @@
-"""Durable host results enter the native tool graph without another planning round."""
+"""Durable image results reach the framework graph and the user's visible reply."""
 
 import hashlib
 import json
@@ -27,6 +27,7 @@ EVENT_ID = "image_" + hashlib.sha256(f"{ID}:{VERSION}".encode()).hexdigest()
 
 class Model(BaseChatModel):
     max_tokens: int = 128
+    reply: str = "图片已经做好啦，喜欢的话就保留喵。"
     calls: list = Field(default_factory=list)
     options: list = Field(default_factory=list)
 
@@ -41,7 +42,7 @@ class Model(BaseChatModel):
     def _generate(self, prompt, stop=None, run_manager=None, **kwargs):
         self.calls.append(prompt)
         return ChatResult(generations=[ChatGeneration(message=AIMessage(
-            content="图片已经做好啦，喜欢的话就保留喵。"))])
+            content=self.reply))])
 
     def _stream(self, prompt, stop=None, run_manager=None, **kwargs):
         reply = self._generate(prompt, **kwargs).generations[0].message
@@ -138,3 +139,66 @@ def test_completion_survives_empty_human_history_without_fabricating_a_user_turn
     second = list(runtime.stream_events(event, cfg))[-1]
     assert first.execution["pending_confirm"] == second.execution["pending_confirm"]
     assert len(model.calls) == 1
+
+
+@pytest.mark.parametrize("reply", ["已保留喵。", "![图片](/api/public/media/PLACEHOLDER)",
+    "![图片](/api/public/media/22222222-2222-4222-8222-222222222222)",
+    "![图片](/api/public/media/11111111-1111-4111-8111-111111111111)"])
+def test_accepted_completion_delivers_real_image_once_in_stream_and_checkpoint(scenario, reply):
+    runtime, cfg, event, job, model, requests = scenario
+    url = "/api/public/media/11111111-1111-4111-8111-111111111111"
+    job.update(status="accepted", imageId=77, previewUrl=url)
+    model.reply = reply
+    events = list(runtime.stream_events(event, cfg))
+    result = events[-1]
+    streamed = "".join(str(item.content) for item in events if isinstance(item, AIMessageChunk))
+    assert result.reply.count(f"]({url})") == 1
+    assert "PLACEHOLDER" not in result.reply + streamed
+    assert streamed == result.reply
+    assert runtime.store.load(cfg).messages[-1].content == result.reply
+    assert not (result.execution or {}).get("pending_confirm")
+    assert len(model.calls) == 1 and len(requests) == 2
+    assert url in str(model.calls[0])
+    replay = list(runtime.stream_events(event, cfg))[-1]
+    assert replay.reply == result.reply
+    assert len(model.calls) == 1 and len(requests) == 2
+
+
+def test_saved_image_is_reusable_but_does_not_attach_to_unrelated_next_turn(scenario):
+    from langchain.tools import ToolRuntime
+
+    from agent.domains.gallery.reads import show_gallery_image
+
+    runtime, cfg, event, job, model, requests = scenario
+    url = "https://images.test/accepted.png"
+    job.update(status="accepted", imageId=77, previewUrl=url)
+    list(runtime.stream_events(event, cfg))
+    loaded = runtime.store.load(cfg)
+    tool_runtime = ToolRuntime(state={"messages": loaded.messages}, context=None, config=cfg,
+        stream_writer=lambda _: None, tool_call_id="show", store=None)
+    shown = show_gallery_image.func(77, tool_runtime)
+    assert shown.meta["gallery_display"]["url"] == url
+    assert len(requests) == 2
+    model.reply = "不客气喵。"
+    cfg["configurable"]["turn_id"] = "next-chat"
+    result = list(runtime.stream_events({"message": "谢谢", "task_id": "next-chat"}, cfg))[-1]
+    assert result.reply == "不客气喵。" and len(requests) == 2
+
+
+@pytest.mark.parametrize("url", [None,
+    f"/api/public/image-generation/{ID}/preview?token=PRIVATE",
+    "https://images.test/preview?token=PRIVATE", "javascript:bad()"])
+def test_accepted_job_without_public_link_never_exposes_preview_credentials(scenario, url):
+    runtime, cfg, event, job, model, _ = scenario
+    job.update(status="accepted", imageId=77, previewUrl=url)
+    result = list(runtime.stream_events(event, cfg))[-1]
+    assert "![" not in result.reply
+    assert "PRIVATE" not in str(model.calls)
+
+
+def test_removed_saved_image_is_not_attached(scenario):
+    runtime, cfg, event, job, model, _ = scenario
+    job.update(status="accepted", imageId=77, imageRemoved=True, previewUrl=None)
+    result = list(runtime.stream_events(event, cfg))[-1]
+    assert "![" not in result.reply
+    assert "imageRemoved" in str(model.calls)

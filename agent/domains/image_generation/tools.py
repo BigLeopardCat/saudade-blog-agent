@@ -7,6 +7,7 @@ from pydantic import Field, StrictInt
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.admin_writes import available
+from agent.domains.gallery.display import markdown
 from agent.domains.image_generation.state import checked, show_progress
 from agent.domains.image_generation.waiting import wait
 from agent.proposals import proposal
@@ -179,7 +180,10 @@ def get_image_generation(job_id: JobID, config: RunnableConfig,
             return job
         show_progress(job, config)
     visible = job.visible(wait_outcome=outcome)
-    return base.ok(json.dumps(visible, ensure_ascii=False), data=visible)
+    display = ({"gallery_display": {"image_id": job.imageId, "url": visible["url"],
+                                   "markdown": markdown(job.imageId, visible["url"])}}
+               if "url" in visible else {})
+    return base.ok(json.dumps(visible, ensure_ascii=False), data=visible, meta=display)
 
 
 @tool(return_direct=True)

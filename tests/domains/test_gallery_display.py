@@ -54,6 +54,26 @@ def test_actual_framework_display_does_not_depend_on_model_repeating_image_markd
     assert collect_turn([result]).reply == result.reply
 
 
+def test_unverified_image_reference_is_replaced_before_streaming(backend):
+    cfg = config(principal=Principal(7, "admin", SOURCE_ASSERTION))
+    tools = ToolCatalog().domains(cfg, False)["admin_gallery"]
+    bad_reply = {"content": "请看：![猫咪](https://invented.example/wrong.png)"}
+    with model_replies({"tool_calls": [call("show_gallery_image", "show", image_id=74)]},
+                       bad_reply) as (model, _):
+        session = ToolSession(model, cfg, tools, {},
+                              middleware=(GalleryDisplayMiddleware, BlogToolMiddleware))
+        stream, chunks = session.stream([HumanMessage(content="展示图片74。")]), []
+        while True:
+            try:
+                chunks.append(next(stream))
+            except StopIteration as stop:
+                result = stop.value
+                break
+    assert result.reply == f"![猫咪]({URL})"
+    assert "invented.example" not in str(chunks)
+    assert len(backend) == 1
+
+
 def test_nonadmin_show_refuses_before_reading_gallery(backend):
     cfg = config(principal=Principal(7, "user", SOURCE_ASSERTION))
     runtime = ToolRuntime(state={}, context=None, config=cfg, stream_writer=lambda _: None,

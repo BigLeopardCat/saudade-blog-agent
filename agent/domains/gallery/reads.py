@@ -5,7 +5,7 @@ import io
 import json
 import warnings
 from typing import Literal
-from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
+from urllib.parse import unquote, urlencode, urljoin, urlparse
 from uuid import UUID
 
 import httpx
@@ -19,6 +19,7 @@ from typing_extensions import Annotated
 
 from agent.authz import SCOPE_ADMIN_CONSOLE
 from agent.domains.gallery import targets
+from agent.domains.gallery.display import markdown
 from agent.domains.gallery.pages import index_page
 from agent.runtime.access import configured_reads_enabled
 from agent.runtime.control import model_options
@@ -189,10 +190,7 @@ def show_gallery_image(image_id: targets.Identifier, runtime: ToolRuntime) -> ob
 
 
 def _display_markdown(row):
-    name = row["displayName"] or f"图库图片 #{row['imageKey']}"
-    name = "".join("\\" + char if char in "\\[]" else char
-                   for char in name.replace("\n", " ").replace("\r", " "))
-    return f"![{name}]({quote(row['imageUrl'], safe='/:%?=&')})"
+    return markdown(row["imageKey"], row["imageUrl"], row["displayName"])
 
 
 def _download(row, config):
