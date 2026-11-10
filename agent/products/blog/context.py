@@ -38,6 +38,7 @@ def conversation_context(principal) -> dict:
                   "loading": "disabled" if role == ROLE_ZAKO else "on_demand",
                   "administration_requires": sorted(ADMIN_ROLES)},
         "caller": {"verified": verified, "role": role,
+                     "authentication_status": "authenticated" if verified else "unknown",
                      "can_access_admin_console": verified and role in ADMIN_ROLES,
                      "preferred_address": ("主人" if role in ADMIN_ROLES
                                            else "杂鱼" if role == ROLE_ZAKO else "你")},

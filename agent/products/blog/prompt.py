@@ -81,6 +81,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "role_label": context["caller"]["role_label"],
+                     "authentication_status": context["caller"]["authentication_status"],
                      "tool_loading": context["tools"]["loading"],
                      "administration_requires": context["tools"]["administration_requires"],
                      "can_access_admin_console": context["caller"]["can_access_admin_console"],
