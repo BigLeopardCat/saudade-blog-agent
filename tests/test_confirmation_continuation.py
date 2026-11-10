@@ -540,7 +540,8 @@ def test_changed_role_cannot_execute_or_restore_the_old_approval(backend):
     assert selected.store.load(changed).approval is None and not state["read"]
 
 
-def test_article_evidence_and_read_progress_survive_confirmation_without_rereading(backend):
+@pytest.mark.parametrize("source", [19, 99])
+def test_article_evidence_and_read_progress_survive_confirmation_without_rereading(backend, source):
     reads = []
 
     def read(article_id: int) -> object:
@@ -555,9 +556,14 @@ def test_article_evidence_and_read_progress_survive_confirmation_without_rereadi
     selected = runtime(model, catalog=ToolCatalog(read_tools={tool.name: tool}))
     proposal = run(selected, "读完文章19再收藏。")
     grant = confirm.verify(proposal.execution["pending_confirm"]["token"], 7, 42)
-    selected.model_factory = lambda **_: Model(AIMessage(content="核实的正文，已收藏。"))
+    selected.model_factory = lambda **_: Model(AIMessage(
+        content=f"核实的正文，已收藏。[来源](/article/{source})"))
     result = run(selected, grant=grant)
-    assert reads == [19] and "/article/19" in result.reply
+    assert reads == [19]
+    if source == 19:
+        assert "/article/19" in result.reply
+    else:
+        assert "/article/99" not in result.reply and "引用无法核实" in result.reply
 
 
 def test_inline_images_are_compacted_in_all_framework_checkpoints_and_can_be_referenced(backend):

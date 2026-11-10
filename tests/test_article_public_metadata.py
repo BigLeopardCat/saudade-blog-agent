@@ -285,10 +285,8 @@ def test_fenced_json_example_does_not_become_a_live_source_or_body_read():
     evidence.observe("get_article_detail", {"article_id": 23}, value)
     before = evidence.snapshot()
     literal = '```json\n{"source":"/article/99"}\n```'
-    output = evidence.sources(literal, SITE_BASE)
-    assert output.startswith(literal)
-    assert "/article/23" in output[len(literal) :]
-    assert "/article/99" not in output[len(literal) :]
+    assert evidence.issue(literal, SITE_BASE) is None
+    assert [row["id"] for row in evidence.provenance(SITE_BASE)["body_reads"]] == [23]
     assert evidence.snapshot() == before and 99 not in evidence.documents
 
 

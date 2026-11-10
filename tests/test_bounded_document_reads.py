@@ -196,7 +196,7 @@ def test_framework_reads_verified_http_ranges_before_answering_without_hidden_st
                 }
             ],
         ),
-        AIMessage(content="已读取两段，剩余部分尚未核实。"),
+        AIMessage(content="已读取两段，剩余部分尚未核实。[来源](/article/19)"),
     )
     selected = AgentRuntime(
         CheckpointConversationStore(InMemorySaver()),

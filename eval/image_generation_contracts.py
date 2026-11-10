@@ -87,9 +87,10 @@ def verify_case(case, turn, state):
             raise ValueError('Image review crossed the execution boundary')
         if previous:
             spec = previous['specs'][0]
-            row = writes.ledger_for(None).lookup(writes.operation_key(
+            stored = writes.ledger_for(None).lookup(writes.operation_key(
                 previous, spec['tool'], spec['args']))
-            if not row or idem.replay_result(row).meta.get('reason') != 'confirmation_revoked':
+            if (not stored or stored[0] != 'done'
+                    or idem.replay_result(stored[1]).meta.get('reason') != 'confirmation_revoked'):
                 raise ValueError('Superseded image approval remains executable')
         calls = sum(event.get('event') == 'llm_done'
                     for event in result.get('native_events', []))
