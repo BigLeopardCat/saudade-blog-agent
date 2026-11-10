@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 """Site guide, clock and actor-scoped navigation metadata."""
 
-import json
 from urllib.parse import unquote, urlsplit
 
 from langchain_core.runnables import RunnableConfig
@@ -42,7 +41,20 @@ def get_site_map(config: RunnableConfig) -> ToolResult:
                  "navigationAvailable": (path in paths or bool(paths)
                                           and path in ("/article/<id>", "/category/<name>"))}
                 for path, name, description in features]}
-    return ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)
+    return ok(_guide_text(data), data=data)
+
+
+def _guide_text(data):
+    """Render the same permission snapshot without repeating JSON field names per page."""
+    lines = ["已登记的站点功能（不是完整路由清单）：",
+             "**文章标签仅作展示，没有标签筛选功能。**",
+             "名称 | 路径 | 功能 | 当前身份允许 Agent 导航",
+             "--- | --- | --- | ---"]
+    for row in data["pages"]:
+        navigation = "是" if row["navigationAvailable"] else "否"
+        lines.append(f"{row['name']} | {row['path']} | {row['description']} | {navigation}")
+    lines.append("导航列是当前权限快照，不授予权限；实际跳转仍会重新校验。")
+    return "\n".join(lines)
 
 
 @tool
