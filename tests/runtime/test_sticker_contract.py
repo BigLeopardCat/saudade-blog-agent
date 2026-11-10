@@ -32,6 +32,7 @@ def test_chat_only_caller_can_render_stickers_without_loading_tools():
 
 @pytest.mark.parametrize("markdown_kind,node_type", [
     ("markdown_text", "text"), ("inline_code", "inlineCode"), ("code_block", "code"),
+    ("markdown_image_url", "image"),
 ])
 def test_advertised_sticker_format_matches_host_transformer(tmp_path, markdown_kind, node_type):
     """Execute the pinned host plugin; code examples must keep all aliases literal."""
@@ -39,8 +40,18 @@ def test_advertised_sticker_format_matches_host_transformer(tmp_path, markdown_k
     renderer.write_text(read("frontend/src/utils/stickers.ts", "Markdown sticker semantics"))
     rendering = conversation_context(Principal(7, "zako", SOURCE_ASSERTION))["rendering"]
     value = " ".join([*rendering["stickers"], ":不存在的:"])
-    node = {"type": node_type, "value": value}
-    child = node if node_type == "code" else {"type": "paragraph", "children": [node]}
+    if node_type == "image":
+        template = rendering["sticker_markdown"]
+        nodes = []
+        for alias in [*rendering["stickers"], ":不存在的:"]:
+            markdown = template.replace("name", alias.strip(":"))
+            match = re.fullmatch(r"!\[([^\]]*)\]\(([^)]+)\)", markdown)
+            assert match is not None
+            nodes.append({"type": "image", "alt": match[1], "url": match[2]})
+        child = {"type": "paragraph", "children": nodes}
+    else:
+        node = {"type": node_type, "value": value}
+        child = node if node_type == "code" else {"type": "paragraph", "children": [node]}
     tree = {"type": "root", "children": [child]}
     script = """
 import { pathToFileURL } from 'node:url';
@@ -57,9 +68,13 @@ console.log(JSON.stringify(tree));
     transformed = json.loads(result.stdout)
     if rendering["sticker_format"][markdown_kind] == "image":
         nodes = transformed["children"][0]["children"]
-        assert [f':{child["alt"]}:' for child in nodes if child["type"] == "image"] == (
+        assert [f':{child["alt"]}:' for child in nodes
+                if child["type"] == "image" and child["url"].startswith("/stickers/")] == (
             rendering["stickers"])
-        assert ":不存在的:" in "".join(child["value"] for child in nodes
-                                   if child["type"] == "text")
+        if node_type == "image":
+            assert nodes[-1]["url"] == ":不存在的:"
+        else:
+            assert ":不存在的:" in "".join(child["value"] for child in nodes
+                                       if child["type"] == "text")
     else:
         assert transformed == tree
