@@ -55,7 +55,8 @@ def run_image_drill(agent, work, out, dsn, session_key, provider, common):
             uid, cid = seed(role)
             ident = new_job(uid, cid)
             response = client.post(origin + "/api/chat/stream",
-                headers={"Authorization": "Bearer " + token(uid, role)}, json={
+                headers={"Authorization": "Bearer " + token(uid, role),
+                         "X-Agent-Stream-Version": "2"}, json={
                     "message": "", "conversation_id": cid,
                     "image_event": {"job_id": ident, "version": version(ident)}})
             assert response.status_code == 403, (role, response.status_code)
@@ -95,7 +96,8 @@ def run_image_drill(agent, work, out, dsn, session_key, provider, common):
         db.execute('UPDATE "user" SET role=\'admin\' WHERE id=%s', (uid,))
     with httpx.Client(trust_env=False, timeout=15) as client:
         response = client.post(origin + "/api/chat/stream",
-            headers={"Authorization": "Bearer " + token(uid, "admin")}, json={
+            headers={"Authorization": "Bearer " + token(uid, "admin"),
+                     "X-Agent-Stream-Version": "2"}, json={
                 "message": "", "conversation_id": cid,
                 "image_event": {"job_id": current["id"], "version": version(current["id"])}})
         assert response.status_code == 204, "Administrator cannot recover an already reported event"
