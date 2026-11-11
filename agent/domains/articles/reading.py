@@ -171,6 +171,27 @@ def _article_metadata(metadata):
     return data
 
 
+def body_continuation(data, identifier):
+    """Extract a cursor only from the validated body range actually shown to the model."""
+    try:
+        source = Source.model_validate(data.get("source"))
+    except ValueError:
+        return None
+    body = data.get("noteContent")
+    if (data.get("view") != "body" or source.type != "note" or source.id != identifier
+            or source.section_id or source.section_schema != sections.PARSER_VERSION
+            or data.get("contentRevision") != source.revision
+            or data.get("sectionSchema") != source.section_schema
+            or type(data.get("readOffset")) is not int or data["readOffset"] != source.offset
+            or data.get("readComplete") is not False
+            or not isinstance(body, str) or not body or source.end - source.offset != len(body)
+            or type(data.get("nextOffset")) is not int or data["nextOffset"] != source.end
+            or type(data.get("totalChars")) is not int or not 0 < source.end < data["totalChars"]):
+        return None
+    return {"offset": source.end, "revision": source.revision,
+            "section_schema": source.section_schema}
+
+
 def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):
     page = (MetadataPage if view == "metadata" else Page).model_validate(value)
     if (

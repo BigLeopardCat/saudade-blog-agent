@@ -65,6 +65,15 @@ class ArticleMiddleware(AgentMiddleware):
 
     def wrap_tool_call(self, request, handler):
         self._recover(request.state)
+        call = request.tool_call
+        if call["name"] == "get_article_detail":
+            args = self.evidence.continuation_args(call["args"])
+            if args != call["args"]:
+                record("native", "article_continuation_bound", call_id=call["id"],
+                       article_id=args["article_id"], offset=args["offset"],
+                       fields=[key for key in ("revision", "section_schema")
+                               if not call["args"].get(key)])
+                request = request.override(tool_call={**call, "args": args})
         result = handler(request)
         if not (self.evidence.searched or self.evidence.documents or self.evidence.candidates):
             return result
