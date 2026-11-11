@@ -173,7 +173,7 @@ def test_presentation_cannot_upgrade_an_existing_tool_failure(monkeypatch, kind,
 
 
 @pytest.mark.parametrize("budget,complete", [(12000, True), (1200, False)])
-def test_article_budget_uses_wire_json_and_preserves_true_body_boundaries(monkeypatch, budget, complete):
+def test_wire_json_budget_preserves_true_body_boundaries(monkeypatch, budget, complete):
     from agent.runtime.message_content import estimate_tokens
     from config.settings import settings
     from eval.fixtures.document_reads import article_page
