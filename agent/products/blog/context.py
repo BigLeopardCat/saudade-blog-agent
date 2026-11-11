@@ -46,8 +46,8 @@ def conversation_context(principal) -> dict:
         "manual_ui": {
             "article_comments": {"location": "after article body"},
             "public_pages": public_navigation() if role == ROLE_ZAKO else {},
-            "effects": {"entry": "mascot toolbar star button",
-                        "position": "movable",
+            "effects": {"entry": "mascot star button",
+                        "default_position": "bottom-left",
                         "options": ["sakura", "rain", "snow"]},
             "grants_agent_permissions": False,
         },
