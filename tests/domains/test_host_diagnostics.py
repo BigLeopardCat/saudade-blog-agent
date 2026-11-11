@@ -130,4 +130,23 @@ def test_equal_mount_capacities_do_not_assert_shared_volume_identity(backend):
     assert result.kind == "ok" and len(requests) == 1
     assert [row["mount"] for row in result.data["host"]["disks"]] == ["/", "/srv/data"]
     assert str(result).count("40.0 GB") == 2
-    assert "磁盘卷归属未观测" in str(result)
+    assert "文件系统编号 未知" in str(result)
+
+
+def test_equal_capacities_keep_distinct_observed_filesystems(backend):
+    data, _ = backend
+    first = data["host"]["disks"][0]
+    first["filesystemDeviceId"] = 41
+    data["host"]["disks"].append({**first, "mount": "/srv/data", "filesystemDeviceId": 42})
+    result = get_server_status.func(admin())
+    assert result.kind == "ok"
+    assert [row["filesystemDeviceId"] for row in result.data["host"]["disks"]] == [41, 42]
+    assert "/（文件系统编号 41）" in str(result)
+    assert "/srv/data（文件系统编号 42）" in str(result)
+
+
+@pytest.mark.parametrize("identifier", [-1, True, "41"])
+def test_invalid_filesystem_identifiers_are_not_trusted(backend, identifier):
+    data, _ = backend
+    data["host"]["disks"][0]["filesystemDeviceId"] = identifier
+    assert get_server_status.func(admin()).kind == "unavailable"
