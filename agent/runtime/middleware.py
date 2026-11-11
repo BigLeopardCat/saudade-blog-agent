@@ -69,14 +69,16 @@ class StreamGuard(BaseCallbackHandler):
     def on_llm_new_token(self, token, *, chunk=None, **kwargs):
         self._check()
         message = getattr(chunk, "message", None)
+        meaningful = bool(token)
         if isinstance(message, AIMessageChunk):
-            meaningful = bool(token or message.content or message.tool_call_chunks
-                              or message.additional_kwargs.get("reasoning_content"))
-            if meaningful and not self.first_token and self.started is not None:
-                self.first_token = True
-                record("native", "model_first_token",
-                       round=getattr(self.session, "_round_index", None),
-                       duration_s=time.monotonic() - self.started)
+            meaningful = meaningful or bool(message.content or message.tool_call_chunks
+                                           or message.additional_kwargs.get("reasoning_content"))
+        if meaningful and not self.first_token and self.started is not None:
+            self.first_token = True
+            record("native", "model_first_token",
+                   round=getattr(self.session, "_round_index", None),
+                   duration_s=time.monotonic() - self.started)
+        if isinstance(message, AIMessageChunk):
             self.aggregate = message if self.aggregate is None else self.aggregate + message
 
 

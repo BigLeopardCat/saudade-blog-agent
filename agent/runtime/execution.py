@@ -28,7 +28,9 @@ _RETRY_DELAY = 2.0
 
 def _retry_model(session, error):
     check_cancelled(session.config)
-    if not retryable_model_request(error):
+    guard = session.stream_guard
+    before_output = guard.started is not None and not guard.first_token and not guard.closed
+    if not retryable_model_request(error, before_output=before_output):
         return False
     delay = retry_after(error)
     # A fixed framework delay must not precede the provider's Retry-After.
