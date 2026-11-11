@@ -599,7 +599,7 @@
         0
       ],
       "agent/products/blog/catalog.py": [
-        6,
+        8,
         0
       ],
       "agent/products/blog/confirmation.py": [
@@ -751,6 +751,10 @@
         0
       ],
       "agent/runtime/model_budget.py": [
+        0,
+        0
+      ],
+      "agent/runtime/output_budget.py": [
         0,
         0
       ],
@@ -992,7 +996,7 @@
       ]
     },
     "total": [
-      380,
+      382,
       0
     ]
   },
@@ -1495,7 +1499,7 @@
     ]
   },
   "metric_notes": {
-    "agent/products/blog/catalog.py": "六处中文描述站点功能名称及工具边界（说说、聊天记录、禁言资格、内部执行清单和用户待办等），只展示给模型作工具发现描述；不对用户文本作关键词匹配，也不决定权限或操作。",
+    "agent/products/blog/catalog.py": "八处中文是工具发现的业务名称与边界说明，新增两处区分通知与站内信的聚合概览和单类操作，避免重复加载；不匹配用户文本，也不决定权限或执行。",
     "tools/diagnostics.py": "七条中文仅用于宿主服务名称与观测状态显示，不参与意图匹配、授权或执行分支。",
     "tools/site.py": "新增三条中文是站点指南输出表头与标签展示说明，仅呈现已核实功能；不匹配用户文本、不参与授权或结果判定。导航权限仍来自同一结构化快照。"
   }

@@ -99,3 +99,19 @@ def test_later_dispatch_failure_does_not_rewrite_an_earlier_valid_decision():
         {"node": "native", "event": "tool_error", "reason": "unknown_tool"},
     ]
     assert decision_score(events, {"any_tools": ["list_notes"], "allow_text": False}) is True
+
+
+def test_ordered_multi_write_accepts_related_discovery_not_early_second_preparation():
+    import json
+    from pathlib import Path
+
+    suite = Path(__file__).resolve().parents[1] / "eval/golden/native_requests.jsonl"
+    case = next(row for row in map(json.loads, suite.read_text().splitlines())
+                if row["id"] == "mixed_two_preparations")
+    first = ["load_admin_categories_info_tools", "load_admin_article_management_info_tools"]
+    events = [{"node": "native", "event": "llm_done", "tool_calls": first}]
+    assert decision_score(events, case["first_action"]) is True
+    events[0]["tool_calls"] = [*first, "prepare_article_tags"]
+    assert decision_score(events, case["first_action"]) is False
+    events[0]["tool_calls"] = [*first, "load_admin_gallery_info_tools"]
+    assert decision_score(events, case["first_action"]) is False

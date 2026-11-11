@@ -231,6 +231,7 @@ def test_exhausted_task_budget_is_not_reset_by_releasing_domains(setup):
     budget.reason = "task_tokens"
     with budget_scope(budget):
         result = turn(runtime(model), "Just chat.")
+    assert result.execution, (budget.spent(), [names(r) for r in model.requests])
     assert result.execution["blocked"][0]["reason"] == "task_tokens"
     assert not model.requests and budget.model_calls == 0
     assert budget.tokens == budget.limits.task_tokens
@@ -257,15 +258,17 @@ def test_history_compaction_preserves_explicit_tool_activation(setup):
 
 def test_retained_schemas_count_against_the_multistep_task_budget(setup):
     runtime, domains, calls = setup
-    domains["alpha"]["read_alpha"].description = "Large completed domain. " * 140
+    domains["alpha"]["read_alpha"].description = "Large completed domain. " * 500
     turn(runtime(Model(call("load_alpha_info_tools"), AIMessageChunk(content="Ready."))))
-    model = Model(call("load_beta_info_tools"), call("read_beta"),
-                  AIMessageChunk(content="Must not reach."))
-    budget = TaskBudget(BudgetLimits(context_tokens=2500, task_tokens=2400))
+    # Use the retained domain so idle-schema eviction cannot hide its task charge.
+    reads = AIMessageChunk(content="", tool_calls=[
+        *call("read_alpha").tool_calls, *call("read_beta").tool_calls])
+    model = Model(call("load_beta_info_tools"), reads, AIMessageChunk(content="Must not reach."))
+    budget = TaskBudget(BudgetLimits(context_tokens=10000, task_tokens=8000))
     with budget_scope(budget):
-        result = turn(runtime(model), "Read beta and answer.")
+        result = turn(runtime(model), "Read alpha and beta and answer.")
     assert result.execution["blocked"][0]["reason"] == "task_tokens"
-    assert calls == ["beta"] and budget.tokens <= budget.limits.task_tokens
+    assert calls == ["alpha", "beta"] and budget.tokens <= budget.limits.task_tokens
     assert len(model.requests) == budget.model_calls == 2
     assert all("read_alpha" in names(request) for request in model.requests)
 
