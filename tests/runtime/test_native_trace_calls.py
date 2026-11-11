@@ -31,6 +31,14 @@ def test_first_model_token_ignores_metadata_and_never_logs_content(monkeypatch):
     assert "PRIVATE_MODEL_TEXT" not in json.dumps(events)
 
 
+def test_raw_token_callback_also_marks_output_started(monkeypatch):
+    monkeypatch.setattr("agent.runtime.middleware.record", lambda *args, **kwargs: None)
+    guard = StreamGuard(SimpleNamespace(config={}))
+    guard.on_chat_model_start({}, [])
+    guard.on_llm_new_token("partial text")
+    assert guard.first_token
+
+
 def test_repeated_reads_and_preparation_keep_distinct_framework_call_ids(monkeypatch):
     credential = secrets.token_urlsafe()
     events = []
