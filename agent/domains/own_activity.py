@@ -1,7 +1,7 @@
 """Verified own-board pages and text history bound to the current conversation."""
 
 import json
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 from urllib.parse import urlencode
 
 from langchain_core.runnables import RunnableConfig
@@ -75,7 +75,7 @@ def list_my_board(config: RunnableConfig, status: Status | None = None,
 
     返回匹配总数与240字内容节选；用 item_id 读取单条内容（最多2000字，显式标记截断）。
     displayName 是自由填写的留名，不是账号。只读取本人数据，不审核或收回留言。
-    返回当前记录；空结果不证明从未发表。公开留言板仅展示通过审核的记录。
+    返回当前记录；空结果不证明从未发表。
     """
     if item_id is not None:
         page, limit = 1, 1
@@ -96,7 +96,9 @@ def list_my_board(config: RunnableConfig, status: Status | None = None,
         entries = [_board_row(row, data["ownerId"], status, item_id) for row in rows]
     except (ValueError, TypeError):
         return base.unavailable("留言的归属、状态或内容无法核对。")
-    return _render({"items": entries, "total": total, "page": page, "pageSize": limit,
+    return _render({"scope": {"statuses": [status] if status else list(get_args(Status)),
+                              "itemId": item_id},
+                    "items": entries, "total": total, "page": page, "pageSize": limit,
                     "hasMore": data["hasMore"]})
 
 

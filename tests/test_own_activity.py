@@ -114,6 +114,16 @@ def test_history_is_current_conversation_text_with_earlier_cursor(backend):
     assert all(request.url.params["conversation_id"] == "9" for request in backend["requests"])
 
 
+@pytest.mark.parametrize("status,states", [(None, ["pending", "passed", "rejected"]),
+                                         ("pending", ["pending"])])
+@pytest.mark.parametrize("item_id", [None, 19])
+def test_empty_board_keeps_the_actual_status_and_target_scope(backend, status, states, item_id):
+    backend["board"] = []
+    page = json.loads(str(board(status=status, item_id=item_id)))
+    assert page["items"] == [] and page["total"] == 0 and not page["hasMore"]
+    assert page["scope"] == {"statuses": states, "itemId": item_id}
+
+
 @pytest.mark.parametrize("cfg", [config(SOURCE_BODY), config(uid=True), config(cid=None),
                                  config(cid=True), {"configurable": {"user_id": 8,
                                  "conversation_id": 9, "principal": Principal(
