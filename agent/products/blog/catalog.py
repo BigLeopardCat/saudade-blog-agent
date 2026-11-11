@@ -7,8 +7,8 @@ from agent.runtime.catalog import capability_overview
 
 # Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {
-    "inbox": "Read your unread notices and messages together: counts and recent headers; "
-    "no read-state changes. Details and actions use notifications/messages.",
+    "inbox": "Combined unread overview of 通知 + 站内信: counts and recent headers. "
+    "For message-only lists/actions use messages; notice-only lists/actions use notifications.",
     "task_control": "Save and pause the current unfinished task for later explicit resume; "
     "not remembering facts, business to-dos or timed reminders.",
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
@@ -68,7 +68,8 @@ DOMAIN_DESCRIPTIONS = {
     "favorites": "Your favorites and confirmed additions/removals.",
     "notifications": "Your notices/unread, read-state and deletion, including announcement "
     "copies; deletion preserves global originals and others' copies.",
-    "messages": "Your inbox summaries/body and read-state approval; reading does not mark read.",
+    "messages": "站内信/私信: list recent received messages, read bodies, "
+    "prepare read-state changes. Reading does not mark read.",
 }
 
 

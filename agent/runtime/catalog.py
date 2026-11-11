@@ -6,8 +6,9 @@ from langchain_core.tools import StructuredTool
 def capability_overview(initial, domains):
     """Project the application's current menu without loading execution schemas."""
     def get_agent_capabilities() -> dict:
-        """Use this authorized overview to answer capability questions, without loading domains.
+        """Describe available features when asked what this assistant can do.
 
+        Explicit caller permission limits need no catalog lookup before refusing an action.
         Each tool has its own targets and actions, even within the same domain.
         """
         return {

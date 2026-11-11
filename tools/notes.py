@@ -94,12 +94,12 @@ def _slim_note_rows(rows):
 
 @tool
 def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult:
-    """按关键词匹配文章标题、正文和标签，返回按相关度排序的文章元数据。
+    """按关键词发现公开文章，返回按相关度排序的标题、标签及链接候选。
 
     按标题或标签查找文章用本工具，按内容主题检索可用 rag_search。
     返回本次查询范围和候选元数据；未命中仅表示本次公开文章关键词查询没有匹配，
-    不证明其他主题、其他查询或非公开文章不存在。searchedFields是查询覆盖字段，
-    不是每条结果的命中位置。仅交付链接时称为“关键词匹配候选”，不解说正文；
+    不证明其他主题、其他查询或非公开文章不存在。结果不含命中字段或正文片段。
+    仅交付链接时称为“关键词匹配候选”，不解说正文；
     需要正文观点或引文时再用 get_article_detail 核实。
     """
     if not keyword.strip():
@@ -111,7 +111,7 @@ def search_notes(keyword: Annotated[str, "搜索关键词"]) -> str | ToolResult
     if slim is None:
         return unavailable("文章搜索未返回可核对的结果，本次不能判断是否有匹配。")
     value = {"resource": "articles", "scope": "public_articles_keyword_matches",
-             "query": keyword, "searchedFields": ["title", "body", "tags"],
+             "query": keyword,
              "items": slim, "returnedCount": len(slim)}
     if not slim:
         value["resultSummary"] = _NO_MATCH_SUMMARY
@@ -239,7 +239,8 @@ def rag_search(
     ] = DEFAULT_TOP_K,
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)] | None = None,
 ) -> str | ToolResult:
-    """Locate public article passages for factual questions, including a known article.
+    """Locate evidence when the user requests answers based on this blog or an article.
+    General knowledge without a blog/source requirement needs no retrieval.
     Set article_id for a known source; results contain version-bound section and character
     ranges for get_article_detail. Candidates are not body reads. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
