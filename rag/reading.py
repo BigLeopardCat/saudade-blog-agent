@@ -6,7 +6,8 @@ import math
 from rag.ranking import MATCH_FIELDS, source_excerpt
 
 
-def _json_frame(data):
+def article_frame_text(data):
+    """Serialize the same article representation for budgeting and model delivery."""
     body = data.get("noteContent")
     if isinstance(body, str) and body:
         data = {key: value for key, value in data.items() if key != "content" or value != body}
@@ -108,8 +109,8 @@ def _outline_frame(data, cap):
         end = start + size
         frame = {**base, "sections": rows[:size],
                  "nextSectionsOffset": end if end < total else None}
-        if len(_json_frame(frame)) <= cap and (size or start == total):
-            return _json_frame(frame), frame
+        if len(article_frame_text(frame)) <= cap and (size or start == total):
+            return article_frame_text(frame), frame
     return "本轮剩余上下文不足以读取目录，请缩小范围后再试。"[:cap], None
 
 
@@ -117,7 +118,7 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
     """Budget an article frame while keeping a parseable, truthful read cursor."""
     from rag.sections import frame_excerpt, slim_frame
 
-    text = _json_frame(data) if isinstance(data, dict) else slim_frame(text)
+    text = article_frame_text(data) if isinstance(data, dict) else slim_frame(text)
     if len(text) <= cap:
         return text, data if isinstance(data, dict) else None
     if not isinstance(data, dict):
@@ -186,11 +187,11 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
     low, high = 0, len(body)
     while low < high:
         mid = (low + high + 1) // 2
-        if len(_json_frame(candidate(mid))) <= cap:
+        if len(article_frame_text(candidate(mid))) <= cap:
             low = mid
         else:
             high = mid - 1
     if not low:
         return "本轮剩余上下文不足以读取正文，请缩小范围后再试。"[:cap], None
     visible = candidate(low)
-    return _json_frame(visible), visible
+    return article_frame_text(visible), visible

@@ -9,7 +9,7 @@ from langgraph.types import Command
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
-from rag.reading import render_article_result, render_search_result
+from rag.reading import article_frame_text, render_article_result, render_search_result
 from tools.base import SITE_BASE
 from utils.trace import record
 
@@ -90,7 +90,7 @@ class ArticleMiddleware(AgentMiddleware):
         if success and call["name"] == "get_article_detail":
             data = artifact.get("data")
             if isinstance(data, dict):
-                limit = result_limit(value.model_copy(update={"content": str(data)}))
+                limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}))
             body, visible = render_article_result(data, value.content, limit)
             failed = isinstance(data, dict) and visible is None
             value = value.model_copy(update={"content": body,

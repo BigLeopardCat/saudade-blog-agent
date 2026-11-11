@@ -1,5 +1,6 @@
 """Model-visible source locators and execution failure status must agree."""
 
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -169,3 +170,30 @@ def test_presentation_cannot_upgrade_an_existing_tool_failure(monkeypatch, kind,
     assert any(
         args == ("native", "call") and kwargs["kind"] == expected for args, kwargs in records
     )
+
+
+@pytest.mark.parametrize("budget,complete", [(12000, True), (1200, False)])
+def test_article_budget_uses_wire_json_and_preserves_true_body_boundaries(monkeypatch, budget, complete):
+    from agent.runtime.message_content import estimate_tokens
+    from config.settings import settings
+    from eval.fixtures.document_reads import article_page
+
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", budget)
+    body = '正文含双引号 "quoted" 和换行\n' * 400
+    data = article_page({"noteTitle": "Source", "noteContent": body}, 1)
+    source = ToolMessage(content=str(data), name="get_article_detail", tool_call_id="read",
+                         artifact={"kind": "ok", "data": data})
+    middleware = ArticleMiddleware(ToolSession(Capture(), config(), {}, {}))
+    message = middleware.render_result(
+        {"name": "get_article_detail", "args": {"article_id": 1}}, source, 1)
+    visible = message.artifact["data"]
+    assert json.loads(message.content) == visible
+    assert estimate_tokens([message]) <= budget
+    assert visible["readComplete"] is complete
+    assert visible["noteContent"] == body[:visible["source"]["end"]]
+    assert visible["nextOffset"] == (None if complete else visible["source"]["end"])
+    if complete:
+        assert visible["noteContent"] == body and visible["source"]["end"] == len(body)
+    else:
+        assert 0 < visible["source"]["end"] < len(body)
+    assert data["noteContent"] == body and data["readComplete"]
