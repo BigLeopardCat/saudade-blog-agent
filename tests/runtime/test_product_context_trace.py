@@ -42,8 +42,8 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["article_management"]["applies_to"] == ["agent_tools", "web_editor"]
     assert facts["rendering"] == context["rendering"]
     assert facts["manual_ui"] == context["manual_ui"]
-    assert facts["manual_ui"]["effects"]["entry"] == (
-        "mascot star; default bottom-left; draggable")
+    assert facts["manual_ui"]["effects"]["entry"] == "mascot star button"
+    assert facts["manual_ui"]["effects"]["default_position"] == "bottom-left"
     assert facts["rendering"]["sticker_format"] == {
         "markdown_text": "image", "inline_code": "literal",
         "code_block": "literal", "markdown_image_url": "image"}
