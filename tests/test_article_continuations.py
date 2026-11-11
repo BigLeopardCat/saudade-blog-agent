@@ -10,10 +10,9 @@ from langchain_core.messages import AIMessage, HumanMessage
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
-from eval.fixtures.document_reads import article_page, document_page, RevisionChanged
+from eval.fixtures.document_reads import RevisionChanged, article_page, document_page
 from tools import notes
 from tools.result import ok, unavailable
-
 
 ARTICLE = 19
 BODY = "A verified article body with enough text for several pages."

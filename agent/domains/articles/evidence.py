@@ -175,7 +175,7 @@ class ArticleEvidence:
             self.found |= kind == "ok" and bool(text.strip())
         elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
               and type(args.get("article_id")) is int):
-            self.continuations.pop(args.get("article_id"), None)
+            self.continuations.pop(args["article_id"], None)
             if kind == "ok":
                 self._observe_detail(args.get("article_id"), payload(value))
 
