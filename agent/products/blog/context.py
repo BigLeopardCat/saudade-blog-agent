@@ -29,6 +29,8 @@ def conversation_context(principal) -> dict:
                       "sticker_format": {"markdown_text": "image", "inline_code": "literal",
                                          "code_block": "literal", "markdown_image_url": "image"}},
         "guestbook": {"posting_requires_login": True,
+                      "public_read_requires_login": False,
+                      "public_display_requires_approval": True,
                       "anonymous": "hides public display name, not the authenticated publisher",
                       "publisher_lookup_roles": sorted(ADMIN_ROLES)},
         "article_management": {"requires_admin_console_access": True,

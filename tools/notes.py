@@ -150,7 +150,9 @@ def get_article_detail(
     Author/description/display fields: metadata only; missing values stay unknown.
     Body facts: prefer rag_search(article_id=...) unless matching version-bound sections
     are known. Copy section/revision/section_schema/offset/max_chars; do not locate twice.
-    Whole summaries: omit section, follow nextOffset; outlines use nextSectionsOffset.
+    Whole summaries: start with view=body without section; the first body read includes
+    outline and revision. Follow nextOffset as needed; outline-only requests use
+    view=outline and nextSectionsOffset.
     Section reads/continuations require contentRevision and sectionSchema. Section end
     is not document end; conclusions cover read text only. Images remain Markdown.
     source is a body range, not URL; link by ID. Private/draft body: read_current_article;

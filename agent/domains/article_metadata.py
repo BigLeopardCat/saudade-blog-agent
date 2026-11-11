@@ -33,8 +33,10 @@ def summary(row):
             or not _nullable(row, "categoryId", positive)
             or "categoryName" not in row):
         raise ValueError("Invalid article metadata")
+    # The host renders legacy SQL NULL as unpinned; an absent field is rejected above.
+    pinned = 0 if row["isTop"] is None else row["isTop"]
     return {"id": row["id"], "title": sanitize_untrusted(row["title"], 255),
-            "status": row["status"], "isPublic": row["isPublic"], "isTop": row["isTop"],
+            "status": row["status"], "isPublic": row["isPublic"], "isTop": pinned,
             "categoryId": row["categoryId"],
             "categoryName": (text(row["categoryName"], 100)
                              if row["categoryName"] is not None else None),
