@@ -95,21 +95,20 @@ def test_default_pages_include_totals_and_previews_not_full_bodies(backend):
     assert not ({row["id"] for row in data["items"]} & {row["id"] for row in tail["items"]})
 
 
-def test_summary_is_one_aggregate_request_with_no_content(backend):
-    data = json.loads(str(moderation.get_moderation_status.invoke({}, config=config())))
-    counts = {
-        "finalStatus": {key: backend["counts"][key] for key in
-                        ("total", "pending", "passed", "rejected")},
-        "aiDecision": {key: backend["counts"][key] for key in
-                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")}}
-    assert data["board"] == {"scope": "all", "reviewProvenance": "not_reported",
-                            "manualReviewCount": None, **counts}
-    assert data["comments"] == {"scope": "not_deleted",
-        "finalStatus": {key: backend["comment_counts"][key] for key in
-                        ("total", "pending", "passed", "rejected")},
-        "aiDecision": {key: backend["comment_counts"][key] for key in
-                       ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")},
-        "reviewProvenance": "not_reported", "manualReviewCount": None}
+@pytest.mark.parametrize("view", [None, "status", "ai"])
+def test_summary_is_one_aggregate_request_with_no_content(backend, view):
+    args = {"view": view} if view else {}
+    data = json.loads(str(moderation.get_moderation_status.invoke(args, config=config())))
+    for name, scope, source in (("board", "all", "counts"),
+                                ("comments", "not_deleted", "comment_counts")):
+        expected = {"scope": scope,
+            "finalStatus": {key: backend[source][key] for key in
+                            ("total", "pending", "passed", "rejected")}}
+        if view == "ai":
+            expected.update({"aiDecision": {key: backend[source][key] for key in
+                            ("aiPassed", "aiFlagged", "aiRejected", "aiUnreviewed")},
+                             "reviewProvenance": "not_reported", "manualReviewCount": None})
+        assert data[name] == expected
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/moderation/summary")
     assert "content" not in str(data)
@@ -120,7 +119,7 @@ def test_passed_without_ai_record_does_not_supply_a_manual_review_count(backend)
         "total": 13, "pending": 0, "passed": 13, "rejected": 0,
         "aiPassed": 0, "aiFlagged": 0, "aiRejected": 0, "aiUnreviewed": 13,
     }
-    data = json.loads(str(moderation.get_moderation_status.invoke({}, config=config())))
+    data = json.loads(str(moderation.get_moderation_status.invoke({"view": "ai"}, config=config())))
     assert data["comments"]["finalStatus"]["passed"] == 13
     assert data["comments"]["aiDecision"]["aiUnreviewed"] == 13
     assert data["comments"]["manualReviewCount"] is None
