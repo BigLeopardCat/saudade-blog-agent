@@ -8,7 +8,7 @@ def capability_overview(initial, domains):
     def get_agent_capabilities() -> dict:
         """Use this authorized overview to answer capability questions, without loading domains.
 
-        Each domain maps exact tools to their own scope; operations are not shared across domains.
+        Each tool has its own targets and actions, even within the same domain.
         """
         return {
             "coverage": "current_tool_catalog",

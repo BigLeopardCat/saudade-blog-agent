@@ -20,7 +20,8 @@ Identifier = targets.Identifier
 
 def _review(request, current):
     ids = current["matchedIds"]
-    names = "、".join((row["displayName"] or f"图片 #{row['imageId']}")
+    names = "、".join((f"图片 #{row['imageId']}"
+                      + (f"（{row['displayName']}）" if row["displayName"] else ""))
                      for row in current["preview"])
     selection = f"图库图片（{len(ids)} 张）：" + names
     if current["previewTruncated"]:

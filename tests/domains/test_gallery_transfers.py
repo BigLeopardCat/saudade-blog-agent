@@ -79,6 +79,24 @@ def test_preview_rejects_scope_changes_and_forbidden_roles_do_not_call_backend(m
         assert result.kind == "unavailable"
 
 
+def test_transfer_card_keeps_each_name_with_its_own_identifier(monkeypatch):
+    from agent.contracts.events import confirmation_text
+    from agent.products.blog.confirmation import public_card
+
+    intent = {"mode": "copy", "imageIds": [72, 75], "folderId": 0}
+    value = {"version": "a" * 64, "expiresAt": int(time.time()) + 900,
+             "intent": intent, "destinationName": "未分类",
+             "images": [{**image(72), "displayName": None}, image(75)]}
+    monkeypatch.setattr(base, "_admin_read_post", lambda *_: value)
+    monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
+    prepared = transfers.prepare_gallery_transfer.invoke({"intent": intent}, config=admin())
+    question = confirmation_text(public_card(prepared.execution))
+    assert "图片 #72、图片 #75（封面）" in question
+    assert "完整图片编号：72、75" in question
+    grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
+    assert grant["specs"][0]["args"]["intent"]["imageIds"] == [72, 75]
+
+
 def test_completion_requires_exact_source_scope_and_independent_copy_ids():
     args = {"version": "a" * 64, "intent": {"mode": "copy", "imageIds": [72]}}
     value = {"id": "a" * 64, "status": "complete", "error": None,
