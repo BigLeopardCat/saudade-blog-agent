@@ -42,6 +42,9 @@ def _annotate(chunk: dict, match: dict, score: float, retriever: str, query_term
         for field, value in fields.items()}
     match["matched_fields"] = [field for field in MATCH_FIELDS if matched[field]]
     match["retrieval_scores"] = {retriever: float(score)}
+    path = chunk.get("section_path")
+    if isinstance(path, list) and path and all(isinstance(item, str) for item in path):
+        match["section_path"] = list(path)
     positions = [start for term, start, _ in body_features if term in matched["body"]]
     start = max(0, min(positions, default=0) - EXCERPT_CHARS // 3)
     snippet = body[start:start + EXCERPT_CHARS]
@@ -52,6 +55,11 @@ def _annotate(chunk: dict, match: dict, score: float, retriever: str, query_term
 
 def merge_match(target: dict, incoming: dict) -> None:
     """Combine evidence for one source location without rescaling retrieval scores."""
+    left_path, right_path = target.get("section_path"), incoming.get("section_path")
+    if left_path and right_path and left_path != right_path:
+        raise ValueError("Cannot fuse conflicting section paths")
+    if right_path and not left_path:
+        target["section_path"] = list(right_path)
     left, right = source_excerpt(target), source_excerpt(incoming)
     if (left and right and (left["offset"], left["end"]) == (right["offset"], right["end"])
             and left["text"] != right["text"]):
