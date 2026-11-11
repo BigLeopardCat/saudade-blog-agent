@@ -34,10 +34,10 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["delivery_policy"] in messages[0].content
     assert facts["administration_requires"] == ["admin", "superadmin"]
     assert facts["can_access_admin_console"] is False
-    assert facts["guestbook"]["posting_requires_login"] is True
+    assert facts["guestbook"]["post"] == "login"
     assert facts["guestbook"] == context["guestbook"]
-    assert facts["guestbook"]["public_read_requires_login"] is False
-    assert facts["guestbook"]["public_display_requires_approval"] is True
+    assert facts["guestbook"]["read"] == "public"
+    assert facts["guestbook"]["display"] == "after_approval"
     assert facts["article_management"]["author_ownership_is_not_permission"] is True
     assert facts["article_management"]["applies_to"] == ["agent_tools", "web_editor"]
     assert facts["rendering"] == context["rendering"]

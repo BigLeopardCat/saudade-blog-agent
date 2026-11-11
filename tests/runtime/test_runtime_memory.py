@@ -35,7 +35,7 @@ def test_summary_reaches_native_input_as_data_not_runtime_authority():
     assert trusted["caller"]["role_label"] == "超级管理员"
     assert trusted["caller"]["can_access_admin_console"] is True
     assert "superadmin" in trusted["guestbook"]["publisher_lookup_roles"]
-    assert trusted["guestbook"]["posting_requires_login"] is True
+    assert trusted["guestbook"]["post"] == "login"
     assert "曾误称不能管理" not in prompt[0].content
     assert "用户希望中文答复" in prompt[-1].content
     assert prompt[-1].content.startswith("[当前问题]: 继续\n\n")
