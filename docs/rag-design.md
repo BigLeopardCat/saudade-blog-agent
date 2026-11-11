@@ -136,6 +136,10 @@ BM25S 评分 mask 和 PG 距离查询的 WHERE 中生效，先限定再取文档
 get_article_detail 默认 `view=body`，使用 offset、max_chars、revision，返回 contentRevision、
 readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
+同一任务顺序读取整篇正文时，文章中间件可从已呈现的可信范围补齐下一页缺失的
+revision 与 section_schema，仅限同一文章、无小节选择且 offset 精确等于已返回的
+nextOffset。显式冲突值不覆盖；读取失败清除对应游标，新任务不继承旧任务游标。
+宿主仍校验版本，正文修改后返回冲突。任意位置、小节和目录分页仍须显式提供版本。
 按标题/编号只接受唯一匹配；父节读取包括子节。
 contentRevision 是包含解析策略及库版本、标题和原文的读取视图 hash；它与宿主语料传输的
 内容 revision 分开。检索候选 document_revision 使用相同读取视图版本，客户端只需原样回传。

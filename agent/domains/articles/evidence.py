@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 
 from langchain_core.messages import ToolMessage
 
+from agent.domains.articles.reading import body_continuation
+
 SEARCH_TOOLS = frozenset({"rag_search"})
 CATALOG_TOOLS = frozenset({"list_notes", "get_top_notes", "list_admin_notes"})
 
@@ -100,6 +102,7 @@ class ArticleEvidence:
         self.failed = False
         self.documents: dict[int, str] = {}
         self.read_ranges: dict[int, list[dict]] = {}
+        self.continuations: dict[int, dict] = {}
         self.candidates: dict[int, str] = {}
         self.references: set[tuple[str, int]] = set()
         self.catalog_references: set[tuple[str, int]] = set()
@@ -112,6 +115,7 @@ class ArticleEvidence:
             "read_ranges": {
                 ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()
             },
+            "continuations": {ident: dict(cursor) for ident, cursor in self.continuations.items()},
         }
 
     @classmethod
@@ -124,6 +128,9 @@ class ArticleEvidence:
         evidence.read_ranges = {
             int(ident): [dict(row) for row in rows]
             for ident, rows in state.get("read_ranges", {}).items()
+        }
+        evidence.continuations = {
+            int(ident): dict(cursor) for ident, cursor in state.get("continuations", {}).items()
         }
         evidence.references = {tuple(row) for row in state["references"]}
         evidence.catalog_references = {tuple(row) for row in state.get("catalog_references", [])}
@@ -166,10 +173,25 @@ class ArticleEvidence:
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")
             self.found |= kind == "ok" and bool(text.strip())
-        elif (
-            name == "get_article_detail" and args.get("doc_type", "note") == "note" and kind == "ok"
-        ):
-            self._observe_detail(args.get("article_id"), payload(value))
+        elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
+              and type(args.get("article_id")) is int):
+            self.continuations.pop(args["article_id"], None)
+            if kind == "ok":
+                self._observe_detail(args.get("article_id"), payload(value))
+
+    def continuation_args(self, args):
+        """Bind only the observed next body page; explicit conflicting guards stay intact."""
+        if type(args.get("article_id")) is not int:
+            return args
+        cursor = self.continuations.get(args.get("article_id"))
+        if (not cursor or args.get("doc_type", "note") != "note"
+                or args.get("view", "body") != "body" or args.get("section")
+                or type(args.get("offset")) is not int or args["offset"] != cursor["offset"]
+                or any(args.get(key) and args[key] != cursor[key]
+                       for key in ("revision", "section_schema"))):
+            return args
+        return {**args, **{key: cursor[key] for key in ("revision", "section_schema")
+                          if not args.get(key)}}
 
     def _observe_detail(self, ident, data):
         if not isinstance(data, dict) or type(ident) is not int or ident <= 0:
@@ -181,6 +203,8 @@ class ArticleEvidence:
         self.documents[ident] = str(data.get("noteTitle") or "文章")
         ranges = self.read_ranges.setdefault(ident, [])
         observed = _read_range(data, ident)
+        if cursor := body_continuation(data, ident):
+            self.continuations[ident] = cursor
         if observed not in ranges:
             ranges.append(observed)
         self.references.update(_article_links(body))
