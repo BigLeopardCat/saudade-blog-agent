@@ -50,6 +50,7 @@ def test_server_status_keeps_unknown_cpu_and_the_host_observation(backend):
     assert result.kind == "ok"
     assert "博客宿主" in str(result) and "尚无完整采样" in str(result)
     assert "8.0 GB" in str(result) and "40.0 GB" in str(result)
+    assert "负载（1 / 5 / 15 分钟）：" in str(result)
     assert result.data["host"]["cpuPercent"] is None
     observed = datetime.fromisoformat(result.data["observedAt"])
     assert observed == datetime.fromisoformat(data["observedAt"])

@@ -118,7 +118,7 @@ def _server_status(data):
     cpu = f"{host.cpu_percent:.1f}%" if host.cpu_percent is not None else "尚无完整采样"
     lines = [f"博客宿主状态（观测于 {_observed(data.observed_at)}）",
              f"- CPU：{host.cpu_count} 核，使用率 {cpu}",
-             "- 负载：" + " / ".join(f"{value:.2f}" for value in host.load),
+             "- 负载（1 / 5 / 15 分钟）：" + " / ".join(f"{value:.2f}" for value in host.load),
              f"- 内存：总 {_bytes(memory.total_bytes)}，可用 {_bytes(memory.available_bytes)}",
              f"- Swap：总 {_bytes(memory.swap_total_bytes)}，已用 {_bytes(memory.swap_used_bytes)}",
              f"- 开机时长：{_uptime(host.uptime_seconds)}"]
