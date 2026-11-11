@@ -104,6 +104,21 @@ def test_default_article_list_requests_a_brief_view_without_implying_empty_rich_
     assert details["items"][0]["tags"]
 
 
+@pytest.mark.parametrize("value,expected", [(None, 0), (0, 0), (1, 1)])
+@pytest.mark.parametrize("detail", [False, True])
+def test_legacy_null_pin_matches_host_display(backend, value, expected, detail):
+    backend["articles"][0].update(isTop=value, status=None)
+    row = json.loads(str(articles(article_id=1, detail=detail)))["items"][0]
+    assert row["isTop"] == expected and row["status"] is None
+
+
+def test_missing_pin_field_is_still_unavailable(backend):
+    row = dict(backend["articles"][0])
+    del row["isTop"]
+    backend["override"] = {"code": 200, "data": [row], "total": 1}
+    assert articles(article_id=1).kind == "unavailable"
+
+
 def test_exact_name_and_category_filters_are_transported_and_checked(backend):
     assert json.loads(str(accounts(username="account_1")))["total"] == 1
     assert json.loads(str(accounts(username="account")))["total"] == 0

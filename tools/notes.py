@@ -147,13 +147,14 @@ def get_article_detail(
     view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
     """Read public body, outline or metadata; not discovery.
-    Author/description/display fields: metadata only; missing values stay unknown.
-    Body facts: prefer rag_search(article_id=...) unless matching version-bound sections
-    are known. Copy section/revision/section_schema/offset/max_chars; do not locate twice.
-    Whole summaries: omit section, follow nextOffset; outlines use nextSectionsOffset.
-    Section reads/continuations require contentRevision and sectionSchema. Section end
-    is not document end; conclusions cover read text only. Images remain Markdown.
-    source is a body range, not URL; link by ID. Private/draft body: read_current_article;
+    Author/display facts: metadata; missing stays unknown.
+    Specific body facts: rag_search(article_id=...) or known version-bound sections;
+    copy returned coordinates, do not locate twice.
+    Whole summaries: start view=body without section; it includes outline/revision.
+    Continue via nextOffset as needed; outline-only paging uses nextSectionsOffset.
+    Sections/continuations require contentRevision+sectionSchema. Section end is not
+    document end; conclusions cover read text only. Images stay Markdown.
+    source is a body range, not URL; link by ID. Private/drafts: read_current_article;
     counters: get_article_stats.
     """
     from urllib.parse import urlencode
