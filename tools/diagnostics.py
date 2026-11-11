@@ -46,6 +46,7 @@ class Memory(_Record):
 
 class Disk(_Record):
     mount: str = Field(min_length=1, max_length=4096)
+    filesystem_device_id: Count | None = None
     total_bytes: Count
     available_bytes: Count
 
@@ -125,10 +126,12 @@ def _server_status(data):
     if host.cpu_sample_at is not None:
         lines.append(f"- CPU 采样：{_observed(host.cpu_sample_at)}，"
                      f"跨度 {host.cpu_sample_window_seconds:.2f} 秒")
-    lines.append("- 挂载点容量（磁盘卷归属未观测）：")
+    lines.append("- 挂载点所在文件系统容量：")
     for disk in host.disks:
         mount = disk.mount.replace("\n", " ").replace("\r", " ")
-        lines.append(f"  {mount}：总 {_bytes(disk.total_bytes)}，"
+        filesystem = (str(disk.filesystem_device_id)
+                      if disk.filesystem_device_id is not None else "未知")
+        lines.append(f"  {mount}（文件系统编号 {filesystem}）：总 {_bytes(disk.total_bytes)}，"
                      f"可用 {_bytes(disk.available_bytes)}")
     if host.disks_truncated:
         lines.append("- 磁盘列表已截取前 16 项。")
@@ -160,6 +163,7 @@ def _read(config, render):
 def get_server_status(config: RunnableConfig) -> object:
     """Read blog-host CPU, memory, load, disk capacities and uptime through the host API.
     CPU percentage is unknown until sampled. Disk capacity is not directory usage.
+    Filesystem IDs associate mounts within this host snapshot, not physical disks.
     These metrics describe the blog host, not the machine running this Agent.
     """
     return _read(config, _server_status)
