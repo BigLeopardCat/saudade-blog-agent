@@ -109,7 +109,9 @@ def _page(kind, config, status, keyword, page, limit, item_id, **filters):
 
 
 @tool
-def get_moderation_status(config: RunnableConfig, view: Literal["status", "ai"] = "status") -> object:
+def get_moderation_status(
+    config: RunnableConfig, view: Literal["status", "ai"] = "status",
+) -> object:
     """查询河灯留言及未删除文章评论的审核计数，不读取正文。
 
     默认 status 返回总数和最终状态；仅查询 AI 判定时用 ai，同时返回其独立分布。
