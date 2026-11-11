@@ -72,7 +72,7 @@ DOMAIN_DESCRIPTIONS = {
 }
 
 
-_BROWSER_ACTIONS = ("navigate_page", "set_page_appearance")
+_COMMON_SITE_TOOLS = ("navigate_page", "set_page_appearance", "get_blog_info")
 
 
 def initial_tools(tools, domains):
@@ -80,7 +80,7 @@ def initial_tools(tools, domains):
     browser = domains.get("site") or {}
     selected = {
         **tools,
-        **{name: browser[name] for name in _BROWSER_ACTIONS if name in browser},
+        **{name: browser[name] for name in _COMMON_SITE_TOOLS if name in browser},
     }
     if selected or any(domains.values()):
         overview = capability_overview(selected, domains)

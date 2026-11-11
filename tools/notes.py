@@ -5,6 +5,7 @@ import json
 import logging
 from typing import Annotated, Literal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
@@ -302,10 +303,22 @@ def rag_search(
 
 
 @tool
-def get_blog_info() -> str | ToolResult:
-    """获取博客基本信息：作者、头像、签名、ICP备案号等。"""
+def get_blog_info(config: RunnableConfig) -> ToolResult:
+    """Read the blog introduction: profile and current site feature/navigation guide.
+
+    One overview covers general introductions. Read article lists, statistics or social
+    links only when requested; this overview does not establish article body facts.
+    """
+    from tools.site import get_site_map
+
     data = _get("/user")
-    return _shape(data)
+    if isinstance(data, ToolResult):
+        return data
+    if not isinstance(data, dict):
+        return unavailable("Blog profile could not be verified.")
+    guide = get_site_map.invoke({}, config=config)
+    text = json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n" + str(guide)
+    return ok(text, data={**data, "siteGuide": guide.data})
 
 
 @tool

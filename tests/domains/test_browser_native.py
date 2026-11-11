@@ -480,3 +480,39 @@ def test_bound_navigation_schema_preserves_the_tool_applicability_contract():
     assert bound["description"].startswith(browser.navigate_page.description)
     assert "read-only tasks" in bound["description"]
     assert "/guestbook" in bound["description"] and "/dashboard" not in bound["description"]
+
+
+def test_blog_overview_needs_one_read_without_domain_loading(monkeypatch):
+    reads = []
+
+    def public_read(path, **kwargs):
+        reads.append(path)
+        assert path == "/user"
+        return {"blogTitle": "Fixture blog", "blogAuthor": "Fixture author"}
+
+    monkeypatch.setattr(base, "_get", public_read)
+    arm, model = _arm(monkeypatch, [_response("get_blog_info"),
+                                   AIMessage(content="本站有文章和留言板。")])
+    events = list(arm.stream_events({"messages": [HumanMessage(content="介绍一下这个博客")]},
+                                    _config()))
+    assert len(model.calls) == 2 and reads == ["/user"]
+    assert "get_blog_info" in model.menus[0]
+    observed = next(message for message in model.calls[-1]
+                    if isinstance(message, ToolMessage) and message.name == "get_blog_info")
+    data = observed.artifact["data"]
+    assert data["blogTitle"] == "Fixture blog"
+    assert data["siteGuide"]["articleTags"]["filterPage"] is False
+    assert next(page for page in data["siteGuide"]["pages"] if page["path"] == "/dashboard")[
+        "navigationAvailable"] is False
+    assert "Fixture author" in observed.content and "没有标签筛选功能" in observed.content
+    assert not any(isinstance(e, StreamEvent) and e.name in ("command", "confirmation")
+                   for e in events)
+
+
+@pytest.mark.parametrize("profile", [None, [], base.unavailable("profile offline")])
+def test_blog_overview_does_not_turn_missing_profile_into_success(monkeypatch, profile):
+    from tools.notes import get_blog_info
+
+    monkeypatch.setattr(base, "_get", lambda *args, **kwargs: profile)
+    result = get_blog_info.invoke({}, config=_config())
+    assert result.kind == "unavailable" and result.data is None
