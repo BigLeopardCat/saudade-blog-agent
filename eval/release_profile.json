@@ -36,58 +36,58 @@
       "calls": 1,
       "in": 5000,
       "out": 400,
-      "elapsed_s": 10,
-      "first_reply_s": 8
+      "elapsed_s": 30,
+      "first_reply_s": 25
     },
     "browser": {
       "calls": 2,
       "in": 11000,
       "out": 500,
-      "elapsed_s": 15,
-      "first_command_s": 6,
-      "first_reply_s": 12
+      "elapsed_s": 30,
+      "first_command_s": 15,
+      "first_reply_s": 25
     },
     "read": {
       "calls": 3,
-      "in": 18000,
+      "in": 20000,
       "out": 1200,
-      "elapsed_s": 20,
-      "first_reply_s": 18
+      "elapsed_s": 45,
+      "first_reply_s": 40
     },
     "article_read": {
       "calls": 5,
       "in": 32000,
       "out": 1600,
-      "elapsed_s": 30,
-      "first_reply_s": 25
+      "elapsed_s": 60,
+      "first_reply_s": 50
     },
     "prepare": {
       "calls": 4,
       "in": 24000,
       "out": 1000,
-      "elapsed_s": 20,
-      "first_confirmation_s": 15
+      "elapsed_s": 50,
+      "first_confirmation_s": 45
     },
     "control": {
       "calls": 3,
       "in": 20000,
       "out": 800,
-      "elapsed_s": 20,
-      "first_reply_s": 18
+      "elapsed_s": 35,
+      "first_reply_s": 30
     },
     "conversation": {
       "calls": 4,
       "in": 24000,
       "out": 1600,
-      "elapsed_s": 25,
-      "first_reply_s": 20
+      "elapsed_s": 45,
+      "first_reply_s": 40
     },
     "multi": {
       "calls": 8,
       "in": 32768,
       "out": 4000,
-      "elapsed_s": 45,
-      "first_reply_s": 35
+      "elapsed_s": 90,
+      "first_reply_s": 75
     }
   },
   "first_action_target": 0.95
