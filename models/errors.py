@@ -7,7 +7,7 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 
 import httpx
-from openai import APIConnectionError, APIError, APIStatusError
+from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError
 
 _QUOTA_ERRORS = {"insufficient_quota", "billing_hard_limit_reached"}
 _ERROR_TYPES = {"server_error", "rate_limit_error", "insufficient_quota",
@@ -66,8 +66,10 @@ def error_fields(error: BaseException | None) -> dict:
     return fields
 
 
-def retryable_model_request(error: Exception) -> bool:
-    """Retry rejected HTTP requests, excluding mid-stream failures and business tools."""
+def retryable_model_request(error: Exception, *, before_output: bool = False) -> bool:
+    """Retry rejected requests or timeouts with explicit evidence of no model output."""
+    if isinstance(error, (APITimeoutError, httpx.TimeoutException)):
+        return before_output
     return isinstance(error, APIStatusError) and (
         error.status_code == 429 or 500 <= error.status_code < 600
     ) and error_fields(error)["retryable"]
