@@ -11,6 +11,7 @@ from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
 from eval.fixtures.document_reads import RevisionChanged, article_page, document_page
+from rag.reading import render_article_result
 from tools import notes
 from tools.result import ok, unavailable
 
@@ -66,6 +67,18 @@ def test_cursor_snapshot_is_stable_and_failures_invalidate_the_current_cursor():
     middleware.before_agent({"evidence": snapshot, "evidence_task_id": "old",
                              "proposal": {"pending": True}}, None)
     assert middleware.evidence.continuation_args(args) == args
+
+
+def test_budgeted_body_cursor_never_skips_text_not_shown_to_the_model():
+    raw = article_page({"noteTitle": "Source", "noteContent": BODY * 500}, ARTICLE)
+    text, visible = render_article_result(raw, str(raw), 1800)
+    assert 0 < visible["nextOffset"] < raw["nextOffset"]
+    state = ArticleEvidence()
+    state.observe("get_article_detail", {"article_id": ARTICLE}, ok(text, data=visible))
+    args = {"article_id": ARTICLE, "offset": visible["nextOffset"]}
+    assert state.continuation_args(args)["revision"] == raw["contentRevision"]
+    unseen = {"article_id": ARTICLE, "offset": raw["nextOffset"]}
+    assert state.continuation_args(unseen) == unseen
 
 
 @pytest.mark.parametrize("changed", [False, True])
