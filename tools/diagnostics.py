@@ -158,9 +158,9 @@ def _read(config, render):
 
 @tool
 def get_server_status(config: RunnableConfig) -> object:
-    """Read current blog-host CPU, memory, load, disks and uptime through the host API.
-    The CPU percentage may be unknown until a complete sample exists. Measurements
-    describe the blog host; they never describe the machine running this Agent.
+    """Read blog-host CPU, memory, load, disk capacities and uptime through the host API.
+    CPU percentage is unknown until sampled. Disk capacity is not directory usage.
+    These metrics describe the blog host, not the machine running this Agent.
     """
     return _read(config, _server_status)
 

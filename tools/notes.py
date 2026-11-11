@@ -130,7 +130,8 @@ DOC_TYPE_CN = {
 
 _ARTICLE_OFFSET_DESC = "Body character offset or outline index; copy the next cursor."
 _ARTICLE_LIMIT_DESC = "本次最多读取字符数"
-_ARTICLE_REVISION_DESC = "Copy contentRevision for continuation or section reads."
+_ARTICLE_REVISION_DESC = "Sections/continuations: copy contentRevision, also set section_schema."
+_ARTICLE_SCHEMA_DESC = "Sections/continuations: copy sectionSchema, also set revision."
 
 
 @tool
@@ -143,7 +144,7 @@ def get_article_detail(
     ] = 0,
     max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 12000,
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
-    section_schema: Annotated[str, Field(max_length=128)] = "",
+    section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
     """Read public body, outline or metadata; not discovery.
@@ -152,8 +153,7 @@ def get_article_detail(
     copy returned coordinates, do not locate twice.
     Whole summaries: start view=body without section; it includes outline/revision.
     Continue via nextOffset as needed; outline-only paging uses nextSectionsOffset.
-    Sections/continuations require contentRevision+sectionSchema. Section end is not
-    document end; conclusions cover read text only. Images stay Markdown.
+    Section end is not document end; conclusions cover read text only. Images stay Markdown.
     source is a body range, not URL; link by ID. Private/drafts: read_current_article;
     counters: get_article_stats.
     """
@@ -165,7 +165,8 @@ def get_article_detail(
     if (offset or section.startswith("s") and section[1:].isdigit()) and (
         not revision or not section_schema
     ):
-        return invalid_args("Continuation requires contentRevision and sectionSchema.")
+        return invalid_args("Copy revision=contentRevision and section_schema=sectionSchema "
+                            "from the preceding read for sections/continuations.")
     if view == "metadata" and (section or offset):
         return invalid_args("Metadata view cannot select body ranges.")
     if view == "outline" and section:

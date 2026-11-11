@@ -120,6 +120,19 @@ def test_observed_noop_is_not_an_unverified_missing_result(backend, tmp_path):
     assert backend["effects"] == 0 and len(backend["requests"]) == 2
 
 
+def test_gallery_selection_pairs_named_and_unnamed_images(backend):
+    def names(plan):
+        plan["preview"][0]["displayName"] = None
+        plan["preview"][1]["displayName"] = "封面"
+
+    backend["bad_plan"] = names
+    prepared, grant = approve({"action": "favorite", "imageIds": [72, 75], "isFavorite": True})
+    text = public_card(prepared.execution)["details"]["sections"][0]["text"]
+    assert "图片 #72、图片 #75（封面）" in text
+    assert grant["specs"][0]["args"]["intent"]["imageIds"] == [72, 75]
+    assert backend["effects"] == 0 and len(backend["requests"]) == 1
+
+
 @pytest.mark.parametrize("change", [
     {"matchedIds": [12]}, {"changedIds": [12]}, {"changedIds": [11, 11]},
     {"beforeVersion": "b" * 64}, {"action": "delete"}, {"changed": False},
