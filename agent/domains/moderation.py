@@ -129,11 +129,12 @@ def get_moderation_status(config: RunnableConfig, view: Literal["status", "ai"] 
                 or sum(counts[key] for key in _COUNTS[1:4]) != counts["total"]
                 or sum(counts[key] for key in _COUNTS[4:]) != counts["total"]):
             return base.unavailable("审核汇总缺少有效范围、计数或分布与总数不一致。")
-        result[name] = {"scope": scope,
-                        "finalStatus": {key: counts[key] for key in _COUNTS[:4]}}
+        entry: dict[str, object] = {"scope": scope,
+                                    "finalStatus": {key: counts[key] for key in _COUNTS[:4]}}
         if view == "ai":
-            result[name].update({"aiDecision": {key: counts[key] for key in _COUNTS[4:]},
+            entry.update({"aiDecision": {key: counts[key] for key in _COUNTS[4:]},
                                  "reviewProvenance": "not_reported", "manualReviewCount": None})
+        result[name] = entry
     if set(data) != {"board", "comments"}:
         return base.unavailable("审核汇总缺少有效计数或分布与总数不一致。")
     return _render(result)
