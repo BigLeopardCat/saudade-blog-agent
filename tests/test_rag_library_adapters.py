@@ -3,12 +3,30 @@
 from collections import Counter
 from dataclasses import replace
 
+import pytest
 from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from config import settings
 from rag import vector_index as vectors
 from rag.chunks import MAX_CHARS, split
 from rag.tokenization import tokenize
+
+
+def test_scoped_passage_ranking_is_independent_of_unrelated_documents():
+    from rag.lexical import LexicalIndex
+
+    passages = [["model", "overview"] * 8, ["model", "configuration", "timeout"],
+                ["configuration", "deployment"] * 6]
+    local = LexicalIndex(passages, k1=1.5, b=0.75)
+    unrelated = [["configuration", "unrelated"] * 12 for _ in range(50)]
+    corpus = LexicalIndex([unrelated[0], *passages, *unrelated[1:]], k1=1.5, b=0.75)
+    expected = local.scores(["model", "configuration"])
+    scoped = corpus.scores(["model", "configuration", "unrelated"], allowed_indices=[1, 2, 3])
+    assert scoped == pytest.approx({i + 1: score for i, score in expected.items()})
+    assert corpus.scores(["unrelated"], allowed_indices=[1, 2, 3]) == {}
+    assert corpus.scores(["model"], allowed_indices=[]) == {}
+    assert corpus.scores(["model", "configuration"], allowed_indices=[1, 2, 3]) == scoped
+    assert corpus._scoped.cache_info().currsize == 1
 
 
 def test_mixed_language_features_keep_frequency_and_separate_language_boundaries():
