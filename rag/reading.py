@@ -15,7 +15,10 @@ def article_frame_text(data):
 
 
 def _source_hint(hit, label, ident, match):
-    label = str(label)[:80].replace("\n", " ").replace("\r", " ")
+    path = match.get("section_path")
+    if isinstance(path, list) and path and all(isinstance(item, str) for item in path):
+        label = " > ".join(path)
+    label = str(label)[:180].replace("\n", " ").replace("\r", " ")
     hint = f"命中节={label}"
     if not ident or not hit.get("document_revision"):
         return hint
@@ -60,7 +63,7 @@ def candidate_text(index, hit):
         if label is not None and row not in chosen and len(chosen) < max(3, len(sections)):
             chosen.append(row)
     hints = [_source_hint(hit, *row) for row in chosen]
-    return text + (" " + " | ".join(hints) if hints else "")
+    return text + ("\n  - " + "\n  - ".join(hints) if hints else "")
 
 
 def search_text(meta, text):

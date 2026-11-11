@@ -289,3 +289,36 @@ def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offs
     assert "section=s20 offset=96" in result
     assert "section=s18" in result and "section=s18 offset=" not in result
     assert "section=s99" in result and "section=s99 offset=" not in result
+
+
+def test_candidate_preserves_source_hierarchy_for_direct_section_reading():
+    from rag.chunks import split
+    from rag.ranking import documents
+    from rag.reading import candidate_text
+
+    content = "# Guide\n## Layout\nOverview.\n### Current\nneedle evidence"
+    chunks = [{**row, "type": "note", "id": 46, "title": "Guide",
+               "reading_revision": "revision"} for row in split("Guide", content)]
+    index = next(i for i, row in enumerate(chunks) if row["section"] == "Current")
+    hit = documents(chunks, {index: 1.0}, "corpus", query_terms=["needle"])[0]
+    match = hit["matches"][0]
+    assert match["section_path"] == ["Guide", "Layout", "Current"]
+    assert (match["offset"], match["end"]) == (0, len("needle evidence"))
+    wire = candidate_text(1, hit)
+    assert "\n  - 命中节=Guide > Layout > Current section=" in wire
+    assert wire.count("revision=revision") == 1
+    assert "needle evidence" in wire
+    match["section_path"].append("not a source heading")
+    assert chunks[index]["section_path"] == ["Guide", "Layout", "Current"]
+
+
+def test_fusion_preserves_section_paths_and_rejects_conflicting_hierarchy():
+    from rag.ranking import merge_match
+
+    source = {"section_path": ["Guide", "Layout"]}
+    target = {}
+    merge_match(target, source)
+    source["section_path"].append("Current")
+    assert target["section_path"] == ["Guide", "Layout"]
+    with pytest.raises(ValueError, match="conflicting section paths"):
+        merge_match(target, source)
