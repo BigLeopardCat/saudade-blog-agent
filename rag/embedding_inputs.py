@@ -131,8 +131,8 @@ def _ranges(profile: InputProfile, title: str, heading: str, body: str) -> tuple
 
 
 def _source_windows(profile, title, heading, body, budget):
-    # WordPiece continuation tokens can re-encode to more tokens at a source-window
-    # boundary. Retry only previously invalid windows, retaining all source text.
+    # WordPiece continuations can expand at a source-window boundary. Reduce this
+    # chunk's subdivision budget only after full-input validation fails, retaining text.
     while budget > 0:
         encoded = profile.tokenizer.encode(body, add_special_tokens=False)
         encoded.truncate(budget, stride=min(OVERLAP, budget // 4))
