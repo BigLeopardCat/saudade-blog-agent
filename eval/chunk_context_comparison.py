@@ -11,7 +11,7 @@ from pathlib import Path
 
 os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
 
-from eval.context_retrieval_eval import read_contexts  # noqa: E402
+from eval.context_retrieval_eval import FRAME_BUDGET, read_contexts  # noqa: E402
 from eval.full_corpus_analysis import fusion  # noqa: E402
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
@@ -105,6 +105,10 @@ def du_views(data, summary, old_vector, new_vector, lexical):
 def cmrc_views(data, before, after):
     if before["input_hashes"] != data["hashes"] or after["input_hashes"] != data["hashes"]:
         raise ValueError("CMRC dataset changed")
+    for report in (before, after):
+        if any(report["config"][key] != value for key, value in
+               {"candidates": 24, "top_k": 8, "rrf_k": 60}.items()):
+            raise ValueError("CMRC retrieval policy changed")
     for key in ("run", "locations"):
         if before["arms"]["bm25"][key] != after["arms"]["bm25"][key]:
             raise ValueError("fixed CMRC lexical route changed")
@@ -117,6 +121,8 @@ def cmrc_views(data, before, after):
 def compare(data, views, profile, *, groups=None):
     documents = {name: evaluate(data, view["run"], [1, 3, 8, 24, 100])
                  for name, view in views.items()}
+    for name, arm in documents.items():
+        arm["retrieval_locations"] = views[name]["locations"]
     contexts = {}
     for name, view in views.items():
         for mode in ("window", "parent", "neighbors"):
@@ -139,8 +145,18 @@ def compare(data, views, profile, *, groups=None):
     cohorts = {name: {group: {metric: sum(arm["per_query"][q][metric] for q in qids) / len(qids)
         for metric in ("R@8", "nDCG@8", "Success@8")}
         for group, qids in (groups or {}).items()} for name, arm in documents.items()}
+    labels = {"qrels": data["qrels"], "queries": {}}
+    for qid, query in data["queries"].items():
+        item = {key: query[key] for key in ("category", "evidence_groups", "answerable")
+                if key in query}
+        if query.get("evidence_spans"):
+            item["evidence_spans"] = [{key: span[key] for key in (
+                "document_id", "section_id", "start", "end", "group", "revision", "section_schema")
+                if key in span} for span in query["evidence_spans"]]
+        labels["queries"][qid] = item
     return {"dataset": data["manifest"], "input_hashes": data["hashes"],
             "documents": documents, "contexts": contexts, "paired_comparisons": paired,
+            "evaluation_labels": labels,
             "fixed_group_query_ids": groups or {}, "groups": cohorts,
             "queries": len(order), "semantic_judge_calls": 0}
 
@@ -170,7 +186,8 @@ def main():
     result = {"schema_version": 1,
         "config": {"fusion": "equal-weight document/section/location RRF", "rrf_k": 60,
                    "candidates_per_route": 24, "output_documents": 8,
-                   "query_frame_estimated_token_budget": 4096, "expansion_bge_tokens": 1024},
+                   "query_frame_estimated_token_budget": FRAME_BUDGET,
+                   "expansion_bge_tokens": 1024},
         "du": compare(du, views, profile, groups=frozen["group_query_ids"]),
         "stages": {"old_vector": old_meta, "new_vector": new_meta, "lexical": lex_meta}}
     del du, views, old, new, lexical, frozen

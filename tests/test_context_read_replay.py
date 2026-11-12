@@ -50,3 +50,11 @@ def test_overlapping_source_requests_merge_without_reordering_sections():
     assert merge_read_windows(matches) == [
         {"section_id": "s2", "offset": 4, "end": 30, "priority": 0},
         {"section_id": "s1", "offset": 0, "end": 4, "priority": 1}]
+
+
+def test_frozen_read_cache_does_not_share_mutable_source_provenance():
+    data, _ = fixture()
+    first = read_frame(data["corpus"]["d"], 1, "s1", 0, 6, 4096)
+    first[0]["source"]["end"] = 999
+    again = read_frame(data["corpus"]["d"], 1, "s1", 0, 6, 4096)
+    assert again[0]["source"]["end"] == 6

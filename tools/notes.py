@@ -292,7 +292,8 @@ def rag_search(
                 hits = get_index().read_context(hits, mode=settings.rag_context_mode,
                                                max_tokens=settings.rag_context_tokens)
                 meta["context"] = {"mode": settings.rag_context_mode, "applied": True,
-                                   "token_budget": settings.rag_context_tokens}
+                                   "target_tokens": settings.rag_context_tokens,
+                                   "preserve_anchor": True}
             except (InputProfileError, ValueError, KeyError) as error:
                 meta["context"] = {"mode": settings.rag_context_mode, "applied": False,
                                    "reason": type(error).__name__}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from functools import lru_cache
 
 from langchain_core.messages import ToolMessage
@@ -16,15 +17,23 @@ from rag.corpus import content_revision
 from rag.reading import article_frame_text, render_article_result
 from rag.sections import PARSER_VERSION, outline
 
+FRAME_BUDGET = 4096
+
 
 def read_frame(row, identifier, section, offset, end, remaining):
+    return copy.deepcopy(_read_frame(row.get("title", ""), row["text"], identifier,
+                                    section, offset, end, remaining))
+
+
+@lru_cache(maxsize=4096)
+def _read_frame(title, content, identifier, section, offset, end, remaining):
     if remaining <= 32:
         return None
-    revision = content_revision(row.get("title", ""), row["text"])
+    revision = content_revision(title, content)
     limit = min(24000, end - offset)
     params = {"section": section, "offset": offset, "limit": limit, "revision": revision,
               "section_schema": PARSER_VERSION, "view": "body"}
-    response = document_page("note", identifier, row.get("title", ""), row["text"], params)
+    response = document_page("note", identifier, title, content, params)
     frame = project(response, "note", identifier, section, offset, limit, revision, PARSER_VERSION)
     text = article_frame_text(frame)
     def message(value):
@@ -41,7 +50,8 @@ def read_frame(row, identifier, section, offset, end, remaining):
     return frame, text, tokens
 
 
-def read_contexts(data, arm, profile, *, mode="window", context_budget=4096, window_tokens=1024):
+def read_contexts(data, arm, profile, *, mode="window", context_budget=FRAME_BUDGET,
+                  window_tokens=1024):
     if mode not in {"window", "parent", "neighbors"} or context_budget < 1:
         raise ValueError("known context policy and positive query budget required")
     keys = sorted(data["corpus"])
@@ -53,7 +63,7 @@ def read_contexts(data, arm, profile, *, mode="window", context_budget=4096, win
         return {section["section_id"]: section["text"]
                 for section in outline(row["text"], row.get("title", ""))}
 
-    visible, costs, runs = {}, {}, {}
+    visible, costs, runs, frame_lengths = {}, {}, {}, {}
     for qid, selected in arm["locations"].items():
         selected = selected[:8]
         runs[qid] = {did: arm["run"][qid][did] for did in sorted(
@@ -62,6 +72,7 @@ def read_contexts(data, arm, profile, *, mode="window", context_budget=4096, win
             lambda hit, sid: sections(hit["document_id"])[sid], profile,
             mode=mode, max_tokens=window_tokens))
         shown, tokens, chars, body_tokens, reads, planned = [], 0, 0, 0, 0, 0
+        sizes = []
         for hit in requested:
             did = hit["document_id"]
             matches = []
@@ -74,24 +85,27 @@ def read_contexts(data, arm, profile, *, mode="window", context_budget=4096, win
                                        offset, end, context_budget - tokens)
                     if frame is None:
                         break
-                    value, _, used = frame
+                    value, frame_text, used = frame
                     source = value["source"]
                     if source["offset"] != offset or not offset < source["end"] <= end:
                         raise ValueError("visible source differs from requested read range")
                     body = value["sectionText"]
                     tokens += used
                     reads += 1
+                    sizes.append(len(frame_text))
                     chars += len(body)
                     body_tokens += profile.count(body)
                     matches.append({"section_id": sid, "offset": offset, "end": source["end"]})
                     offset = source["end"]
             shown.append({"document_id": did, "matches": matches})
         visible[qid] = shown
+        frame_lengths[qid] = sizes
         costs[qid] = {"frame_estimated_tokens": tokens, "body_bge_tokens": body_tokens,
                       "body_chars": chars, "unique_source_chars": volume(shown),
                       "simulated_reads": reads, "planned_ranges": planned}
     scored = evaluate(data, runs, [1, 3, 8], locations=visible)
     return {**scored, "locations": visible, "per_query_cost": costs,
+        "per_query_frame_lengths": frame_lengths,
         "mean_cost": {metric: sum(row[metric] for row in costs.values()) / len(costs)
                       for metric in next(iter(costs.values()))},
         "policy": {"mode": mode, "query_frame_estimated_token_budget": context_budget,
