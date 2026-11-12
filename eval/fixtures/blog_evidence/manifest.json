@@ -15,7 +15,7 @@
     "all": "Diagnostic union; never an independent test score"
   },
   "annotations": {
-    "passage_requirement": "Each group requires full character coverage of at least one alternative exact source span. Selected spans are not exhaustive relevance labels.",
+    "passage_requirement": "Each flat span is required; equal optional group labels represent alternatives. Every selected range requires complete source-character coverage.",
     "no_answer": "Five authored nonexistent identifiers; returned candidates do not establish generation hallucination."
   },
   "documents": [
