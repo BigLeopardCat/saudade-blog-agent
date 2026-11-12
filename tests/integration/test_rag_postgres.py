@@ -54,6 +54,28 @@ def chunks(*bodies):
             for index, body in enumerate(bodies, 1)]
 
 
+def test_large_publication_prunes_obsolete_keys_and_dimensions_within_database_budget(database):
+    store, _ = database
+    repository = store.repository
+    count = 20000
+    keys = [f"scale-{index}" for index in range(count)]
+    source = [{"type": "note", "id": index} for index in range(count)]
+    common = {"space": {"model": "scale-fixture"}, "space_key": "scale-fixture",
+              "dimension": 2, "stats": {}, "complete": True}
+    repository.commit(rows=[{"key": key, "dimension": 2, "embedding": [1.0, 0.0]}
+                            for key in keys], chunks=source, keys=keys,
+                      fingerprint="large", **common)
+    assert repository.snapshot().count == count
+    keep = count // 2
+    repository.commit(rows=[{"key": keys[0], "dimension": 3, "embedding": [1.0, 0.0, 0.0]}],
+                      chunks=source[:keep], keys=keys[:keep], fingerprint="pruned", **common)
+    assert repository.snapshot().count == keep
+    with repository.engine.connect() as connection:
+        retained = connection.execute(select(embeddings.c.key, embeddings.c.dimension).where(
+            embeddings.c.collection == repository.collection)).all()
+    assert set(retained) == {(key, 2) for key in keys[:keep]}
+
+
 def test_database_cosine_ranks_documents_instead_of_truncating_chunks(database, monkeypatch):
     store, _ = database
     rows = [{"type": "note", "id": 1, "title": "long", "section": str(i),

@@ -162,11 +162,12 @@ class PostgresRepository:
                 index_elements=[snapshots.c.collection], set_=row))
             # The collection contains only the current public corpus and active embedding space.
             active = select(members.c.key).where(
-                members.c.collection == self.collection,
-                members.c.dimension == embeddings.c.dimension)
+                members.c.collection == embeddings.c.collection,
+                members.c.key == embeddings.c.key,
+                members.c.dimension == embeddings.c.dimension).exists()
             connection.execute(delete(embeddings).where(
                 embeddings.c.collection == self.collection,
-                ~embeddings.c.key.in_(active)))
+                ~active))
 
     def _prune_pending(self, connection, space_key, keys, dimension):
         active = select(members.c.key).where(
