@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import time
+from datetime import datetime
 from pathlib import Path
 
 from _judge import collector
@@ -61,7 +62,9 @@ def main() -> int:
         tid = "ab12cd34ef56"
         trace_mod.start_trace(tid, 17, "thread-a", {"message": "x"}, dir=prod)
         p = trace_mod.finish_trace(tid, "producer_done", 1.0, 3)
-        day = time.strftime("%Y%m%d")
+        stamp = (datetime.fromisoformat(json.loads(Path(p).read_text())["started_at"])
+                 .strftime("%Y%m%dT%H%M%S") if p else "")
+        day = stamp[:8]
         check("① 生产 trace 落进 <dir>/<YYYYMMDD>/ 一层",
               p is not None and os.path.dirname(p) == os.path.join(prod, day),
               str(p))
@@ -69,7 +72,7 @@ def main() -> int:
               p is not None and p in tf.iter_trace_files(prod))
         check("① 文件名仍是 时间戳_uid_前8位 形状",
               p is not None and os.path.basename(p) ==
-              f"{time.strftime('%Y%m%dT%H%M%S')}_{17}_{tid[:8]}.json",
+              f"{stamp}_{17}_{tid[:8]}.json",
               os.path.basename(p) if p else "None")
         # 审计 A6 把 logs/ + logs/agent/ + logs/agent/traces/ 收到 0700；这个按天目录
         # 是**新建**的一层，默认会是 0755 ⇒ 显式锁住（父目录挡得住时不构成暴露，但
@@ -228,3 +231,23 @@ def test_trace_retention():
 
 if __name__ == "__main__":
     test_trace_retention()
+
+
+def test_trace_filename_uses_start_time_across_midnight(tmp_path, monkeypatch):
+    current = [datetime(2026, 11, 12, 23, 59, 59)]
+
+    class Clock:
+        @staticmethod
+        def now():
+            return current[0]
+
+        fromisoformat = staticmethod(datetime.fromisoformat)
+
+    monkeypatch.setattr(trace_mod, "datetime", Clock)
+    trace_mod.start_trace("ab98cd76boundary", 17, "thread-clock", {}, dir=str(tmp_path))
+    current[0] = datetime(2026, 11, 13, 0, 0, 1)
+    path = trace_mod.finish_trace("ab98cd76boundary", "producer_done", 2.0, 1)
+    assert Path(path) == tmp_path / "20261112" / "20261112T235959_17_ab98cd76.json"
+    payload = json.loads(Path(path).read_text())
+    assert datetime.fromisoformat(payload["started_at"]).strftime("%Y%m%dT%H%M%S") == \
+        "20261112T235959"

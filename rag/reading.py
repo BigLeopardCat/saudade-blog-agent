@@ -24,6 +24,13 @@ def _source_hint(hit, label, ident, match):
         return hint
     hint += f" section={ident}"
     offset, end = match.get("offset"), match.get("end")
+    window = match.get("read_window")
+    if (isinstance(window, dict) and type(offset) is int and type(end) is int
+            and type(window.get("offset")) is int and type(window.get("end")) is int
+            and 0 <= window["offset"] <= offset < end <= window["end"]
+            and window["end"] - window["offset"] <= 24000):
+        hint += f" index_range=[{offset}:{end}]"
+        offset, end = window["offset"], window["end"]
     if type(offset) is int and offset >= 0:
         hint += f" offset={offset}"
         if type(end) is int and end > offset:
@@ -62,6 +69,13 @@ def candidate_text(index, hit):
         row = (label, match.get("section_id"), match)
         if label is not None and row not in chosen and len(chosen) < max(3, len(sections)):
             chosen.append(row)
+    if any(match.get("read_window") for match in matches):
+        from rag.context_windows import merge_read_windows
+
+        chosen = [(next((label for label, ident in sections if ident == plan["section_id"]),
+                        plan["section_id"]), plan["section_id"],
+                   {**matches[plan["priority"]], "read_window": plan})
+                  for plan in merge_read_windows(matches)]
     hints = [_source_hint(hit, *row) for row in chosen]
     return text + ("\n  - " + "\n  - ".join(hints) if hints else "")
 
@@ -70,6 +84,8 @@ def search_text(meta, text):
     fields = {"retrieval": meta["retrieval"]}
     if "presentation" in meta:
         fields["presentation"] = meta["presentation"]
+    if "context" in meta:
+        fields["context"] = meta["context"]
     coverage = json.dumps(fields,
                           ensure_ascii=False, separators=(",", ":"))
     return coverage + "\n" + text

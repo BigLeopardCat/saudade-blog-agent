@@ -15,6 +15,7 @@ from langchain_classic.retrievers.ensemble import EnsembleRetriever  # noqa: E40
 from langchain_core.documents import Document  # noqa: E402
 from langchain_core.runnables import RunnableLambda  # noqa: E402
 
+from eval.full_corpus_cache import inventory_path, inventory_rows  # noqa: E402
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.prepare_t2_subset import priority  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
@@ -24,6 +25,8 @@ from rag.vector_index import rrf_fuse  # noqa: E402
 
 def read_stage(path, data):
     metadata = json.loads(path.with_suffix(".metadata.json").read_text())
+    if metadata.get("production_complete") is False:
+        raise ValueError("partial SQL controls are not a complete production ranking run")
     if (metadata["input_hashes"] != data["hashes"] or
             metadata["output_sha256"] != hashlib.sha256(path.read_bytes()).hexdigest()):
         raise ValueError("stage source or output hash mismatch")
@@ -163,8 +166,8 @@ def main():
     inventory_metadata = json.loads((args.artifacts / "inventory.json").read_text())
     if inventory_metadata["input_hashes"] != data["hashes"]:
         raise ValueError("inventory source binding changed")
-    with (args.artifacts / "inventory.jsonl").open() as stream:
-        chunk_counts = Counter(json.loads(line)["document_id"] for line in stream)
+    chunk_counts = Counter(row["document_id"] for row in
+                           inventory_rows(inventory_path(args.artifacts)))
     ranked, per_query = runs(lexical, whole, dense, jieba)
     scored = {name: evaluate(data, run, [1, 3, 8, 10, 24, 50, 100])
               for name, run in ranked.items()}

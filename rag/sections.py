@@ -26,6 +26,17 @@ def parser_signature() -> str:
     return f"{PARSER_VERSION}:markdown-it-py-{version('markdown-it-py')}"
 
 
+def body_blocks(text: str) -> list[tuple[int, int]]:
+    """Top-level CommonMark block ranges, including intervening source whitespace."""
+    offsets = [0, *(m.end() for m in re.finditer(r"\r\n|\r|\n", text)), len(text)]
+    starts = {0, len(text)}
+    for token in _MARKDOWN.parse(text):
+        if token.level == 0 and token.map is not None:
+            starts.add(offsets[token.map[0]])
+    positions = sorted(starts)
+    return list(zip(positions, positions[1:]))
+
+
 def reading_revision(title: str, content: str) -> str:
     """Canonical source content hash; section parser identity travels separately."""
     from rag.corpus import content_revision

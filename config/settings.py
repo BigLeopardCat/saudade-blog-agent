@@ -176,6 +176,8 @@ class Settings(BaseSettings):
     # Visitor query vectors have a bounded memory cache, separate from corpus storage.
     embedding_query_cache: int = 256
     rrf_k: int = 60
+    rag_context_mode: Literal["window", "parent", "neighbors"] = "window"
+    rag_context_tokens: int = Field(default=1024, ge=1, le=16384)
     rag_vector_dsn: str = ""
     rag_vector_collection: str = "blog-public"
 

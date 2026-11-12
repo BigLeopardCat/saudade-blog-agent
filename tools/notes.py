@@ -11,6 +11,7 @@ from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
+from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import candidate_text, search_text
 from tools import base as _base
@@ -284,6 +285,18 @@ def rag_search(
                 search_text(meta, "文章公开范围或版本已变化，索引正在刷新，请稍后重新检索。"),
                 meta={**meta, "reason": "corpus_changed"},
             )
+        if settings.rag_context_mode != "window":
+            from rag.embedding_inputs import InputProfileError
+
+            try:
+                hits = get_index().read_context(hits, mode=settings.rag_context_mode,
+                                               max_tokens=settings.rag_context_tokens)
+                meta["context"] = {"mode": settings.rag_context_mode, "applied": True,
+                                   "target_tokens": settings.rag_context_tokens,
+                                   "preserve_anchor": True}
+            except (InputProfileError, ValueError, KeyError) as error:
+                meta["context"] = {"mode": settings.rag_context_mode, "applied": False,
+                                   "reason": type(error).__name__}
         text = "\n".join(candidate_text(i + 1, hit) for i, hit in enumerate(hits))
         if corpus["stale"]:
             text += (
