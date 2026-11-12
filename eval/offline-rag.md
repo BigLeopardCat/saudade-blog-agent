@@ -74,6 +74,17 @@ python -m eval.prepare_cmrc_spans /tmp/cmrc-dev.json --output /tmp/cmrc-spans
 精确相同的查询向量，只替换查询编码步骤，检索、聚合及位置返回保持原路径。报告独立记录初次
 编码耗时、缓存读取耗时及 `frozen_query_replay`，检索计时排除查询编码，不能当作在线 API 性能。
 
+已有位置报告可再做一次无模型、无数据库的整章范围反事实：
+
+```sh
+python -m eval.section_range_ablation /tmp/cmrc-spans /tmp/cmrc-report.json \
+  --output /tmp/cmrc-section-ablation.json
+```
+
+它不更换命中文章、章节或排名，只把返回窗口扩成同一章节的完整源范围，并同时报告取文字符量。
+这用于辨认窗口截断与章节选择错误；没有模拟工具裁剪、正文读取或最终回答，不能当成等预算收益，
+也不能把窗口跨度未覆盖直接算为 Agent 执行失败。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：

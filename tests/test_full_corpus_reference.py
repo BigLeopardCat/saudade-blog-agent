@@ -85,3 +85,6 @@ def test_native_and_application_lexical_routes_preserve_source_labels(tmp_path, 
     execute(fixture, mode, output, 2, tokenizer)
     result = json.loads(output.read_text())
     assert result["reference"] == result["raw_application"] == result["production"] == ["a"]
+    metadata = json.loads(output.with_suffix(".metadata.json").read_text())
+    assert metadata["backend"]["tokenizer"]["name"] == (
+        "jieba-cut-for-search" if tokenizer == "jieba" else "bilingual-search-v1")

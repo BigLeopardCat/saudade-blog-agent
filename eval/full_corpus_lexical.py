@@ -1,4 +1,4 @@
-"""Full-corpus BM25S reference and application aggregation, with identical features."""
+"""Full-corpus native BM25S controls for application features and Jieba search tokens."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import json
 import os
 import time
 from array import array
+from importlib.metadata import version
 from pathlib import Path
 
 os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
@@ -81,12 +82,15 @@ def execute(dataset, mode, output, limit, tokenizer="application"):
     index = RagIndex(corpus_loader=lambda: [], vector_warmer=lambda _: None)
     index._chunks, index._lexical, index._revision = chunks, adapter, hashes["corpus.jsonl"]
     build_seconds = time.perf_counter() - started
+    backend = backend_info()
+    if tokenizer == "jieba":
+        backend["tokenizer"] = {"name": "jieba-cut-for-search", "jieba": version("jieba")}
     metadata = {"schema_version": 1, "mode": mode, "documents": len(keys),
                 "chunks": len(chunks), "top_k": limit, "input_hashes": hashes,
-                "backend": backend_info(), "build_seconds": build_seconds,
+                "backend": backend, "build_seconds": build_seconds,
                 "tokenizer": tokenizer,
-                "scope": "BM25S public token-ID build; identical application features. "
-                         "Application query scoring/aggregation compared to native scores. "
+                "scope": "BM25S public token-ID build with the declared tokenizer. "
+                         "Raw adapter scoring/aggregation compared to native scores. "
                          "No whole RagIndex refresh or full string-token constructor benchmark.",
                 "reference_query_expansion": False,
                 "application_query_expansion": tokenizer == "application" and expansion_enabled(),
