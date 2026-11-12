@@ -79,7 +79,11 @@ def analyze(report: dict, data: dict, cutoff: int) -> dict:
             "statistics_scope": "Paired bootstrap over queries is descriptive. Shared source "
                 "documents/question families are correlated; not a production SLA or an "
                 "independent benchmark claim. No tuning/resampling in this run.",
-            "generation_evaluated": False, "semantic_judge_calls": 0}
+            "generation_evaluated": False, "semantic_judge_calls": 0,
+            "presentation_budget_applied": False,
+            "scope": "Retriever candidates before tool-result token trimming, live source "
+                     "visibility checks and body reads; not final model-visible evidence "
+                     "or end-to-end Agent task success."}
 
 
 def main():
@@ -93,6 +97,9 @@ def main():
     raw = args.report.read_bytes()
     result = analyze(json.loads(raw), load(args.dataset, args.split), args.cutoff)
     result["source_report_sha256"] = hashlib.sha256(raw).hexdigest()
+    sources = [Path(__file__), Path(__file__).with_name("statistical_metrics.py")]
+    result["analysis_code_sha256"] = hashlib.sha256(
+        b"".join(p.read_bytes() for p in sources)).hexdigest()
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps(result["failure_stage_counts"], ensure_ascii=False))

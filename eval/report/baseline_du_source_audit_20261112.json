@@ -1,0 +1,195 @@
+{
+  "source_report_sha256": "7ed6d99cd43c4e919b18b66e025d3f04d2c976401096fb69abfcfdad1eb4833b",
+  "rows": [
+    {
+      "query_id": "2a353d6822e366d3d5e7238e9951247e",
+      "query": "含娟的成语",
+      "lexical_query_features": [
+        "含娟",
+        "成语",
+        "娟的",
+        "的成"
+      ],
+      "known_relevant": {
+        "1943462501ae4fa0db8cc7ed37ee4f43": 1,
+        "3f0821e442707cdbc356421d06ab0145": 1,
+        "9e8440fcbe1e56596deaa29924016c9a": 1,
+        "f04f7861dfad58760a6a3dcf7ddd0204": 1,
+        "feb90b80e8b61aaea2e5e216bd90e2b2": 1
+      },
+      "arms": {
+        "bm25": {
+          "ranked_ids": [
+            "f02ee105889a2432e1400d1869552521",
+            "3d919743dabbc01d9b2b8eef0e80fdf2",
+            "27afc4a55ab406a03959db7f8f17721f",
+            "68c4cffa524885e9625a6e16f8a2c3e8",
+            "52c8932af1e8ee7c2fd791e3a573b2af",
+            "7f4022b7a9abbff6129325af4313c243",
+            "fc6ee821e4cd0d8d2054800690efbb41",
+            "429d90da09710f485d5127c6722babd9"
+          ],
+          "R@8": 0.0,
+          "nDCG@8": 0.0
+        },
+        "vector": {
+          "ranked_ids": [
+            "feb90b80e8b61aaea2e5e216bd90e2b2",
+            "1943462501ae4fa0db8cc7ed37ee4f43",
+            "f04f7861dfad58760a6a3dcf7ddd0204",
+            "6f3a29b995b6467d6f299db8354a85a7",
+            "3f0821e442707cdbc356421d06ab0145",
+            "9e8440fcbe1e56596deaa29924016c9a",
+            "5cd626bd845958030cc12c1650fc68c2",
+            "fe6b628575caec0a93b72c547689ae8e"
+          ],
+          "R@8": 1.0,
+          "nDCG@8": 0.9747429528567879
+        },
+        "hybrid": {
+          "ranked_ids": [
+            "feb90b80e8b61aaea2e5e216bd90e2b2",
+            "3d919743dabbc01d9b2b8eef0e80fdf2",
+            "7f4022b7a9abbff6129325af4313c243",
+            "fc6ee821e4cd0d8d2054800690efbb41",
+            "5cd626bd845958030cc12c1650fc68c2",
+            "6c359bacf0d29ddbc363b58bbbe05fc2",
+            "61297f5c06017c1ab17b3a148104a1b4",
+            "f02ee105889a2432e1400d1869552521"
+          ],
+          "R@8": 0.2,
+          "nDCG@8": 0.3391602052736161
+        }
+      },
+      "interpretation": "Known-positive rank displacement under equal-weight document RRF, not proof all unjudged lexical candidates are irrelevant."
+    },
+    {
+      "query_id": "649d02b78bd3c6ba5e3ab83e46a07929",
+      "query": "为什么京东商城打不开",
+      "lexical_query_features": [
+        "京东",
+        "商城",
+        "不开",
+        "打不开",
+        "为什",
+        "么京",
+        "东商",
+        "城打",
+        "打不"
+      ],
+      "known_relevant": {
+        "463e7fa88df710958c160ec923c6462f": 1,
+        "517044f477b27e7c693501ab0c11d6e2": 1
+      },
+      "arms": {
+        "bm25": {
+          "ranked_ids": [
+            "b6198858b0f0e23d6cfe7904d26f313e",
+            "11b6719cad0b525bfbac5191209b4e7e",
+            "9039349798720169576dba326968886f",
+            "47adee2baf77f320a49f4cbf9203bf41",
+            "653f92943ce1703dbfc257586fc84123",
+            "a1399e59ef81d9acd333121bb1bf0862",
+            "f0ed6929ddb585f7e865b7485566cd6f",
+            "fae8402f4e9b687a6c274ef642943835"
+          ],
+          "R@8": 0.0,
+          "nDCG@8": 0.0
+        },
+        "vector": {
+          "ranked_ids": [
+            "463e7fa88df710958c160ec923c6462f",
+            "b6198858b0f0e23d6cfe7904d26f313e",
+            "08aa18e9033e38e4b7a823133da620f2",
+            "23eca32f84685048e194b824fc9641eb",
+            "9f1afd813ee9168bb28a9a483c012d70",
+            "4bb60aa3b3a3665743a772651c1fcf0d",
+            "916f2c9dc1ad94657c9fa89e59d7157a",
+            "f0ed6929ddb585f7e865b7485566cd6f"
+          ],
+          "R@8": 0.5,
+          "nDCG@8": 0.6131471927654584
+        },
+        "hybrid": {
+          "ranked_ids": [
+            "b6198858b0f0e23d6cfe7904d26f313e",
+            "11b6719cad0b525bfbac5191209b4e7e",
+            "f0ed6929ddb585f7e865b7485566cd6f",
+            "653f92943ce1703dbfc257586fc84123",
+            "916f2c9dc1ad94657c9fa89e59d7157a",
+            "4bb60aa3b3a3665743a772651c1fcf0d",
+            "fae8402f4e9b687a6c274ef642943835",
+            "23eca32f84685048e194b824fc9641eb"
+          ],
+          "R@8": 0.0,
+          "nDCG@8": 0.0
+        }
+      },
+      "interpretation": "Known-positive rank displacement under equal-weight document RRF, not proof all unjudged lexical candidates are irrelevant."
+    },
+    {
+      "query_id": "2d86d473b928698d91b080fc2121d2d9",
+      "query": "异魔封神棍怎么样",
+      "lexical_query_features": [
+        "异魔封",
+        "神棍",
+        "异魔",
+        "魔封",
+        "封神",
+        "棍怎",
+        "么样"
+      ],
+      "known_relevant": {
+        "305dc2fbc2648795c318ec308640d42f": 1
+      },
+      "arms": {
+        "bm25": {
+          "ranked_ids": [
+            "0ab049245f64dc28e34af04144fea518",
+            "ea2801fd5969923c0aa4ac86c2b73092",
+            "ac6ef0aa286fecf7717515eee1dbea00",
+            "23edb0c0f5c957cbfcd8c259ce58b3ec",
+            "026fc2657fb5c5c93e424fb2d9d073f5",
+            "4704ca71eee7b0af2e22050f2b15687b",
+            "04322e0fb16d09fdc5b4586c911c5d8e",
+            "a86c0e2da490d72b301ba1575201771f"
+          ],
+          "R@8": 0.0,
+          "nDCG@8": 0.0
+        },
+        "vector": {
+          "ranked_ids": [
+            "305dc2fbc2648795c318ec308640d42f",
+            "c8c2f027171efcb39a1825ba4647ef65",
+            "16d1835702482caf4b0c2e775b653ff3",
+            "a7bd0713dcf01e1116f964d21813c295",
+            "449a34c53a67f548070d1af0c315e537",
+            "04322e0fb16d09fdc5b4586c911c5d8e",
+            "7a04aac3a424ab620f8c57f0814a8df1",
+            "0ab049245f64dc28e34af04144fea518"
+          ],
+          "R@8": 1.0,
+          "nDCG@8": 1.0
+        },
+        "hybrid": {
+          "ranked_ids": [
+            "0ab049245f64dc28e34af04144fea518",
+            "04322e0fb16d09fdc5b4586c911c5d8e",
+            "305dc2fbc2648795c318ec308640d42f",
+            "ea2801fd5969923c0aa4ac86c2b73092",
+            "c8c2f027171efcb39a1825ba4647ef65",
+            "ac6ef0aa286fecf7717515eee1dbea00",
+            "16d1835702482caf4b0c2e775b653ff3",
+            "23edb0c0f5c957cbfcd8c259ce58b3ec"
+          ],
+          "R@8": 1.0,
+          "nDCG@8": 0.5
+        }
+      },
+      "interpretation": "Known-positive rank displacement under equal-weight document RRF, not proof all unjudged lexical candidates are irrelevant."
+    }
+  ],
+  "tokenization_observation": "For 含娟的成语 the produced features omit standalone娟. Segmentation/query-feature choice is separate from the BM25S scoring library. No case-specific rule or weight tuning applied.",
+  "model_calls": 0,
+  "semantic_judge_calls": 0
+}
