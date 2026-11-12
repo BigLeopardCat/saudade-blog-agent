@@ -41,8 +41,8 @@ from tools.result import (
 
 logger = logging.getLogger(__name__)
 
-# Public API and retrieval corpus origin; configure blog_api_base for this deployment.
-API_BASE = _settings.blog_api_base
+# A private service address may carry HTTP requests without changing browser origins.
+API_BASE = _settings.blog_internal_api_base or _settings.blog_api_base
 
 # Derive navigation origin from the API origin. Unparseable origins use relative paths.
 def _site_base(api_base: str) -> str:
@@ -50,7 +50,7 @@ def _site_base(api_base: str) -> str:
     return m.group(1).rstrip("/") if m else ""
 
 
-SITE_BASE = _site_base(API_BASE)
+SITE_BASE = _site_base(_settings.blog_api_base)
 
 
 # Reuse the HTTP client with certificate verification enabled; responses enter model context.

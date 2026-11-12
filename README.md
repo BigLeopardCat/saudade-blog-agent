@@ -10,7 +10,7 @@
 - 支持流式回复、任务进度、执行中补充要求、暂停和 checkpoint 接续。
 - 写入前展示确认卡；绑定具体对象和版本，执行账记录结果，未知结果不自动重做。
 - 会话记忆按容量压缩；身份、授权和确认凭据不由摘要决定。
-- 可选混合检索、本地 embedding、管理员定时提醒和只读分析。
+- 可选混合检索、本地 embedding、管理员定时提醒、只读分析、定时公告和已批准的版本绑定变更。
 - 管理员可协作修改文章、选择图库封面、准备 AI 生图；付费生图及结果入库分别确认。
 
 ## 开发起步
@@ -37,6 +37,8 @@ uv run --frozen uvicorn agent.main:app --host 127.0.0.1 --port 8010
 `/ready` 检查依赖就绪，`/version` 返回版本信息。聊天入口由[博客宿主](https://github.com/BigLeopardCat/Saudade-Blog)鉴权代理，不应直接暴露内部 Agent 接口。
 
 生产部署使用[首次安装、升级与回滚指南](docs/deployment.md)和[独立运行配置模板](deploy/agent-runtime.env.example)，不从开发工作树启动服务。
+
+一键新装与可选 Docker Compose 由[博客部署入口](https://github.com/BigLeopardCat/Saudade-Blog/tree/cn_sora_blog/deploy)统一编排；本仓的 `Dockerfile` 只负责固定版本 Agent 镜像。两种部署均使用独立 Agent 数据库，不把运行凭据打进镜像。
 
 ## 文档
 

@@ -159,6 +159,8 @@ class Settings(BaseSettings):
 
     # Public host API used by tools and retrieval.
     blog_api_base: str = "http://127.0.0.1:3000/api/public"
+    # Optional service-network transport; browser destinations still use blog_api_base.
+    blog_internal_api_base: str = ""
 
     # Optional vector retrieval configuration.
     # Changing embedding space requires rebuilding stored vectors.
