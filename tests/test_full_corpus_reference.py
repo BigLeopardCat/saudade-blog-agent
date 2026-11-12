@@ -2,12 +2,33 @@
 
 import hashlib
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+from eval import full_corpus_dense as dense
 from eval.full_corpus_analysis import fusion, read_stage
 from eval.full_corpus_lexical import document_ranks, execute
+
+
+def test_frozen_query_vectors_match_application_whitespace_and_do_not_repeat_model_calls(
+        tmp_path, monkeypatch):
+    sent = []
+    monkeypatch.setattr(dense, "active_profile", lambda: None)
+    monkeypatch.setattr(dense, "space_from_settings", lambda: SimpleNamespace(as_dict=lambda: {}))
+    monkeypatch.setattr(dense, "_embed_texts", lambda texts, _: (
+        sent.extend(texts) or [[1.] + [0.] * 511 for _ in texts]))
+    data = {"hashes": {"source": "fixed"}, "queries": {
+        "q": {"text": " \t实体问题\n "}, "duplicate": {"text": "实体问题"}}}
+    qids, values = dense.query_vectors(data, tmp_path)
+    assert qids == ["q", "duplicate"] and sent == ["实体问题"] and values.shape == (2, 512)
+    dense.query_vectors(data, tmp_path)
+    assert sent == ["实体问题"]
+    with (tmp_path / "queries.npy").open("ab") as stream:
+        stream.write(b"changed")
+    with pytest.raises(ValueError, match="binding changed"):
+        dense.query_vectors(data, tmp_path)
 
 
 def test_document_budget_is_applied_after_chunk_aggregation():

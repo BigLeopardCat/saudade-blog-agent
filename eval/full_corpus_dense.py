@@ -66,16 +66,28 @@ def query_vectors(data, root):
     metadata = {"input_hashes": data["hashes"], "query_ids": qids,
                 "space": space_from_settings().as_dict()}
     if path.exists():
-        if json.loads(metadata_path.read_text()) != metadata:
+        saved = json.loads(metadata_path.read_text())
+        if ({key: saved.get(key) for key in metadata} != metadata or
+                saved.get("vectors_sha256") != hashlib.sha256(path.read_bytes()).hexdigest()):
             raise ValueError("query vector binding changed")
         return qids, np.load(path)
     profile = active_profile()
-    inputs = [query_text(data["queries"][qid]["text"], profile) for qid in qids]
-    values = _embed_texts(inputs, space_from_settings())
+    inputs = [query_text(data["queries"][qid]["text"].strip(), profile) for qid in qids]
+    unique = list(dict.fromkeys(inputs))
+    encoded = _embed_texts(unique, space_from_settings())
+    if len(encoded) != len(unique):
+        raise ValueError("incomplete query embeddings")
+    cached = dict(zip(unique, encoded, strict=True))
+    values = [cached[value] for value in inputs]
     if any(value is None or len(value) != 512 for value in values):
         raise ValueError("incomplete query embeddings")
     vectors = np.asarray(values, dtype="float32")
+    norms = np.linalg.norm(vectors, axis=1)
+    if not np.isfinite(norms).all() or not (norms > 0).all():
+        raise ValueError("nonfinite or zero query embeddings")
     np.save(path, vectors)
+    metadata["vectors_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    metadata["unique_embedding_inputs"] = len(unique)
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     return qids, vectors
 
