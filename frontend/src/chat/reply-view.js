@@ -73,7 +73,7 @@ export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ow
         engine.appendProcessLine(ensureProcessBox(), line);
         state.steps.push({ cls, text });
         refreshCount();
-        scrollToBottom(messages);
+        scrollToBottom(messages, false, true);
         broadcast({ t: 'process', text, cls, roundId });
     };
     const reader = resp.body.getReader();
@@ -116,16 +116,18 @@ export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ow
                 else
                     state.steps.push({ cls: 'work', text: data.text, work: data.work });
                 broadcast({ t: 'process', cls: 'work', text: data.text, work: data.work, roundId });
-                scrollToBottom(messages);
+                scrollToBottom(messages, false, true);
             }
             return;
         }
-        if (handleControl(type, data, div, contentSpan))
+        if (handleControl(type, data, div, contentSpan)) {
+            scrollToBottom(messages, false, true);
             return;
+        }
         state.text += data;
         contentSpan.textContent = state.text;
         tickMouth();
-        scrollToBottom(messages);
+        scrollToBottom(messages, false, !!data);
         broadcast({ t: 'token', text: data, roundId });
     });
     while (true) {

@@ -335,7 +335,7 @@
       askBox.dataset.askState = 'live';   // 可点（见 askSettle/askRollback 的状态语义）
       reportAskStage('card', { id: String(ask.id || '') });
       askArmTimer(ask);                   // 到期自动结算（帧里有 exp 才起，见 askArmTimer）
-      scrollToBottom(messages);
+      scrollToBottom(messages, false, true);
     };
 
     const receive = (data, convId, anchor, verified = false) => {
