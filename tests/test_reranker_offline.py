@@ -157,3 +157,25 @@ def test_scoring_input_missing_answer_is_separate_from_agent_read_range(tmp_path
     assert report["reranker_input"]["per_query"]["q"]["PassageEvidenceCoverage@8"] == 0
     assert report["original"]["locations"]["q"][0]["matches"][0]["end"] == len(text)
     assert report["model_calls"] == 0 and replay_input_audit(report) == 1
+
+
+def test_frozen_locators_rebuild_exact_model_inputs_without_embedding(tmp_path):
+    from eval.reranker_inputs import rebuild
+
+    text = "x " * 700
+    data = {"hashes": {"corpus.jsonl": "fixed"}, "corpus": {"a": {"text": text}},
+            "queries": {"q": {"text": "q"}}}
+    codec = encoder(tmp_path)
+    match = {"section_id": "s1", "offset": 0, "end": len(text)}
+    pair = {"document_id": "a", **codec.encode("q", "", text, match),
+            "retrieval_matches": [match]}
+    row = {"query_id": "q", "candidates": [pair]}
+    report = {"input_hashes": data["hashes"], "input_digests": {"q": input_digest(row)},
+              "input_audits": {"q": [{k: v for k, v in pair.items() if k != "input_ids"}]}}
+    output = tmp_path / "reconstructed.gz"
+    assert rebuild(data, report, codec, output)["candidate_pairs"] == 1
+    with gzip.open(output, "rt") as stream:
+        assert input_digest(json.loads(next(stream))) == report["input_digests"]["q"]
+    report["input_digests"]["q"] = "changed"
+    with pytest.raises(ValueError, match="model input digest changed"):
+        rebuild(data, report, codec, output)

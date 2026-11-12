@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import gzip
-import hashlib
 import json
 import math
 import os
@@ -15,12 +14,7 @@ os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
 
 import numpy as np  # noqa: E402
 
-from eval.reranker_inputs import PAIR_LIMIT, sha256  # noqa: E402
-
-
-def input_digest(row):
-    raw = json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
-    return hashlib.sha256(raw).hexdigest()
+from eval.reranker_inputs import PAIR_LIMIT, input_digest, sha256  # noqa: E402
 
 
 class CrossEncoder:

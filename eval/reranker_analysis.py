@@ -19,8 +19,8 @@ from eval.full_corpus_analysis import fusion  # noqa: E402
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
 from eval.replay_retrieval_ranks import read_frozen  # noqa: E402
-from eval.reranker_inputs import sha256  # noqa: E402
-from eval.reranker_run import cached_rows, input_digest  # noqa: E402
+from eval.reranker_inputs import input_digest, sha256  # noqa: E402
+from eval.reranker_run import cached_rows  # noqa: E402
 from eval.statistical_metrics import paired_delta, paired_outcomes  # noqa: E402
 from rag.embedding_inputs import load_profile  # noqa: E402
 
@@ -72,7 +72,7 @@ def source_views(inputs, scores, ranked):
                 views[name]["locations"][qid] = [{"document_id": did,
                     "matches": by_id[did]["retrieval_matches"]} for did in ids[:8]]
             audits[qid] = [{k: v for k, v in pair.items()
-                            if k not in {"input_ids", "retrieval_matches"}}
+                            if k != "input_ids"}
                            for pair in row["candidates"]]
             performance[qid] = {k: v for k, v in saved.items()
                                 if k not in {"query_id", "scores", "input_sha256"}}
@@ -172,6 +172,7 @@ def main():
         "query_performance": timings, "performance": performance, "plan": plan,
         "candidate_routes": routes,
         "candidate_scores": {q: row["scores"] for q, row in saved_scores.items()},
+        "input_digests": {q: row["input_sha256"] for q, row in saved_scores.items()},
         "failure_stages": stages(data, views, audits), "model_runtime_binding": config,
         "source_artifacts": {name: sha256(getattr(args, name))
                              for name in ("baseline", "inputs", "scores", "plan")},

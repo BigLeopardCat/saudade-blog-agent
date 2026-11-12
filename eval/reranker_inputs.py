@@ -6,6 +6,7 @@ import argparse
 import gzip
 import hashlib
 import json
+import lzma
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +26,11 @@ PAIR_LIMIT = 512
 
 def sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def input_digest(row):
+    raw = json.dumps(row, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 class PairEncoder:
@@ -116,27 +122,74 @@ def prepare(data, summary, lexical, dense, encoder, output):
             "fixed_group_query_ids": frozen["group_query_ids"]}
 
 
+
+def rebuild(data, report, encoder, output):
+    """Recover exact model inputs from public source + frozen locators, without embeddings."""
+    if data["hashes"] != report["input_hashes"]:
+        raise ValueError("frozen source changed before input reconstruction")
+    if data["queries"].keys() != report["input_audits"].keys():
+        raise ValueError("frozen input reconstruction query population changed")
+    count = 0
+    with gzip.open(output, "wt", encoding="utf-8") as stream:
+        for qid in sorted(data["queries"]):
+            candidates = []
+            for item in report["input_audits"][qid]:
+                did, match = item["document_id"], item["anchor"]
+                source = data["corpus"][did]
+                section = next(s["text"] for s in outline(source["text"], source.get("title", ""))
+                               if s["section_id"] == match["section_id"])
+                pair = encoder.encode(data["queries"][qid]["text"], source.get("title", ""),
+                                      section[match["offset"]:match["end"]], match)
+                candidates.append({"document_id": did, **pair,
+                                   "retrieval_matches": item["retrieval_matches"]})
+            row = {"query_id": qid, "candidates": candidates}
+            if input_digest(row) != report["input_digests"][qid]:
+                raise ValueError("reconstructed model input digest changed")
+            stream.write(json.dumps(row) + "\n")
+            count += len(candidates)
+    return {"queries": len(data["queries"]), "candidate_pairs": count,
+            "scope": "Reconstructed every canonical input digest; no embedding/model/SQL calls."}
+
+
+def prepare_from_args(args, data):
+    encoder = PairEncoder(args.tokenizer)
+    if args.frozen_report:
+        with lzma.open(args.frozen_report, "rt", encoding="utf-8") as stream:
+            report = json.load(stream)
+        if sha256(args.tokenizer) != report["plan"]["model"]["tokenizer_sha256"]:
+            raise ValueError("frozen input tokenizer changed")
+        result = rebuild(data, report, encoder, args.output)
+        result["frozen_report_sha256"] = sha256(args.frozen_report)
+        return result
+    lexical, lex_meta = read_rows(args.lexical, data)
+    dense, dense_meta = read_rows(args.dense, data)
+    result = prepare(data, args.baseline, lexical, dense, encoder, args.output)
+    result.update(baseline_sha256=sha256(args.baseline),
+                  source_stages={"lexical": lex_meta, "dense": dense_meta})
+    return result
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("dataset", type=Path)
-    parser.add_argument("--baseline", type=Path, required=True)
-    parser.add_argument("--lexical", type=Path, required=True)
-    parser.add_argument("--dense", type=Path, required=True)
+    parser.add_argument("--baseline", type=Path)
+    parser.add_argument("--lexical", type=Path)
+    parser.add_argument("--dense", type=Path)
+    parser.add_argument("--frozen-report", type=Path)
     parser.add_argument("--tokenizer", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     if args.output.exists():
         parser.error("do not overwrite frozen inputs")
+    if (args.frozen_report and any((args.baseline, args.lexical, args.dense))
+            or not args.frozen_report and not all((args.baseline, args.lexical, args.dense))):
+        parser.error("use a frozen report OR baseline + lexical + dense locators")
     data = load(args.dataset, "dev", max_docs=100001)
-    lexical, lex_meta = read_rows(args.lexical, data)
-    dense, dense_meta = read_rows(args.dense, data)
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    result = prepare(data, args.baseline, lexical, dense, PairEncoder(args.tokenizer), args.output)
+    result = prepare_from_args(args, data)
     result.update(input_hashes=data["hashes"], input_policy=INPUT_POLICY,
                   tokenizer_sha256=sha256(args.tokenizer), pair_limit=PAIR_LIMIT,
-                  output_sha256=sha256(args.output), baseline_sha256=sha256(args.baseline),
-                  source_stages={"lexical": lex_meta, "dense": dense_meta},
-                  model_calls=0, semantic_judge_calls=0)
+                  output_sha256=sha256(args.output), model_calls=0, semantic_judge_calls=0)
     args.output.with_suffix(".metadata.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({k: v for k, v in result.items() if not isinstance(v, dict)}), flush=True)
 
