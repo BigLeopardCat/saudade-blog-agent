@@ -89,6 +89,9 @@ python -m eval.section_range_ablation /tmp/cmrc-spans /tmp/cmrc-report.json \
 这用于辨认窗口截断与章节选择错误；没有模拟工具裁剪、正文读取或最终回答，不能当成等预算收益，
 也不能把窗口跨度未覆盖直接算为 Agent 执行失败。
 
+句段子片与父段/邻近读取的固定融合、等框架预算对照见
+[句段与上下文实验](chunk-context-comparison.md)，其中分开报告文档召回、可见证据与读文成本。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：

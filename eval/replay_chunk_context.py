@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import lzma
 from pathlib import Path
 
 from langchain_core.messages import ToolMessage
@@ -78,7 +79,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("report", type=Path)
     args = parser.parse_args()
-    with gzip.open(args.report, "rt", encoding="utf-8") as stream:
+    opener = lzma.open if args.report.suffix == ".xz" else gzip.open
+    with opener(args.report, "rt", encoding="utf-8") as stream:
         report = json.load(stream)
     print(json.dumps(replay(report), ensure_ascii=False))
 

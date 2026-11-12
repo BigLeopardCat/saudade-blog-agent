@@ -1,6 +1,10 @@
 """Frozen response lengths can verify estimated costs without redistributing public source text."""
 
 import copy
+import hashlib
+import json
+import lzma
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -36,3 +40,18 @@ def test_observed_frame_length_corruption_is_detected():
     report["du"]["contexts"]["old_vector/parent"]["per_query_frame_lengths"]["q"][0] += 100
     with pytest.raises(ValueError, match="frozen metric mismatch"):
         replay(report)
+
+
+def test_published_chunk_context_metrics_replay_without_sources_or_models():
+    directory = Path(__file__).resolve().parents[1] / "eval/report"
+    ledger = json.loads((directory / "baseline_chunk_context_operations_20261112.json").read_text())
+    for name, expected in ledger["published_artifacts"].items():
+        value = (directory / name).read_bytes()
+        assert len(value) == expected["bytes"]
+        assert hashlib.sha256(value).hexdigest() == expected["sha256"]
+    with lzma.open(directory / "baseline_chunk_context_20261112.json.xz", "rt") as stream:
+        result = replay(json.load(stream))
+    assert result["datasets"] == {
+        "du": {"queries": 2000, "ranking_arms": 5, "reading_policies": 15},
+        "cmrc": {"queries": 3219, "ranking_arms": 5, "reading_policies": 15}}
+    assert result["model_calls"] == result["database_calls"] == 0
