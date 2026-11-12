@@ -11,6 +11,12 @@
 5. 在产品应用中显式装配目录；人设只影响表达，不能决定工具权限。
 6. 加入领域单测、真实 ToolNode/middleware 准入测试及完整任务评测。
 
+实现入口以 `agent/products/blog/application.py` 和 `agent/composition.py` 为准。
+模型可见工具通过产品的 `ToolCatalog` 装配；确认后的执行器在
+`agent/domains/registry.py` 登记并核对 `handles` 与 executor，不能只增加发现描述。
+领域目录、工具 scope、准备参数和实际执行必须一起更新。准备入口的 `schedule` 只适用于
+已支持的冻结操作，不能将任意新工具自动变成后台写入，见[调度范围](scheduling.md)。
+
 工具结果使用不可变 `ToolResult`，单向映射为框架 `ToolMessage`。正文供模型阅读，artifact 保存供程序消费的结构化事实。客户端操作使用类型化状态与执行账引用，不从自然语言推断完成。
 
 ## 依赖与加载

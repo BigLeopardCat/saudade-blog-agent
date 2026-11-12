@@ -30,8 +30,11 @@ flowchart LR
 | --- | --- |
 | `agent/` | 应用、运行时、领域、后台计划和服务接口 |
 | `agent/runtime/` | 框架接线、执行、会话、预算和上下文 middleware |
+| `agent/api/` | 请求校验、服务身份、HTTP/SSE 路由与请求生命周期 |
 | `agent/domains/` | 领域能力登记、读工具和操作准备 |
 | `agent/products/` | 博客人设及产品适配 |
+| `agent/scheduling/` | DBOS 持久队列、后台执行、通知与保留策略 |
+| `agent/contracts/` | 客户端操作与跨层数据对象 |
 | `tools/` | 博客 API、设备与业务接口适配 |
 | `config/` | 配置、日志及能力描述 |
 | `models/` | 模型提供商适配和调用边界 |
@@ -39,6 +42,25 @@ flowchart LR
 | `utils/` | 共享协议、追踪和基础设施辅助 |
 | `frontend/` | 看板娘与聊天组件，博客通过固定提交及子树哈希引入 |
 | `eval/`、`tests/` | 真实模型评测、质量工具和确定性回归 |
+| `deploy/`、`scripts/` | 运行配置、可选服务模板和固定版本发布工具 |
+
+## 入口与依赖方向
+
+`agent/main.py` 只创建 FastAPI 与路由；`agent/api/lifecycle.py` 在启动时创建资源，
+`agent/composition.py` 显式装配 `BlogApplication`、checkpoint、调度客户端和模型传输。
+`AgentRuntime` 接收产品应用，`FrameworkExecution` 接入标准 `create_agent` 与父审批图；
+模型和工具循环由框架推进，提交节点保存完成的 transcript。模块导入不启动 Worker 或模型预热。
+
+产品配置依赖共享运行时和领域；`agent/runtime/` 与 `agent/domains/` 不导入
+`agent/products/`。领域的准备、目标校验和执行接入放在对应能力包，HTTP 通道与结果对象
+由 `tools/` 复用。`agent/domains/registry.py` 登记受控执行器，产品目录登记模型可发现能力；
+两者职责不同，工具目录不能替代签名执行白名单。
+
+当前结构按入口、执行、领域、产品和基础设施分层，适合这套单业务应用。
+领域中的 `preparation`、`targets`、`transactions` 分别对应预览、目标绑定和确认后执行，
+不为减少文件数合并这些边界。共享运行时的细分依据状态、资源和恢复职责；
+只在实际出现循环依赖、重复状态或独立分发需求时调整，不再增加总调度层或插件容器。
+依赖边界由 `tests/runtime/test_application_boundaries.py` 验证，目录说明只维护到包与入口级。
 
 ## 状态与职责边界
 

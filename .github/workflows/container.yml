@@ -1,0 +1,29 @@
+name: Agent container
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: agent-container-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Build pinned runtime
+        run: docker build --build-arg REVISION="$GITHUB_SHA" -t saudade-agent:test .
+      - name: Verify import without network or credentials
+        run: |
+          test "$(docker image inspect saudade-agent:test --format '{{.Config.User}}')" = 10002:10002
+          docker run --rm --network none --entrypoint python saudade-agent:test -c \
+            'from agent.main import app; assert app.state.runtime is None'
+          docker run --rm --network none --entrypoint sh saudade-agent:test -c \
+            'test ! -e /app/.env && test ! -d /app/.git && test -w /var/lib/saudade-agent'

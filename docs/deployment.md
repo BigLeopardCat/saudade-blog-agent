@@ -1,6 +1,6 @@
 # 生产部署
 
-本文支持 Linux + systemd 的博客集成部署，参考环境为 Ubuntu 24.04、Python 3.12 和 PostgreSQL 16。需要 Git、uv、curl、OpenSSL 和 util-linux 的 `flock`。浏览器通过 [Saudade Blog](https://github.com/BigLeopardCat/Saudade-Blog) 登录和转发聊天；业务 API 也由宿主提供。先按博客的[部署说明](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/docs/deployment-and-ops.md)部署 PostgreSQL 版宿主，不使用旧 MySQL 安装器或未支持的容器草案。
+Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 PostgreSQL 16，需要 Git、uv、curl、OpenSSL 和 util-linux 的 `flock`。浏览器经 [Saudade Blog](https://github.com/BigLeopardCat/Saudade-Blog) 登录和转发聊天；业务 API 由宿主提供。全新安装也可使用宿主的[一键部署与 Docker Compose](https://github.com/BigLeopardCat/Saudade-Blog/tree/cn_sora_blog/deploy)，下文保留现有 systemd 服务的安装、独立升级与回滚流程。
 
 首次安装与升级是不同操作。下文初始化命令只用于新安装；已有站点不要重建数据库、覆盖配置或重新初始化 `current`。
 
@@ -18,6 +18,14 @@
 | 私有状态与缓存 | `/var/lib/saudade-agent`、`/var/cache/saudade-agent` |
 
 生产由 systemd `EnvironmentFile` 注入配置，并设置 `SAUDADE_IGNORE_ENV_FILE=1`。不把生产文件链接到开发 checkout，不用 `source` 执行配置，不输出密钥。完整可调参数以 [Settings](../config/settings.py) 为准；[生产模板](../deploy/agent-runtime.env.example) 只列首次安装的主要设置。
+
+## Docker 镜像
+
+本仓根目录的 `Dockerfile` 构建 Python 3.12、锁定生产依赖的 Agent 镜像，以 UID/GID `10002:10002` 运行，入口 `agent.main:app`，内部端口 8010。完整提交通过构建参数 `REVISION` 写入 `DEPLOY_SHA`，供 `/version` 核对；凭据和 `.env` 不进入镜像。容器 CI 检查无网络、无凭据时的导入和镜像用户。
+
+完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
+
+容器网络中配置 `BLOG_INTERNAL_API_BASE=http://backend:3000/api/public` 供服务器请求，`BLOG_API_BASE=https://blog.example.com/api/public` 仍决定公开导航。已有原生部署不填写内部覆盖值时维持原行为。只读根文件系统、运行凭据和卷由宿主编排负责，不在镜像启动时执行全量升级或覆盖配置。
 
 ## 首次安装
 
@@ -81,6 +89,9 @@ OpenCode 示例使用 Go 端点；其他供应商配置对应前缀和 `LLM_PROV
 
 ### 4. 准备版本、安装服务并发布
 
+容器部署可另设 `BLOG_INTERNAL_API_BASE=http://backend:3000/api/public`，只替换工具及语料的
+HTTP 传输地址；`BLOG_API_BASE` 继续保存公开来源，浏览器不会跳转到容器服务名。
+
 先准备依赖和只读目录，不启动服务：
 
 ```sh
@@ -134,7 +145,7 @@ curl --fail http://127.0.0.1:8010/version
 `/version.sha` 必须等于 `AGENT_REV`。内部 8010、数据库和 embedding 端口不暴露公网；公网经过博客鉴权代理，不转发任意内部 Agent 路由。nginx 的 SSE 使用博客模板，关闭缓冲并保留足够读取超时。
 
 模型无数据超时 `LLM_TIMEOUT` 默认 45 秒，应短于 Agent 和宿主的流空闲超时（默认 120 秒），
-留出返回错误及释放连接的时间。持续有数据的长回复不受这个空闲时限截断；超时不自动重试。
+留出返回错误及释放连接的时间。持续有数据的长回复不受这个空闲时限截断；框架最多重试一次尚未产生输出的超时或可重试 429/5xx，受剩余期限、Retry-After 和任务预算限制，见[会话预算](conversation-memory.md#预算)。
 超时变短只限制异常等待，不证明供应商可用性或正常请求延迟改善。
 
 ### 5. 验证功能和可选能力
@@ -146,7 +157,7 @@ curl --fail http://127.0.0.1:8010/version
 | 后台计划 | 按[调度部署](scheduling.md#部署)安装独立 DBOS Worker，确认宿主迁移及授权接口，发布加 `DEPLOY_SCHEDULER=1` |
 | 本地 embedding / 混合检索 | 按[embedding 输入](embedding-inputs.md)及固定资产清单准备模型、tokenizer 和服务；服务验证后再启用 `RAG_HYBRID_ENABLED` |
 | trace 保留 | 先以运行账号、相同配置执行 `python -m eval.trace_retention` 查看候选，再启用 `saudade-agent-maintenance.timer` |
-| 设备、语音 | 默认关闭，配置对应后端、凭据和网络后再启用 |
+| 设备 | 默认关闭，配置对应后端、委托和网络后再启用；不随博客一键安装 MQTT 平台 |
 
 配置 `EMBEDDING_PROFILE` 后，发布脚本自动安装锁定 tokenizer 依赖并在激活前校验。混合检索需实际查询后检查 `/health` 中 `rag_state=active`、`vector_missing=0`；启动成功不代表索引已完成。
 
