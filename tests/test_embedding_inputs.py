@@ -18,6 +18,31 @@ from rag.chunks import split
 from rag.corpus import content_revision
 
 
+def test_wordpiece_continuations_are_rechecked_without_losing_source_text():
+    unknown = "[UNK]"
+    vocab = {word: i for i, word in enumerate(
+        ["[UNK]", "[BOS]", "[EOS]", "aaa", "##bbb", "##ccc", "b", "##b", "c", "##c"])}
+    tokenizer = Tokenizer(models.WordPiece(vocab, unk_token=unknown))
+    tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer.post_processor = processors.TemplateProcessing(
+        single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)])
+    spec = inputs.ProfileSpec(schema_version=1, model_revision="test", tokenizer_file="test",
+        tokenizer_sha256="0" * 64, max_tokens=16, pooling="cls", normalization="L2")
+    policy = inputs.InputProfile(spec, "test", tokenizer)
+    body = " ".join(["aaabbbccc"] * 15)
+    encoded = tokenizer.encode(body, add_special_tokens=False)
+    encoded.truncate(14, stride=3)
+    assert any(policy.count(body[w.offsets[0][0]:w.offsets[-1][1]]) > 16
+               for w in encoded.overflowing)
+    spans = inputs._ranges(policy, "", "", body)
+    covered = set()
+    for start, end, text in spans:
+        assert text == body[start:end]
+        assert policy.count(inputs.document_text("", text, policy)) <= 16
+        covered.update(range(start, end))
+    assert covered == set(range(len(body)))
+
+
 @pytest.fixture
 def profile(tmp_path, monkeypatch):
     unknown_symbol = "[UNK]"

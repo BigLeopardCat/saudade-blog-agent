@@ -7,6 +7,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import nullcontext
 from importlib.metadata import version
 from pathlib import Path
 
@@ -33,6 +34,25 @@ from rag.search import (  # noqa: E402
     synonyms,
 )
 from rag.vector_index import VectorStore  # noqa: E402
+
+
+def frozen_query_context(data, path, dimension):
+    from array import array
+    from unittest.mock import patch
+
+    from eval.full_corpus_dense import query_vectors
+
+    path.mkdir(parents=True, exist_ok=True)
+    start = time.perf_counter()
+    qids, values = query_vectors(data, path, dimension)
+    lookup = {data["queries"][qid]["text"].strip(): array("f", value)
+              for qid, value in zip(qids, values, strict=True)}
+    metadata = json.loads((path / "queries.metadata.json").read_text())
+    metadata.update(cache_read_or_build_seconds=time.perf_counter() - start,
+        query_embedding_calls_during_retrieval=0,
+        scope="Offline frozen query vectors; production retrieval/aggregation unchanged. "
+              "Retrieval latency excludes query encoding. Not a provider availability test.")
+    return patch("rag.search.embed_query", side_effect=lambda text: lookup[text.strip()]), metadata
 
 
 def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
@@ -157,6 +177,8 @@ def main(argv=None) -> int:
     parser.add_argument("--candidates", type=int,
                         help="per-retriever candidate pool; defaults to the production policy")
     parser.add_argument("--k", type=int, nargs="+", help="metric cutoffs, independent of pool size")
+    parser.add_argument("--query-cache", type=Path,
+                        help="explicit offline frozen-query cache; excludes encoding from latency")
     args = parser.parse_args(argv)
     candidates = args.candidates if args.candidates is not None else candidate_limit(args.top_k)
     cutoffs = args.k or [k for k in (1, 3, DEFAULT_TOP_K) if k <= args.top_k]
@@ -183,10 +205,18 @@ def main(argv=None) -> int:
     sources = [*sorted((root / "rag").glob("*.py")), Path(__file__),
                root / "eval/offline_rag_eval.py", root / "eval/rag_dataset.py",
                root / "eval/retrieval_evidence.py"]
+    if args.query_cache is not None:
+        sources += sorted((root / "eval").glob("full_corpus_*.py"))
     code_hash = hashlib.sha256(b"".join(p.read_bytes() for p in sources)).hexdigest()
     data = load(args.dataset, args.split)
-    report = execute(data, args.collection, candidates, args.expected_dim,
-                     top_k=args.top_k, cutoffs=cutoffs)
+    context, frozen = (frozen_query_context(data, args.query_cache, args.expected_dim)
+                      if args.query_cache is not None else (nullcontext(), None))
+    with context:
+        report = execute(data, args.collection, candidates, args.expected_dim,
+                         top_k=args.top_k, cutoffs=cutoffs)
+    if frozen is not None:
+        report["frozen_query_replay"] = frozen
+        report["latency_scope"] += "; frozen query vectors, encoding excluded"
     report["split"] = args.split
     report["configuration_mode"] = ("research_override" if candidates != candidate_limit(args.top_k)
         or args.top_k != DEFAULT_TOP_K or chunking.MAX_CHARS != production_chunk_chars

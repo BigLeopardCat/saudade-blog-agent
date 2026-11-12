@@ -32,3 +32,26 @@ def test_preparation_preserves_selected_judgments_and_rejects_changed_source(tmp
     with pytest.raises(ValueError, match="changed pinned"):
         prepare.prepare(source, tmp_path / "bad", seed="fixed", queries=1, background=1, pool=2)
     assert not (tmp_path / "bad").exists()
+
+
+def test_full_corpus_keeps_unjudged_distractors_and_every_original_grade(tmp_path, monkeypatch):
+    source = tmp_path / "source"
+    source.mkdir()
+    raw = source / "identity"
+    raw.write_bytes(b"pinned full source")
+    monkeypatch.setattr(prepare, "FILES", {raw.name: hashlib.sha256(raw.read_bytes()).hexdigest()})
+    records = {
+        "data": [{"query-id": "q", "corpus-id": "a", "score": 2},
+                 {"query-id": "q", "corpus-id": "b", "score": 0}],
+        "queries": [{"_id": "q", "text": "question"}],
+        "corpus": [{"_id": "a", "text": "positive"}, {"_id": "b", "text": "negative"},
+                   {"_id": "c", "text": "unjudged" * 10000}],
+    }
+    monkeypatch.setattr(prepare, "rows", lambda p: iter(records[p.parent.name]))
+    monkeypatch.setattr(prepare, "select", lambda *a: pytest.fail("must not sample corpus"))
+    result = prepare.prepare(source, tmp_path / "full", seed="fixed", queries=1,
+                             background=1, pool=1, full=True)
+    assert result["documents"] == 3
+    manifest = json.loads((tmp_path / "full/manifest.json").read_text())
+    assert manifest["selection"] == {"seed": "fixed", "queries": 1, "full_corpus": True}
+    assert (tmp_path / "full/qrels/dev.tsv").read_text().endswith("q\ta\t2\nq\tb\t0\n")

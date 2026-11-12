@@ -24,6 +24,7 @@ Thumbs.db
 .DS_Store
 eval/report/*
 !eval/report/baseline_*.json
+!eval/report/baseline_*.gz
 
 eval/data/
 eval/cache/

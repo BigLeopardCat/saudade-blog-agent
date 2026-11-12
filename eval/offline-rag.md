@@ -6,6 +6,89 @@ ir-measures 指标。它检查候选与排序；最终回答、引用和权限�
 这些成绩不等于模型最终可见的证据覆盖率，也不等于端到端任务成功率。
 已完成的固定数据三路对照、失败归因和复现命令见[中文检索实验报告](chinese-retrieval-comparison.md)。
 
+## 全库与成熟实现对照
+
+已完成的 100,001 篇源文档、2,000 查询与 CMRC 已知来源诊断见
+[全库实验报告](full-corpus-retrieval-comparison.md)。报告保留全库与实际可索引数差异、
+各阶段失败、候选池归因和成熟实现控制；博客不参与本轮调参。
+
+`prepare_duretrieval --full-corpus --queries 2000` 保留固定源的全部 100,001 篇文档与
+2,000 个原始 dev 查询，不添加按 BM25 选取的干扰项，不筛短文。它仍不是独立业务盲测。
+全库入口显式提高加载上限，不放宽普通评测默认的 10,000 篇保护。
+
+以下命令用于独立环境。先按下文准备固定原始 parquet，将本地 embedding 配置放入环境变量
+`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_PROFILE`、`EMBEDDING_API_KEY`，并设置
+独立可丢弃库的 `SAUDADE_RAG_EVAL_DSN`。模型服务的 tokenizer 参数必须与 profile 一致。
+
+```sh
+python -m eval.prepare_duretrieval --source-dir /path/to/pinned-source \
+  --output /tmp/du-full --full-corpus --queries 2000
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_cache /tmp/du-full \
+  --output /tmp/du-artifacts --collection eval-du-full
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode chunk --output /tmp/du-artifacts/lexical-chunk.jsonl
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode document --output /tmp/du-artifacts/lexical-document.jsonl
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode document --tokenizer jieba --output /tmp/du-artifacts/lexical-jieba.jsonl
+uv run --frozen --with scikit-learn==1.7.2 --with joblib==1.5.3 --with threadpoolctl==3.6.0 \
+  python -m eval.full_corpus_dense /tmp/du-full \
+  --artifacts /tmp/du-artifacts --collection eval-du-full
+python -m eval.full_corpus_analysis /tmp/du-full \
+  --artifacts /tmp/du-artifacts --output /tmp/du-full-report.json
+```
+
+数据库先由迁移账号执行 `rag.manage setup`。这些入口不连接默认部署库，缓存与查询只接受显式
+评测 DSN 和 `eval-` collection。cache 入口只填充离线评测缓存，分批提交已完成输入；全部齐备后
+才使用生产 repository 发布完整成员快照，不改变生产 VectorStore 的事务语义。
+
+BM25 对照复用同一词法特征、参数和 BM25S，使用其公开 Tokenized 接口控制大语料内存。
+原生评分与应用评分/文档聚合逐题核对，额外记录默认领域别名扩展的影响。整篇索引与切片索引
+的差异同时包含词频统计、切片和聚合，不能归因成单个因素。此入口不测试完整 RagIndex
+刷新或保留字符串 token 的构造器内存。
+另以 Jieba 原生搜索分词（过滤纯空白、保留其余 token）建立整篇 BM25S 基线，帮助识别项目
+自定义特征的影响；不带项目的归一化、词形还原、bigram 回退或别名扩展，不宣称官方基准协议。
+
+向量对照用同一份持久化输入向量，在 scikit-learn 精确余弦与生产 PostgreSQL 查询间比较；
+记录数值误差和近似并列次序差异，不把 Q8 与原模型的差异混为数据库误差。另比较先截取
+100 个切片再去重与先按文章聚合再取 100 篇，区分切片预算和文章预算。
+
+分析阶段冻结 24/50/100 三种每路候选窗口，并核对生产 RRF 与直接调用 LangChain RRF 的一致性。
+源码级 qrels 只标注文章，不能用这些分数验收章节证据。博客夹具不作为本轮调参或业务发布门槛，
+回答生成及 LLM Judge 均不在这组实验范围内。
+
+DuRetrieval 不含答案位置标签。另可用固定 CMRC2018 dev 的原始答案跨度诊断已知段落内的定位：
+
+```sh
+curl --fail --location \
+  https://raw.githubusercontent.com/ymcui/cmrc2018/c0eb1b6ba219847457e6af3180da722bbeb656af/squad-style-data/cmrc2018_dev.json \
+  --output /tmp/cmrc-dev.json
+python -m eval.prepare_cmrc_spans /tmp/cmrc-dev.json --output /tmp/cmrc-spans
+# 对 /tmp/cmrc-spans 运行下文已有 model_retrieval_run 三路入口。
+```
+
+准备器验证文件 SHA，保留全部 848 个源段落和 3,219 个问题，使用原始目标段落作为 scope。
+三个原始答案标注中，逐条校验坐标；原坐标错误时只恢复精确且唯一的原文位置。缺失/歧义标注
+记入 manifest，仍保留问题，不计成正确定位。原始答案的替代标注共用一个 evidence group。
+这是小规模已知来源定位诊断，既不是全库检索成绩，也不能证明答案跨度之外的上下文充分、
+整章证据完整、正文已读或回答正确。语料许可和论文引用随 manifest 固定，不再分发正文。
+
+对照或位置消融可给 `model_retrieval_run` 增加 `--query-cache /tmp/query-vectors`。
+该离线模式一次批量编码去重后的查询并保存浮点向量，绑定数据/模型空间和文件 SHA；复跑时复用
+精确相同的查询向量，只替换查询编码步骤，检索、聚合及位置返回保持原路径。报告独立记录初次
+编码耗时、缓存读取耗时及 `frozen_query_replay`，检索计时排除查询编码，不能当作在线 API 性能。
+
+已有位置报告可再做一次无模型、无数据库的整章范围反事实：
+
+```sh
+python -m eval.section_range_ablation /tmp/cmrc-spans /tmp/cmrc-report.json \
+  --output /tmp/cmrc-section-ablation.json
+```
+
+它不更换命中文章、章节或排名，只把返回窗口扩成同一章节的完整源范围，并同时报告取文字符量。
+这用于辨认窗口截断与章节选择错误；没有模拟工具裁剪、正文读取或最终回答，不能当成等预算收益，
+也不能把窗口跨度未覆盖直接算为 Agent 执行失败。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：

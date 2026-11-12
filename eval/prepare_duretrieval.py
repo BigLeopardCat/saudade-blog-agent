@@ -9,7 +9,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from eval.prepare_t2_subset import select
+from eval.prepare_t2_subset import priority, rows, select
 from eval.rag_dataset import load
 
 SOURCE = "https://huggingface.co/datasets/mteb/DuRetrieval"
@@ -24,8 +24,25 @@ FILES = {
 }
 
 
+def full_corpus(source: Path, seed: str, count: int) -> dict:
+    judgments = {}
+    for row in rows(source / "data/dev-00000-of-00001.parquet"):
+        judgments.setdefault(row["query-id"], {})[row["corpus-id"]] = row["score"]
+    eligible = [qid for qid, scores in judgments.items() if any(v > 0 for v in scores.values())]
+    if count > len(eligible):
+        raise ValueError("not enough judged queries")
+    selected = set(sorted(eligible, key=lambda q: priority(seed, "query", q))[:count])
+    return {
+        "corpus": {r["_id"]: r for r in rows(source / "corpus/dev-00000-of-00001.parquet")},
+        "queries": {r["_id"]: r for r in rows(source / "queries/dev-00000-of-00001.parquet")
+                    if r["_id"] in selected},
+        "qrels": {qid: judgments[qid] for qid in selected},
+        "hard": {}, "background": [],
+    }
+
+
 def prepare(source: Path, output: Path, *, seed: str, queries: int,
-            background: int, pool: int) -> dict:
+            background: int, pool: int, full: bool = False) -> dict:
     if output.exists():
         raise FileExistsError("choose a new output directory")
     if min(queries, background, pool) < 1 or background > pool:
@@ -34,7 +51,8 @@ def prepare(source: Path, output: Path, *, seed: str, queries: int,
         with (source / name).open("rb") as stream:
             if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
                 raise ValueError("changed pinned DuRetrieval source: " + name)
-    data = select(source, seed, queries, background, pool)
+    data = full_corpus(source, seed, queries) if full else select(
+        source, seed, queries, background, pool)
     manifest = {
         "schema_version": 1, "name": "DuRetrieval fixed Chinese comparison subset",
         "source": SOURCE, "revision": REVISION,
@@ -52,6 +70,15 @@ def prepare(source: Path, output: Path, *, seed: str, queries: int,
                        "is conditioned on BM25. No independent no-answer labels. "
                        "Possible embedding training exposure to this public dataset.",
     }
+    if full:
+        manifest.update(
+            name="DuRetrieval full pinned Chinese corpus",
+            scope="Complete source dev corpus; explicitly selected original dev queries. "
+                  "Not a blind production holdout. No length filtering or truncation.",
+            selection={"seed": seed, "queries": queries, "full_corpus": True},
+            limitations="Unjudged is not negative. Possible embedding training exposure. "
+                        "No independent multi-evidence or no-answer labels.",
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=output.parent, prefix=".du-") as temporary:
         stage = Path(temporary) / "dataset"
@@ -67,7 +94,7 @@ def prepare(source: Path, output: Path, *, seed: str, queries: int,
                     stream.write(f"{qid}\t{did}\t{grade}\n")
         (stage / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2)
                                              + "\n", encoding="utf-8")
-        checked = load(stage, "dev")
+        checked = load(stage, "dev", max_docs=len(data["corpus"]))
         shutil.move(stage, output)
     return {"documents": len(checked["corpus"]), "queries": len(checked["queries"]),
             "input_hashes": checked["hashes"]}
@@ -81,9 +108,11 @@ def main():
     parser.add_argument("--queries", type=int, default=200)
     parser.add_argument("--background", type=int, default=8192)
     parser.add_argument("--pool", type=int, default=10000)
+    parser.add_argument("--full-corpus", action="store_true")
     args = parser.parse_args()
     print(json.dumps(prepare(args.source_dir, args.output, seed=args.seed,
-                             queries=args.queries, background=args.background, pool=args.pool)))
+                             queries=args.queries, background=args.background, pool=args.pool,
+                             full=args.full_corpus)))
 
 
 if __name__ == "__main__":

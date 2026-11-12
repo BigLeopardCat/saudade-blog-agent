@@ -1,0 +1,1256 @@
+{
+  "input_hashes": {
+    "manifest.json": "b2b0008232a2c5fe7d340b6f319a1cf9b74fd3547493b3b9f17e7d59d7d5e49b",
+    "corpus.jsonl": "55a16d1e90bfe23a7a70f14e8a629f7b9e6e59c054dfc937abaf57810a20aa95",
+    "queries.jsonl": "9b07821765c56e6e1f3d2feaab4e546675d4338604bb400f4774c8d50cfe996e",
+    "qrels/dev.tsv": "9afacb5d3087f8c5e149e94b4168fd47d658bb32e2ec3f948340b7e329ffd64c"
+  },
+  "queries": 3219,
+  "cutoff": 8,
+  "arms": {
+    "bm25": {
+      "original": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          }
+        }
+      },
+      "same_returned_sections_expanded": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 0.9996893445169307,
+            "queries": 3219
+          }
+        }
+      },
+      "original_mean_fetchable_chars": 510.2413793103448,
+      "expanded_mean_fetchable_chars": 510.2413793103448,
+      "range_misses_recovered_by_same_section": 0,
+      "recovered_query_ids": []
+    },
+    "vector": {
+      "original": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 0.9450139794967382,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        }
+      },
+      "same_returned_sections_expanded": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        }
+      },
+      "original_mean_fetchable_chars": 423.9916123019571,
+      "expanded_mean_fetchable_chars": 510.399192295744,
+      "range_misses_recovered_by_same_section": 177,
+      "recovered_query_ids": [
+        "DEV_1004_QUERY_3",
+        "DEV_1004_QUERY_4",
+        "DEV_1011_QUERY_2",
+        "DEV_1011_QUERY_3",
+        "DEV_1017_QUERY_2",
+        "DEV_1018_QUERY_1",
+        "DEV_1041_QUERY_2",
+        "DEV_107_QUERY_0",
+        "DEV_107_QUERY_1",
+        "DEV_1092_QUERY_0",
+        "DEV_1103_QUERY_0",
+        "DEV_1104_QUERY_3",
+        "DEV_1105_QUERY_2",
+        "DEV_1114_QUERY_4",
+        "DEV_1115_QUERY_0",
+        "DEV_1115_QUERY_2",
+        "DEV_1116_QUERY_0",
+        "DEV_1139_QUERY_3",
+        "DEV_114_QUERY_4",
+        "DEV_1150_QUERY_1",
+        "DEV_1160_QUERY_1",
+        "DEV_1163_QUERY_2",
+        "DEV_1170_QUERY_0",
+        "DEV_136_QUERY_0",
+        "DEV_13_QUERY_1",
+        "DEV_13_QUERY_2",
+        "DEV_140_QUERY_0",
+        "DEV_140_QUERY_1",
+        "DEV_141_QUERY_0",
+        "DEV_1521_QUERY_0",
+        "DEV_1521_QUERY_3",
+        "DEV_154_QUERY_0",
+        "DEV_154_QUERY_1",
+        "DEV_158_QUERY_0",
+        "DEV_1617_QUERY_1",
+        "DEV_1617_QUERY_2",
+        "DEV_1618_QUERY_2",
+        "DEV_1628_QUERY_2",
+        "DEV_1629_QUERY_2",
+        "DEV_1635_QUERY_3",
+        "DEV_1635_QUERY_4",
+        "DEV_1702_QUERY_3",
+        "DEV_170_QUERY_2",
+        "DEV_1772_QUERY_0",
+        "DEV_178_QUERY_1",
+        "DEV_180_QUERY_0",
+        "DEV_1838_QUERY_1",
+        "DEV_1838_QUERY_2",
+        "DEV_185_QUERY_0",
+        "DEV_1878_QUERY_2",
+        "DEV_190_QUERY_0",
+        "DEV_190_QUERY_1",
+        "DEV_1910_QUERY_2",
+        "DEV_1915_QUERY_2",
+        "DEV_191_QUERY_2",
+        "DEV_191_QUERY_3",
+        "DEV_1945_QUERY_1",
+        "DEV_217_QUERY_2",
+        "DEV_221_QUERY_1",
+        "DEV_260_QUERY_2",
+        "DEV_263_QUERY_0",
+        "DEV_263_QUERY_2",
+        "DEV_279_QUERY_2",
+        "DEV_284_QUERY_0",
+        "DEV_288_QUERY_0",
+        "DEV_288_QUERY_1",
+        "DEV_289_QUERY_2",
+        "DEV_294_QUERY_2",
+        "DEV_302_QUERY_3",
+        "DEV_304_QUERY_1",
+        "DEV_306_QUERY_0",
+        "DEV_306_QUERY_1",
+        "DEV_306_QUERY_2",
+        "DEV_306_QUERY_3",
+        "DEV_30_QUERY_1",
+        "DEV_30_QUERY_3",
+        "DEV_311_QUERY_0",
+        "DEV_312_QUERY_2",
+        "DEV_312_QUERY_3",
+        "DEV_315_QUERY_0",
+        "DEV_326_QUERY_3",
+        "DEV_336_QUERY_1",
+        "DEV_336_QUERY_2",
+        "DEV_336_QUERY_3",
+        "DEV_345_QUERY_4",
+        "DEV_354_QUERY_1",
+        "DEV_358_QUERY_2",
+        "DEV_376_QUERY_0",
+        "DEV_376_QUERY_1",
+        "DEV_377_QUERY_1",
+        "DEV_379_QUERY_0",
+        "DEV_379_QUERY_2",
+        "DEV_37_QUERY_3",
+        "DEV_386_QUERY_0",
+        "DEV_386_QUERY_2",
+        "DEV_392_QUERY_0",
+        "DEV_392_QUERY_1",
+        "DEV_392_QUERY_2",
+        "DEV_392_QUERY_3",
+        "DEV_401_QUERY_0",
+        "DEV_410_QUERY_0",
+        "DEV_410_QUERY_1",
+        "DEV_421_QUERY_0",
+        "DEV_421_QUERY_3",
+        "DEV_445_QUERY_1",
+        "DEV_445_QUERY_3",
+        "DEV_447_QUERY_1",
+        "DEV_448_QUERY_0",
+        "DEV_462_QUERY_2",
+        "DEV_462_QUERY_3",
+        "DEV_46_QUERY_2",
+        "DEV_483_QUERY_0",
+        "DEV_483_QUERY_2",
+        "DEV_483_QUERY_3",
+        "DEV_488_QUERY_2",
+        "DEV_48_QUERY_0",
+        "DEV_48_QUERY_1",
+        "DEV_48_QUERY_2",
+        "DEV_490_QUERY_3",
+        "DEV_491_QUERY_1",
+        "DEV_496_QUERY_2",
+        "DEV_496_QUERY_3",
+        "DEV_503_QUERY_2",
+        "DEV_503_QUERY_3",
+        "DEV_505_QUERY_2",
+        "DEV_511_QUERY_0",
+        "DEV_511_QUERY_1",
+        "DEV_511_QUERY_2",
+        "DEV_514_QUERY_1",
+        "DEV_514_QUERY_3",
+        "DEV_522_QUERY_2",
+        "DEV_536_QUERY_3",
+        "DEV_536_QUERY_4",
+        "DEV_539_QUERY_0",
+        "DEV_539_QUERY_4",
+        "DEV_53_QUERY_4",
+        "DEV_541_QUERY_4",
+        "DEV_550_QUERY_3",
+        "DEV_550_QUERY_4",
+        "DEV_553_QUERY_4",
+        "DEV_554_QUERY_1",
+        "DEV_554_QUERY_2",
+        "DEV_554_QUERY_3",
+        "DEV_55_QUERY_0",
+        "DEV_55_QUERY_1",
+        "DEV_55_QUERY_2",
+        "DEV_566_QUERY_2",
+        "DEV_566_QUERY_3",
+        "DEV_567_QUERY_4",
+        "DEV_56_QUERY_0",
+        "DEV_56_QUERY_3",
+        "DEV_56_QUERY_4",
+        "DEV_573_QUERY_2",
+        "DEV_573_QUERY_3",
+        "DEV_574_QUERY_1",
+        "DEV_577_QUERY_2",
+        "DEV_579_QUERY_2",
+        "DEV_584_QUERY_4",
+        "DEV_58_QUERY_0",
+        "DEV_594_QUERY_3",
+        "DEV_606_QUERY_1",
+        "DEV_611_QUERY_2",
+        "DEV_622_QUERY_1",
+        "DEV_622_QUERY_3",
+        "DEV_622_QUERY_4",
+        "DEV_628_QUERY_4",
+        "DEV_632_QUERY_0",
+        "DEV_635_QUERY_0",
+        "DEV_636_QUERY_0",
+        "DEV_639_QUERY_3",
+        "DEV_63_QUERY_2",
+        "DEV_7_QUERY_2",
+        "DEV_80_QUERY_0",
+        "DEV_85_QUERY_0",
+        "DEV_85_QUERY_1",
+        "DEV_85_QUERY_2",
+        "DEV_93_QUERY_0"
+      ]
+    },
+    "hybrid": {
+      "original": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        }
+      },
+      "same_returned_sections_expanded": {
+        "all": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        },
+        "category:known_source_answer_span": {
+          "AllPassageEvidence@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "AllPassageEvidence@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "EvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "PassageEvidenceCoverage@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "R@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "RR@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "Success@8": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@1": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@3": {
+            "value": 1.0,
+            "queries": 3219
+          },
+          "nDCG@8": {
+            "value": 1.0,
+            "queries": 3219
+          }
+        }
+      },
+      "original_mean_fetchable_chars": 510.399192295744,
+      "expanded_mean_fetchable_chars": 510.399192295744,
+      "range_misses_recovered_by_same_section": 0,
+      "recovered_query_ids": []
+    }
+  },
+  "model_calls": 0,
+  "database_calls": 0,
+  "scope": "Counterfactual source ranges with identical document/section choices. More fetchable text, not equal token budget, actual body read or answer correctness. Known source scope is not global retrieval. Do not count range misses as failed Agent tasks.",
+  "source_sha256": "ed3044f419c53bdfecbb0b7cb29c88643aa537175314a9fcf7c36d1411ce532e"
+}
