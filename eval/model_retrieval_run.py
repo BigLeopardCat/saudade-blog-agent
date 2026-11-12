@@ -82,7 +82,10 @@ def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
         dense, reason, missing = index._vector_ranked(query["text"], candidates, **options)
         vector_done = time.perf_counter()
         if reason not in (None, "no_vector_hits") or missing or lexical is None:
-            raise ValueError("query retrieval failed; do not silently score a degraded model")
+            raise ValueError(f"query retrieval failed: query={qid}, reason={reason}, "
+                             f"missing={missing}, "
+                             f"lexical_available={lexical is not None}; "
+                             "do not silently score a degraded model")
         fused = vectors.rrf_fuse(lexical, dense, settings.rrf_k, top_k)
         end = time.perf_counter()
         query_seconds[qid] = end - start

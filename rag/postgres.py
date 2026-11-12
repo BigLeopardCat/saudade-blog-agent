@@ -200,15 +200,17 @@ class PostgresRepository:
                     raise StaleSnapshot("Published vector corpus changed")
                 if snapshot.count == 0:
                     return {}
-                distance = embeddings.c.embedding.cosine_distance(query)
+                # The FK points to one embedding PK. Keep that lookup scalar so
+                # cold collection estimates cannot turn it into a quadratic join.
+                distance = select(embeddings.c.embedding.cosine_distance(query)).where(
+                    embeddings.c.collection == members.c.collection,
+                    embeddings.c.key == members.c.key,
+                    embeddings.c.dimension == members.c.dimension,
+                ).correlate(members).scalar_subquery()
                 candidates = select(
                     members.c.ordinal, members.c.document_type, members.c.document_id,
                     distance.label("distance"),
-                ).select_from(members.join(embeddings, and_(
-                    members.c.collection == embeddings.c.collection,
-                    members.c.key == embeddings.c.key,
-                    members.c.dimension == embeddings.c.dimension,
-                ))).where(members.c.collection == self.collection,
+                ).select_from(members).where(members.c.collection == self.collection,
                           members.c.dimension == snapshot.dimension,
                           and_(members.c.document_type == "note",
                                members.c.document_id == str(article_id))
