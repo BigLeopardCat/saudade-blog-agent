@@ -79,7 +79,8 @@ def merge_match(target: dict, incoming: dict) -> None:
 
 
 def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
-              retriever: str = "bm25", query_terms=(), limit: int | None = None) -> list[dict]:
+              retriever: str = "bm25", query_terms=(), limit: int | None = None,
+              include_excerpts: bool = True) -> list[dict]:
     by_doc: dict[tuple[str, int], dict] = {}
     for i, score in sorted(scores.items(), key=lambda item: -item[1]):
         chunk = chunks[i]
@@ -118,5 +119,6 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
     for row in ranked:
         for match in row["matches"]:
             index = match.pop("_source_index")
-            _annotate(chunks[index], match, scores[index], retriever, query_terms)
+            if include_excerpts:
+                _annotate(chunks[index], match, scores[index], retriever, query_terms)
     return ranked

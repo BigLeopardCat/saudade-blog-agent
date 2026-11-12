@@ -153,6 +153,23 @@ token 窗口，只修改本次独立编码结果；共享 Tokenizer 不启用全
 
 ## 增量缓存与切换
 
+profile 的 `chunking_strategy` 可选值为 `token-window-v2`（默认）和
+`sentence-paragraph-v1`。后者在既有结构块内复用 LangChain 递归切分器，按匹配 tokenizer
+计长，优先段落、换行与中英文句子边界；完整输入仍须符合预算。无法可靠恢复重复文本坐标、
+续词重新编码超限或无法覆盖全文时，使用已校验的 token 窗口兜底，不静默丢弃原文。
+这不是基于另一个模型计算相似度的语义切分。
+
+省略该字段保留原有空间签名；显式切换句段策略会生成独立空间，须重新准备索引。
+评测入口可在验证权重声明、tokenizer、前缀、归一化等编码配置完全一致后，按完整输入复用
+独立评测 collection 的向量；这不代表生产自动完成跨策略迁移。
+
+正文读取范围与 embedding 输入预算独立。`RAG_CONTEXT_MODE=window` 保留原始定位；
+`parent` 扩展到同节父段，`neighbors` 进一步纳入相邻块，均保留原命中坐标。
+`RAG_CONTEXT_TOKENS=1024` 是扩展的 tokenizer 计量目标；原始词法锚点更大时不缩掉锚点，
+实际读取仍受单次字符上限与 Agent 结果预算控制。此计量不是聊天模型的实际计费 token。
+扩展只使用已核实公开版本的索引快照，不新增正文 HTTP 请求；版本变化或 profile 不可用时
+保留原定位，并在工具内容中明确 `context.applied=false`。
+
 空间签名除模型/端点/请求维度外，增加 profile 签名。签名包含模型权重/量化声明、
 tokenizer SHA、Tokenizers 版本、special-token 规则、查询/文档前缀、预算、池化、
 归一化及窗口版本。分块库版本、分隔符、字符预算和重叠另纳入空间签名。

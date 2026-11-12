@@ -2,6 +2,7 @@
 
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
@@ -65,6 +66,30 @@ def coverage(result):
     assert value == result.meta["retrieval"]
     assert value["scope"] == "public_article_body_index" and value["limit"] == 8
     return value
+
+
+@pytest.mark.parametrize("changed_snapshot", [False, True])
+def test_context_expansion_uses_verified_snapshot_without_extra_http(
+        retrieval, monkeypatch, changed_snapshot):
+    index, requests = retrieval
+    hit = index._lexical_ranked("needle", 8)[0]
+    hit["matches"] = [{"section_id": "s1", "offset": 0, "end": 6}]
+    monkeypatch.setattr(search, "search", lambda *_, **__: [hit])
+    monkeypatch.setattr(search, "active_profile", lambda: SimpleNamespace(count=len))
+    monkeypatch.setattr(settings, "rag_context_mode", "parent")
+    if changed_snapshot:
+        monkeypatch.setattr(index, "_revision", "different-snapshot")
+    result = notes.rag_search.invoke({"query": "needle"})
+    assert len(requests) == 1 and result.kind == "ok"
+    assert "read_window" not in hit["matches"][0]
+    header = json.loads(str(result).partition("\n")[0])
+    assert header["context"]["applied"] is not changed_snapshot
+    if changed_snapshot:
+        assert "read_window" not in result.data[0]["matches"][0]
+    else:
+        match = result.data[0]["matches"][0]
+        assert match["end"] == 6 and match["read_window"]["end"] == 15
+        assert "index_range=[0:6] offset=0 max_chars=15" in str(result)
 
 
 @pytest.mark.parametrize(

@@ -39,6 +39,14 @@ def test_document_budget_is_applied_after_chunk_aggregation():
     assert document_ranks(np.array([0., -.1, 0.]), np.arange(3), 3, 3) == []
 
 
+def test_reference_locators_skip_nonpositive_sections_and_preserve_source_id_gaps():
+    chunks = [{"type": "note", "id": 2, "title": "T", "section": sid,
+               "section_id": sid, "start": 0, "end": 10} for sid in ["s1", "s2"]]
+    assert dense.reference_locations(np.array([.9, 0.]), np.array([0, 0]), [0],
+        ["indexed"], chunks, ["unindexed", "indexed"], 1) == [{"document_id": "indexed",
+            "matches": [{"section_id": "s1", "offset": 0, "end": 10}]}]
+
+
 def test_length_strata_use_positive_labels_and_keep_the_original_query_population():
     data = {"corpus": {"long": {"text": "x" * 2000}, "short": {"text": "short"}},
             "queries": {"a": {}, "b": {}},

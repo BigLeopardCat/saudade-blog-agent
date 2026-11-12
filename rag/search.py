@@ -17,10 +17,10 @@ from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.chunks import split as split_chunks
 from rag.corpus import corpus_revision
 from rag.corpus import fetch as fetch_corpus
-from rag.embedding_inputs import InputProfileError, vector_chunks
+from rag.embedding_inputs import InputProfileError, active_profile, vector_chunks
 from rag.lexical import LexicalIndex, backend_info
 from rag.ranking import documents as rank_documents
-from rag.sections import reading_revision
+from rag.sections import outline, reading_revision
 from rag.tokenization import query_features, tokenize
 from rag.vector_index import (
     chunk_text,
@@ -225,6 +225,31 @@ class RagIndex:
         """Return the currently published public document snapshot."""
         with self._lock:
             return list(self._docs)
+
+    def read_context(self, hits, *, mode="parent", max_tokens=1024):
+        """Expand only locators tied to this complete snapshot, without another source fetch."""
+        from rag.context_windows import expand_context
+
+        profile = active_profile()
+        if profile is None:
+            raise ValueError("context expansion requires a pinned tokenizer profile")
+        wanted = {(hit["type"], hit["id"]) for hit in hits}
+        with self._lock:
+            revision = self._revision
+            sources = {(row["type"], row["id"]): row for row in self._docs
+                       if (row["type"], row["id"]) in wanted}
+        sections = {}
+        for hit in hits:
+            identity = hit["type"], hit["id"]
+            source = sources.get(identity)
+            if (source is None or hit.get("corpus_revision") != revision
+                    or hit.get("document_revision") != reading_revision(
+                        source["title"], source["content"])):
+                raise ValueError("context source snapshot changed")
+            sections[identity] = {section["section_id"]: section["text"] for section in
+                                  outline(source["content"], source["title"])}
+        return expand_context(hits, lambda hit, sid: sections[(hit["type"], hit["id"])][sid],
+                              profile, mode=mode, max_tokens=max_tokens)
 
     def vocabulary(self) -> frozenset[str]:
         """Read the vocabulary of the currently published lexical snapshot."""

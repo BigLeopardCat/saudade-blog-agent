@@ -18,7 +18,8 @@ from rag.chunks import split
 from rag.corpus import content_revision
 
 
-def test_wordpiece_continuations_are_rechecked_without_losing_source_text():
+@pytest.mark.parametrize("strategy", ["token-window-v2", "sentence-paragraph-v1"])
+def test_wordpiece_continuations_are_rechecked_without_losing_source_text(strategy):
     unknown = "[UNK]"
     vocab = {word: i for i, word in enumerate(
         ["[UNK]", "[BOS]", "[EOS]", "aaa", "##bbb", "##ccc", "b", "##b", "c", "##c"])}
@@ -27,7 +28,8 @@ def test_wordpiece_continuations_are_rechecked_without_losing_source_text():
     tokenizer.post_processor = processors.TemplateProcessing(
         single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)])
     spec = inputs.ProfileSpec(schema_version=1, model_revision="test", tokenizer_file="test",
-        tokenizer_sha256="0" * 64, max_tokens=16, pooling="cls", normalization="L2")
+        tokenizer_sha256="0" * 64, max_tokens=16, pooling="cls", normalization="L2",
+        chunking_strategy=strategy)
     policy = inputs.InputProfile(spec, "test", tokenizer)
     body = " ".join(["aaabbbccc"] * 15)
     encoded = tokenizer.encode(body, add_special_tokens=False)
@@ -86,6 +88,30 @@ def change_profile(profile, monkeypatch, **changes):
     target.write_text(json.dumps(value))
     monkeypatch.setattr(settings, "embedding_profile", str(target))
     return value
+
+
+def test_sentence_policy_preserves_paragraphs_offsets_and_full_input_budget(profile, monkeypatch):
+    change_profile(profile, monkeypatch, chunking_strategy="sentence-paragraph-v1")
+    policy = inputs.active_profile()
+    body = ("甲乙丙丁戊己庚辛壬癸。" * 2 + "\r\n\r\n") * 8
+    spans = inputs._ranges(policy, "标题", "", body)
+    assert len(spans) > 1
+    covered = set()
+    for start, end, text in spans:
+        assert text == body[start:end] and text.endswith("\r\n\r\n")
+        assert policy.count(inputs.document_text("标题", text, policy)) <= 64
+        covered.update(range(start, end))
+    assert covered == set(range(len(body)))
+
+
+def test_legacy_profile_namespace_stays_stable_and_sentence_policy_is_distinct(profile):
+    _, spec = profile
+    old = inputs.ProfileSpec(**spec)
+    explicit = inputs.ProfileSpec(**{**spec, "chunking_strategy": "token-window-v2"})
+    semantic = inputs.ProfileSpec(**{**spec, "chunking_strategy": "sentence-paragraph-v1"})
+    assert inputs.signature_payload(old) == inputs.signature_payload(explicit)
+    assert "chunking_strategy" not in json.loads(inputs.signature_payload(old))
+    assert inputs.signature_payload(old) != inputs.signature_payload(semantic)
 
 
 def sdk(monkeypatch):

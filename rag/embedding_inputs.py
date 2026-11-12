@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import unicodedata
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -11,10 +12,13 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any, Literal
 
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from pydantic import BaseModel, ConfigDict, Field
 
 from config import settings
 from rag.chunks import INDEX_VERSION, OVERLAP
+
+logger = logging.getLogger(__name__)
 
 
 class InputProfileError(ValueError):
@@ -35,6 +39,7 @@ class ProfileSpec(BaseModel):
     pooling: str = Field(min_length=1)
     normalization: str = Field(min_length=1)
     unicode_normalization: Literal["none", "NFC"] = "none"
+    chunking_strategy: Literal["token-window-v2", "sentence-paragraph-v1"] = "token-window-v2"
 
 
 @dataclass(frozen=True)
@@ -62,9 +67,12 @@ def signature_payload(spec: ProfileSpec) -> bytes:
     identity = spec.model_dump(exclude={"tokenizer_file"})
     if spec.unicode_normalization == "none":
         identity.pop("unicode_normalization")
+    if spec.chunking_strategy == "token-window-v2":
+        identity.pop("chunking_strategy")
     identity.update(
         tokenizers_version=version("tokenizers"),
-        splitter="tokenizers-offset-window-v2",
+        splitter=("tokenizers-offset-window-v2" if spec.chunking_strategy == "token-window-v2"
+                  else "langchain-source-sentence-paragraph-v1"),
         chunking=INDEX_VERSION,
     )
     return json.dumps(identity, sort_keys=True).encode()
@@ -127,7 +135,39 @@ def _ranges(profile: InputProfile, title: str, heading: str, body: str) -> tuple
     budget = profile.spec.max_tokens - profile.count(document_text(title, heading, profile))
     if budget <= 0:
         raise InputProfileError("embedding metadata leaves no room for source text")
+    if profile.spec.chunking_strategy == "sentence-paragraph-v1":
+        return _sentence_windows(profile, title, heading, body, budget)
     return _source_windows(profile, title, heading, body, budget)
+
+
+def _sentence_windows(profile, title, heading, body, budget):
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=budget, chunk_overlap=min(OVERLAP, budget // 4),
+        separators=["\r\n\r\n", "\n\n", "\r\n", "\n", "。", "！", "？",
+                    ". ", "! ", "? ", "；", " ", ""],
+        length_function=lambda text: len(profile.tokenizer.encode(
+            text, add_special_tokens=False).ids),
+        keep_separator="end", strip_whitespace=False, add_start_index=True)
+    spans, previous_end = [], 0
+    for document in splitter.create_documents([body]):
+        start = document.metadata["start_index"]
+        end = start + len(document.page_content)
+        if start < 0 or start > previous_end or body[start:end] != document.page_content:
+            # LangChain start-index recovery uses character overlap even with a
+            # token length function. Never accept a gap from an ambiguous repeat.
+            logger.debug("Sentence source-offset fallback, chars=%d", len(body))
+            return _source_windows(profile, title, heading, body, budget)
+        text = heading + document.page_content
+        if profile.count(document_text(title, text, profile)) <= profile.spec.max_tokens:
+            spans.append((start, end, text))
+        else:
+            spans.extend((start + low, start + high, value) for low, high, value in
+                         _source_windows(profile, title, heading, document.page_content, budget))
+        previous_end = end
+    if previous_end != len(body):
+        logger.debug("Sentence complete-coverage fallback, chars=%d", len(body))
+        return _source_windows(profile, title, heading, body, budget)
+    return tuple(spans)
 
 
 def _source_windows(profile, title, heading, body, budget):
