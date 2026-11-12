@@ -24,10 +24,14 @@ def input_digest(row):
 
 
 class CrossEncoder:
-    def __init__(self, model, threads=2):
+    def __init__(self, model, threads=2, *, bounded_memory=False):
         import onnxruntime as ort
 
         options = ort.SessionOptions()
+        if bounded_memory:
+            options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            options.enable_cpu_mem_arena = False
+            options.enable_mem_pattern = False
         options.intra_op_num_threads = threads
         options.inter_op_num_threads = 1
         options.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -144,8 +148,15 @@ def main():
     started = time.monotonic()
     model = CrossEncoder(args.model, args.threads)
     loaded = time.monotonic() - started
+    with gzip.open(args.inputs, "rt") as stream:
+        sample = json.loads(next(stream))["candidates"][:args.batch_size]
+    warming = time.monotonic()
+    _, warmup_padded = model.score(sample)
+    warmup_seconds = time.monotonic() - warming
     result = run(model, args.inputs, args.output, batch_size=args.batch_size, limit=args.limit)
-    result.update(model_load_seconds=loaded, output_sha256=sha256(args.output),
+    result.update(model_load_seconds=loaded, warmup_seconds=warmup_seconds,
+                  warmup_pairs=len(sample), warmup_padded_tokens=warmup_padded,
+                  output_sha256=sha256(args.output),
                   scope="Pretokenized query-by-query CPU replay; not online end-to-end latency.",
                   cloud_calls=0, semantic_judge_calls=0)
     args.output.with_suffix(".progress.json").write_text(json.dumps(result, indent=2) + "\n")
