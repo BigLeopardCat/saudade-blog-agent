@@ -233,7 +233,7 @@
           div.appendChild(label);
           div.appendChild(content);
           messages.appendChild(div);
-          engine.scrollToBottom(messages);
+          engine.scrollToBottom(messages, false, true);
         }
       }
     });

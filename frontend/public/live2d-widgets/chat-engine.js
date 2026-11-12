@@ -37,37 +37,31 @@
                   newMsgNote: document.getElementById('chat-new-msg-note') };
 
       let userAtBottom = true;
-      let newMsgPending = false;
       let selfScroll = false;
-      const setTop = (el, v) => { selfScroll = true; el.scrollTop = v; };
+      let interaction = 0;
       const newMsgNote = ctx.dom.newMsgNote;
-      const showNewMsgNote = () => {
-        if (newMsgPending) return;
-        newMsgPending = true;
-        if (newMsgNote) newMsgNote.classList.add('active');
+      const setUnread = active => newMsgNote?.classList.toggle('active', active);
+      const atBottom = () => messages.scrollHeight - messages.scrollTop - messages.clientHeight <= 60;
+      const setTop = (el, value) => {
+        const top = Math.max(0, Math.min(value, el.scrollHeight - el.clientHeight));
+        if (Math.abs(el.scrollTop - top) > 1) { selfScroll = true; el.scrollTop = top; }
       };
-      const hideNewMsgNote = () => {
-        if (!newMsgPending) return;
-        newMsgPending = false;
-        if (newMsgNote) newMsgNote.classList.remove('active');
+      const messageTail = () => {
+        const rows = messages.querySelectorAll('.chat-msg');
+        const last = rows[rows.length - 1];
+        return JSON.stringify([rows.length, last?.dataset.mtype,
+          last?.querySelector('.msg-text')?.textContent?.replace(/\s+/g, ' ').trim(),
+          last?.querySelectorAll('img').length]);
       };
-      if (newMsgNote) {
-        newMsgNote.addEventListener('click', () => scrollToBottom(messages, true));
-      }
-      try {
-        messages.addEventListener('scroll', () => {
-          // 自己招来的那一跳不代表主人离开了底部（见 selfScroll 的注释）
-          if (selfScroll) { selfScroll = false; return; }
-          userAtBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 60;
-          if (userAtBottom) hideNewMsgNote();
-        }, { passive: true });
-        // 真人手势一到就作废那张「身份证」：万一某次程序化写入没招来 scroll 事件
-        // （值被夹成原值就没有事件），身份证会挂在那儿把**下一枚真事件**吃掉一次。
-        // 手势清票把那个窗口压到两次事件之间，而且清票后紧接着就是真事件。
-        ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'].forEach((t) => {
-          messages.addEventListener(t, () => { selfScroll = false; }, { passive: true });
-        });
-      } catch(e) {/* ignore */}
+      if (newMsgNote) newMsgNote.addEventListener('click', () => scrollToBottom(messages, true));
+      messages.addEventListener('scroll', () => {
+        if (selfScroll) { selfScroll = false; return; }
+        userAtBottom = atBottom();
+        if (userAtBottom) setUnread(false);
+      }, { passive: true });
+      ['wheel', 'touchstart', 'touchmove', 'keydown', 'pointerdown'].forEach(type => {
+        messages.addEventListener(type, () => { selfScroll = false; ++interaction; }, { passive: true });
+      });
       // The host registers one shared image viewer for messages, cards and previews.
       const waifuChat = document.getElementById('waifu-chat');
       if (waifuChat) {
@@ -85,41 +79,39 @@
           });
         } catch(e) {/* ignore */}
       }
-      // 可靠滚动到底部（等待布局完成后执行）：force=true 无条件回底并收起指示条；
-      // 默认语义尊重用户位置——在底部时跟随，在历史区时转为"有新消息"提示
-      const scrollToBottom = (el, force) => {
+      // Layout changes may follow the reader, but only incoming content marks unread.
+      const scrollToBottom = (el, force, contentChanged = false) => {
+        const intent = interaction;
+        if (force) { userAtBottom = true; setUnread(false); }
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          if (force && intent !== interaction) return;
+          if (!userAtBottom) {
+            if (contentChanged && !atBottom()) setUnread(true);
+            return;
+          }
+          setUnread(false);
+          setTop(el, el.scrollHeight);
+        }));
+      };
+      let layoutPending = false;
+      const pin = () => {
+        if (layoutPending) return;
+        layoutPending = true;
         requestAnimationFrame(() => {
-          requestAnimationFrame(() => {
-            if (!force && !userAtBottom) { showNewMsgNote(); return; }
-            hideNewMsgNote();
-            setTop(el, el.scrollHeight);
-          });
+          layoutPending = false;
+          if (!messages.clientHeight) return;
+          if (!userAtBottom && atBottom()) userAtBottom = true;
+          if (!userAtBottom) return;
+          setUnread(false);
+          setTop(messages, messages.scrollHeight);
         });
       };
-      try {
-        if (typeof ResizeObserver !== 'undefined' && messages) {
-          let pinnedHeight = 0; // 上一次钉底时的内容高度：用来判「内容真长高了没有」
-          const pin = () => {
-            const h = messages.scrollHeight;
-            if (!userAtBottom) {
-              if (h > pinnedHeight) showNewMsgNote();
-              pinnedHeight = h;
-              return;
-            }
-            pinnedHeight = h;
-            hideNewMsgNote();
-            setTop(messages, h);
-          };
-          // ① 容器本身：覆盖 hidden→visible 首帧这类"容器自己变了"的情况
-          new ResizeObserver(pin).observe(messages);
-          messages.addEventListener('load', pin, true);
-          messages.addEventListener('error', pin, true);   // 图挂了占位塌陷，同样要重算
-          if (typeof MutationObserver !== 'undefined') {
-            new MutationObserver(() => requestAnimationFrame(pin))
-              .observe(messages, { childList: true, subtree: true });
-          }
-        }
-      } catch(e) {/* ignore */}
+      if (typeof ResizeObserver !== 'undefined') new ResizeObserver(pin).observe(messages);
+      messages.addEventListener('load', pin, true);
+      messages.addEventListener('error', pin, true);
+      if (typeof MutationObserver !== 'undefined') {
+        new MutationObserver(pin).observe(messages, { childList: true, subtree: true, characterData: true });
+      }
       // 执行过程框偏好：默认展开；用户主动收起过一次 → 保持收起（social UI 惯例）
       const getCollapsePref = () => {
         try { return localStorage.getItem('chat_process_collapsed') === '1'; } catch(e) { return false; }
@@ -224,6 +216,7 @@
           if (id === null) localStorage.removeItem(k);
           else localStorage.setItem(k, String(id));
         } catch (e) {}
+        if (changed) { userAtBottom = true; selfScroll = false; setUnread(false); }
         if (changed && ctx.state.ui && typeof ctx.state.ui.onConvChange === 'function') {
           try { ctx.state.ui.onConvChange(id); } catch (e) {}
         }
@@ -509,7 +502,7 @@
                 h.contentSpan.classList.add('msg-streaming');
               }
               h.contentSpan.textContent += m.text || '';
-              scrollToBottom(messages);
+              scrollToBottom(messages, false, !!m.text);
             } else if (m.t === 'text_reset') {
               if (h.finished) return;
               h.contentSpan.textContent = '';
@@ -520,6 +513,7 @@
                 h.el.insertBefore(h.processBox, h.contentSpan);
               }
               restoreProcessLine(h.processBox, m);
+              scrollToBottom(messages, false, true);
               const cnt = h.processBox.querySelector('.agent-process-count');
               if (cnt) cnt.textContent = '';
             } else if (m.t === 'reset') {
@@ -775,6 +769,7 @@
       // 增量渲染：只追加缺失条目、不重绘已有（替代 messages.innerHTML='' 全量重建）。
       // 索引 byMid（已收尾元素带 data-mid）；在途轮元素（无 mid）经内容收养原位转正。
       const reconcileDOM = () => {
+        const previousTail = messageTail();
         const byMid = new Map();
         for (const child of messages.children) {
           if (child.dataset && child.dataset.mid) byMid.set(child.dataset.mid, child);
@@ -948,7 +943,7 @@
         if (ctx.state.ui && typeof ctx.state.ui.onFailedResync === 'function') {
           try { ctx.state.ui.onFailedResync(); } catch (e) {}
         }
-        scrollToBottom(messages);
+        scrollToBottom(messages, false, previousTail !== messageTail());
       };
       // 消息气泡工厂：DOM 创建 + dataset（mid/mtype/mtext 供 reconcile 索引与收养）
       // + 持久化（saveHistory 值变更检测）。调用方负责 items push。
@@ -1005,7 +1000,7 @@
         if (box) div.insertBefore(box, content);
         messages.appendChild(div);
         patchDivider(div, item);
-        scrollToBottom(messages);
+        scrollToBottom(messages, false, true);
         if (item.type === 'agent') {
           try {
             if (typeof window.__setMouthOpen === 'function') {

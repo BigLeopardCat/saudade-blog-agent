@@ -1,3 +1,4 @@
+import { assertChatScroll } from './chat-scroll.browser.mjs';
 // Real-browser checks. No model, production API, or Live2D vendor required.
 // PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to existing local installs.
 import assert from 'node:assert/strict';
@@ -383,6 +384,8 @@ try {
     assert.ok(bounds.history.right <= bounds.composer.left + 1, JSON.stringify(bounds));
     assert.ok(bounds.messages.width >= 150, JSON.stringify(bounds));
   };
+  await assertChatScroll({page,reset,passed});
+  if (!process.argv.includes('--scroll-only')) {
   await reset();
   assert.equal(await page.locator('#chat-send').isDisabled(), true);
   assert.equal(await page.locator('#chat-empty').isVisible(), true);
@@ -1495,6 +1498,8 @@ try {
   assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.resume_task,failedTask);
   passed('repeated provider failures keep one pause card and successful resume clears it');
 
+  }
+  assert.deepEqual(errors, []);
   console.log(JSON.stringify({ passed: checks, screenshots: output, requests: requests.length }, null, 2));
 } catch (error) {
   const diagnostics = {error:String(error),pages:[],requests:requests.filter(r=>r.path==='/api/chat/stream').slice(-6).map(r=>({
