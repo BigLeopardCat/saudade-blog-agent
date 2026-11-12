@@ -53,6 +53,22 @@ BM25 对照复用同一词法特征、参数和 BM25S，使用其公开 Tokenize
 源码级 qrels 只标注文章，不能用这些分数验收章节证据。博客夹具不作为本轮调参或业务发布门槛，
 回答生成及 LLM Judge 均不在这组实验范围内。
 
+DuRetrieval 不含答案位置标签。另可用固定 CMRC2018 dev 的原始答案跨度诊断已知段落内的定位：
+
+```sh
+curl --fail --location \
+  https://raw.githubusercontent.com/ymcui/cmrc2018/c0eb1b6ba219847457e6af3180da722bbeb656af/squad-style-data/cmrc2018_dev.json \
+  --output /tmp/cmrc-dev.json
+python -m eval.prepare_cmrc_spans /tmp/cmrc-dev.json --output /tmp/cmrc-spans
+# 对 /tmp/cmrc-spans 运行下文已有 model_retrieval_run 三路入口。
+```
+
+准备器验证文件 SHA，保留全部 848 个源段落和 3,219 个问题，使用原始目标段落作为 scope。
+三个原始答案标注中，逐条校验坐标；原坐标错误时只恢复精确且唯一的原文位置。缺失/歧义标注
+记入 manifest，仍保留问题，不计成正确定位。原始答案的替代标注共用一个 evidence group。
+这是小规模已知来源定位诊断，既不是全库检索成绩，也不能证明答案跨度之外的上下文充分、
+整章证据完整、正文已读或回答正确。语料许可和论文引用随 manifest 固定，不再分发正文。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：
