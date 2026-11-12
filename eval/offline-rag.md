@@ -69,6 +69,11 @@ python -m eval.prepare_cmrc_spans /tmp/cmrc-dev.json --output /tmp/cmrc-spans
 这是小规模已知来源定位诊断，既不是全库检索成绩，也不能证明答案跨度之外的上下文充分、
 整章证据完整、正文已读或回答正确。语料许可和论文引用随 manifest 固定，不再分发正文。
 
+对照或位置消融可给 `model_retrieval_run` 增加 `--query-cache /tmp/query-vectors`。
+该离线模式一次批量编码去重后的查询并保存浮点向量，绑定数据/模型空间和文件 SHA；复跑时复用
+精确相同的查询向量，只替换查询编码步骤，检索、聚合及位置返回保持原路径。报告独立记录初次
+编码耗时、缓存读取耗时及 `frozen_query_replay`，检索计时排除查询编码，不能当作在线 API 性能。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：

@@ -80,6 +80,22 @@ def test_cli_defaults_share_production_cutoffs_and_record_the_complete_config(en
     assert endpoint
 
 
+def test_frozen_queries_replay_identical_ranks_without_reencoding(endpoint, tmp_path):
+    assert runner.main(arguments(tmp_path)) == 0
+    live = json.loads((tmp_path / "report.json").read_text())
+    args = arguments(tmp_path, "--query-cache", str(tmp_path / "query-cache"))
+    assert runner.main(args) == 0
+    frozen = json.loads((tmp_path / "report.json").read_text())
+    for name in live["arms"]:
+        assert frozen["arms"][name]["run"] == live["arms"][name]["run"]
+        assert frozen["arms"][name]["per_query"] == live["arms"][name]["per_query"]
+    assert frozen["frozen_query_replay"]["query_embedding_calls_during_retrieval"] == 0
+    before = len(endpoint)
+    assert runner.main(args) == 0
+    queries = {q["text"].strip() for q in load(FIXTURE, "test")["queries"].values()}
+    assert not queries.intersection(text for body in endpoint[before:] for text in body["input"])
+
+
 def test_article_scope_reaches_both_retrievers_and_keeps_returned_source_locations(endpoint):
     data = {"manifest": {}, "hashes": {},
             "corpus": {"a": {"title": "A", "text": "outside-only-identifier"},

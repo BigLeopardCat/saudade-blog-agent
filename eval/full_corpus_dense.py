@@ -60,9 +60,13 @@ def publish_inventory(repository, inventory, root):
     return matrix, doc_keys, np.asarray([lookup[key] for key in document_ids])
 
 
-def query_vectors(data, root):
+def query_vectors(data, root, expected_dim=512):
+    started = time.perf_counter()
     path, metadata_path = root / "queries.npy", root / "queries.metadata.json"
     qids = list(data["queries"])
+    if any(not data["queries"][qid]["text"].strip() or
+           len(data["queries"][qid]["text"].strip()) > 32768 for qid in qids):
+        raise ValueError("query exceeds application input limits")
     metadata = {"input_hashes": data["hashes"], "query_ids": qids,
                 "space": space_from_settings().as_dict()}
     if path.exists():
@@ -70,7 +74,10 @@ def query_vectors(data, root):
         if ({key: saved.get(key) for key in metadata} != metadata or
                 saved.get("vectors_sha256") != hashlib.sha256(path.read_bytes()).hexdigest()):
             raise ValueError("query vector binding changed")
-        return qids, np.load(path)
+        values = np.load(path)
+        if values.shape != (len(qids), expected_dim):
+            raise ValueError("query vector dimension changed")
+        return qids, values
     profile = active_profile()
     inputs = [query_text(data["queries"][qid]["text"].strip(), profile) for qid in qids]
     unique = list(dict.fromkeys(inputs))
@@ -79,7 +86,7 @@ def query_vectors(data, root):
         raise ValueError("incomplete query embeddings")
     cached = dict(zip(unique, encoded, strict=True))
     values = [cached[value] for value in inputs]
-    if any(value is None or len(value) != 512 for value in values):
+    if any(value is None or len(value) != expected_dim for value in values):
         raise ValueError("incomplete query embeddings")
     vectors = np.asarray(values, dtype="float32")
     norms = np.linalg.norm(vectors, axis=1)
@@ -88,6 +95,7 @@ def query_vectors(data, root):
     np.save(path, vectors)
     metadata["vectors_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     metadata["unique_embedding_inputs"] = len(unique)
+    metadata["materialization_seconds"] = time.perf_counter() - started
     metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
     return qids, vectors
 

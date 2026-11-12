@@ -107,6 +107,8 @@ def main():
     dsn = os.environ.get("SAUDADE_RAG_EVAL_DSN", "")
     if not dsn:
         parser.error("explicit disposable SAUDADE_RAG_EVAL_DSN required")
+    if not settings.embedding_configured or not settings.embedding_base_url.strip():
+        parser.error("explicit embedding endpoint, model and credentials required")
     repository = PostgresRepository(dsn, args.collection)
     args.output.mkdir(parents=True, exist_ok=True)
     data = load(args.dataset, "dev", max_docs=100001)
