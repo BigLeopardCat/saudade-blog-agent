@@ -21,6 +21,7 @@ from eval.rag_dataset import load  # noqa: E402
 from eval.replay_retrieval_ranks import read_frozen  # noqa: E402
 from eval.reranker_inputs import input_digest, sha256  # noqa: E402
 from eval.reranker_run import cached_rows  # noqa: E402
+from eval.retrieval_evidence import frozen_labels  # noqa: E402
 from eval.statistical_metrics import paired_delta, paired_outcomes  # noqa: E402
 from rag.embedding_inputs import load_profile  # noqa: E402
 
@@ -166,7 +167,7 @@ def main():
     performance = {name: quantiles([row[name] for row in timings.values()]) for name in
                    ("seconds", "cpu_seconds", "model_batches", "padded_tokens", "unpadded_tokens")}
     result = {"schema_version": 1, "dataset": data["manifest"], "input_hashes": data["hashes"],
-        "evaluation_labels": {"queries": {q: {} for q in data["queries"]}, "qrels": data["qrels"]},
+        "evaluation_labels": frozen_labels(data),
         "documents": documents, "contexts": contexts, "fixed_group_query_ids": groups,
         "groups": cohorts, "paired_comparisons": paired, "input_audits": audits,
         "query_performance": timings, "performance": performance, "plan": plan,

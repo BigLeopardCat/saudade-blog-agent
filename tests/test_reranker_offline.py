@@ -146,7 +146,8 @@ def test_scoring_input_missing_answer_is_separate_from_agent_read_range(tmp_path
     text = "x " * 700 + "q"
     data = {"manifest": {}, "hashes": {"corpus.jsonl": "fixed"},
             "corpus": {"a": {"text": text}}, "qrels": {"q": {"a": 1}},
-            "queries": {"q": {"text": "q", "evidence_spans": [{"document_id": "a",
+            "queries": {"q": {"text": "q", "category": "known_source_answer_span",
+                "evidence_groups": [["a"]], "evidence_spans": [{"document_id": "a",
                 "section_id": "s1", "start": 1400, "end": 1401, "quote": "q"}]}}}
     hits = {"q": [{"document_id": "a", "matches": [
         {"section_id": "s1", "offset": 0, "end": len(text)}]}]}

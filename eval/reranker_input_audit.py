@@ -15,6 +15,7 @@ os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
 from eval.reranker_inputs import PairEncoder, sha256  # noqa: E402
+from eval.retrieval_evidence import frozen_labels  # noqa: E402
 from rag.sections import outline  # noqa: E402
 
 
@@ -40,10 +41,8 @@ def audit(data, before, encoder):
         pairs[qid] = {k: v for k, v in pair.items() if k != "input_ids"}
     scored = evaluate(data, original["run"], [1, 3, 8], locations=visible)
     baseline = evaluate(data, original["run"], [1, 3, 8], locations=original["locations"])
-    labels = {qid: {"evidence_spans": [{k: v for k, v in span.items() if k != "quote"}
-              for span in row["evidence_spans"]]} for qid, row in data["queries"].items()}
     return {"dataset": data["manifest"], "input_hashes": data["hashes"],
-        "evaluation_labels": {"queries": labels, "qrels": data["qrels"]},
+        "evaluation_labels": frozen_labels(data),
         "original": {**baseline, "locations": original["locations"]},
         "reranker_input": {**scored, "locations": visible}, "input_audits": pairs,
         "queries": len(pairs), "truncated_pairs": sum(p["truncated"] for p in pairs.values()),
