@@ -4,6 +4,7 @@ import csv
 import gzip
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
@@ -57,3 +58,15 @@ def test_frozen_replay_rejects_changed_qrels_and_duplicate_rank(tmp_path):
         stream.write(b"changed")
     with pytest.raises(ValueError, match="changed frozen qrels"):
         read_frozen(path)
+
+
+def test_published_full_corpus_results_replay_without_models_or_source_bodies():
+    directory = Path(__file__).resolve().parents[1] / "eval/report"
+    ledger = json.loads((directory / "baseline_rag_full_operations_20261112.json").read_text())
+    for name, expected in ledger["published_artifacts"].items():
+        value = (directory / name).read_bytes()
+        assert len(value) == expected["bytes"]
+        assert hashlib.sha256(value).hexdigest() == expected["sha256"]
+    result = replay(directory / "baseline_du_full_20261112.json.gz")
+    assert result["queries"] == 2000 and result["arms"] == 11
+    assert result["model_calls"] == result["database_calls"] == 0
