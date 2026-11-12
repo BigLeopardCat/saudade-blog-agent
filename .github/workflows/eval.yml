@@ -19,12 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: frontend/.node-version
 
@@ -42,7 +42,7 @@ jobs:
         run: node --test frontend/tests/*.test.mjs
 
       - name: Setup uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -87,7 +87,7 @@ jobs:
           PYCODE
 
       - name: Checkout public host contract
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ${{ steps.parent.outputs.repository }}
           ref: ${{ steps.parent.outputs.revision }}
@@ -119,7 +119,7 @@ jobs:
 
       - name: 保存测试报告（含失败用例和耗时）
         if: ${{ !cancelled() && hashFiles('eval/report/ci/pytest.xml') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pytest-${{ github.run_id }}-${{ github.run_attempt }}
           path: eval/report/ci/pytest.xml
@@ -143,10 +143,10 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -176,7 +176,7 @@ jobs:
       BEFORE: ${{ github.event.before || github.event.pull_request.base.sha }}
       SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -187,10 +187,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: frontend/.node-version
           cache: npm
@@ -217,7 +217,7 @@ jobs:
           EOF
           npx --no-install playwright install-deps chromium
       - name: Cache checksum-verified CJK font
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.local/share/fonts/saudade-ci
           key: noto-cjk-sc-2c76254f6fc379fddfce0a7e84fb5385bb135d3e399294f6eeb6680d0365b74b
@@ -237,7 +237,7 @@ jobs:
         run: npm run test:browser
       - name: Keep synthetic browser screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chat-ui-preview
           path: ${{ runner.temp }}/chat-ui-preview
