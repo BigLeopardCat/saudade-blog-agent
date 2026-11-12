@@ -43,8 +43,16 @@ Conversation 保存记忆，Task 保存执行与预算，Request 管理连接和
 | `AGENT_TOOL_SCHEMA_TOKENS` | 追加领域 schema 的工作集软目标，不含固定工具与发现目录；当前任务必要领域可超过 |
 | `AGENT_TASK_SECONDS` | 累计活动执行时间，不含人工等待 |
 | `AGENT_OUTPUT_TOKENS`、`AGENT_SUMMARY_OUTPUT_TOKENS` | 对话和摘要输出预留 |
+| `AGENT_EXTENDED_OUTPUT_TOKENS`、`AGENT_OUTPUT_MATERIAL_THRESHOLD` | 当前任务材料较大时的可选输出扩展；不改变输入和任务硬上限 |
 
 端点窗口很大不意味着每次请求都应填满。任务预算是防止失控的上限，费用目标由[发布指标](release-acceptance.md)单独定义。
+
+输出扩展只根据当前用户要求、补充和工具材料估算，不把旧历史、系统提示或工具 schema
+算作本任务材料；确认说明沿用基础额度。完整规则见[生成预算](agent-architecture.md#生成预算)。
+
+模型请求经过框架的有限重试：最多一次、固定等待两秒，仅接受可重试的 429/5xx，
+或明确尚未产生模型输出的超时；配额耗尽不重试。服务商要求等待超过两秒或剩余期限不足时
+直接返回失败。重试、摘要和接续都计入同一任务预算，不增加业务写入重放权限。
 
 用量在调用前持久预留，返回实际 usage 后结算；未知结果保留预留。暂停、确认和浏览器接续沿用任务用量，新 HTTP 请求只统计本次增量。不能把历史累计量再次加入本次账单。
 
