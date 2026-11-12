@@ -49,9 +49,9 @@
       const messageTail = () => {
         const rows = messages.querySelectorAll('.chat-msg');
         const last = rows[rows.length - 1];
-        return JSON.stringify([rows.length, last?.dataset.mtype,
+        return {node: last, content: JSON.stringify([last?.dataset.mtype,
           last?.querySelector('.msg-text')?.textContent?.replace(/\s+/g, ' ').trim(),
-          last?.querySelectorAll('img').length]);
+          last?.querySelectorAll('img').length])};
       };
       if (newMsgNote) newMsgNote.addEventListener('click', () => scrollToBottom(messages, true));
       messages.addEventListener('scroll', () => {
@@ -770,6 +770,7 @@
       // 索引 byMid（已收尾元素带 data-mid）；在途轮元素（无 mid）经内容收养原位转正。
       const reconcileDOM = () => {
         const previousTail = messageTail();
+        const previousRows = new Set(messages.querySelectorAll('.chat-msg'));
         const byMid = new Map();
         for (const child of messages.children) {
           if (child.dataset && child.dataset.mid) byMid.set(child.dataset.mid, child);
@@ -836,7 +837,7 @@
                 }
                 el = adopted;
               } else {
-                el = appendMsg(item);
+                el = appendMsg(item, false);
               }
             }
             // 时间标签幂等维护（appendMsg 新建的已内部 patch，重复调用无害）
@@ -943,11 +944,14 @@
         if (ctx.state.ui && typeof ctx.state.ui.onFailedResync === 'function') {
           try { ctx.state.ui.onFailedResync(); } catch (e) {}
         }
-        scrollToBottom(messages, false, previousTail !== messageTail());
+        const tail = messageTail();
+        const changed = tail.node && (tail.node === previousTail.node
+          ? tail.content !== previousTail.content : !previousRows.has(tail.node));
+        scrollToBottom(messages, false, !!changed);
       };
       // 消息气泡工厂：DOM 创建 + dataset（mid/mtype/mtext 供 reconcile 索引与收养）
       // + 持久化（saveHistory 值变更检测）。调用方负责 items push。
-      const appendMsg = (item) => {
+      const appendMsg = (item, notify = true) => {
         const div = document.createElement('div');
         div.className = 'chat-msg ' + item.type;
         div.dataset.mid = item.id || '';
@@ -1000,7 +1004,7 @@
         if (box) div.insertBefore(box, content);
         messages.appendChild(div);
         patchDivider(div, item);
-        scrollToBottom(messages, false, true);
+        scrollToBottom(messages, false, notify);
         if (item.type === 'agent') {
           try {
             if (typeof window.__setMouthOpen === 'function') {

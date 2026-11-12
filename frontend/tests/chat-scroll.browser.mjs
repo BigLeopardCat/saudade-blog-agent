@@ -55,6 +55,22 @@ export async function assertChatScroll({ page, reset, passed }) {
   assert.equal(await badge.isVisible(),false,'layout, image load and historical expansion are not new messages');
   await page.evaluate(()=>{
     const {ctx,engine}=window.__chatTest;
+    ctx.state.items.unshift({id:'older-scroll',type:'user',text:'向前加载的旧消息',time:Date.now()-86400000});
+    engine.refreshView();
+  });
+  await page.waitForTimeout(150);
+  assert.equal(await badge.isVisible(),false,'prepending older history is not a new message');
+  await page.evaluate(()=>{
+    const {ctx,engine}=window.__chatTest;
+    const last=ctx.state.items.at(-1);
+    ctx.state.items.push({...last,id:'same-text-new',time:Date.now()+102});
+    engine.refreshView();
+  });
+  await badge.waitFor({state:'visible'});
+  await badge.click();await bottom();await readHistory();
+  passed('prepending history stays quiet; a distinct new message with identical text still shows the hint');
+  await page.evaluate(()=>{
+    const {ctx,engine}=window.__chatTest;
     const row=ctx.dom.messages.querySelector('.chat-msg:last-child .msg-text');
     row.textContent+='流式新增内容';engine.scrollToBottom(ctx.dom.messages,false,true);
   });
