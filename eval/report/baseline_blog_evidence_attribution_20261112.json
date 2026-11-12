@@ -1,0 +1,874 @@
+{
+  "schema_version": 1,
+  "cutoff": 8,
+  "queries": 57,
+  "input_hashes": {
+    "manifest.json": "ce1080ddd9e9981173974587cb357054b9c6bca454793399af66942d35438dc1",
+    "corpus.jsonl": "517644f3f96caf79761f2fa6b9079e3707aa433d19d76d5f511f37a41c6e2dfd",
+    "queries.jsonl": "d7a193ecafdf7a4350e23ee08f6ccb49de7c4b58d92adc1496a9f5ca76f0bddb",
+    "qrels/test.tsv": "06b5277c78585956087efeddfef525567a3a586a876a100d5403db635e9b082a"
+  },
+  "dataset": {
+    "schema_version": 1,
+    "name": "Frozen public blog section-evidence regression",
+    "source": "https://saudade.site/api/public/rag/corpus",
+    "revision": "20261112-f6317ab14be0ef9c12b0e6476b9e6c28a968f488e2e8fe590f148a9d16c7a80f",
+    "license": "Public blog content retains its source rights; evaluation snapshot included for this repository owner, not relicensed as MIT",
+    "scope": "Project/agent-authored source-bound retrieval regression; not independent human-validated ground truth, blind holdout, current implementation facts, or generation-quality evidence.",
+    "annotation_status": "Authored before retrieval runs; exact quotes, revisions and ranges checked by loader. Independent human semantic annotation review pending. No LLM Judge used.",
+    "section_schema": "commonmark-top-level-source-v1",
+    "snapshot_note": "All10 publicly visible articles retained, including an empty title and a short unrelated post. Historic architecture claims are evaluated as article content, not current production facts.",
+    "splits": {
+      "method": "SHA256 family modulo4; 0=dev, others=test; all is diagnostic union",
+      "dev": "Development labels; no parameter tuning in this run",
+      "test": "Public visible held-out query families for this run, not independent authorship or secret holdout",
+      "all": "Diagnostic union; never an independent test score"
+    },
+    "annotations": {
+      "passage_requirement": "Each flat span is required; equal optional group labels represent alternatives. Every selected range requires complete source-character coverage.",
+      "no_answer": "Five authored nonexistent identifiers; returned candidates do not establish generation hallucination."
+    },
+    "documents": [
+      {
+        "id": "12",
+        "url": "https://saudade.site/article/12",
+        "revision": "852643550d6afb1532a45684cf8030efe17bc1b2290f2a20fa07fa973541f81b"
+      },
+      {
+        "id": "14",
+        "url": "https://saudade.site/article/14",
+        "revision": "5d9b44d78484b9d8e273f7173a48c0bae30351de02f9df9da5c7dec532c7dc11"
+      },
+      {
+        "id": "16",
+        "url": "https://saudade.site/article/16",
+        "revision": "7c098855c85ae99737e5cb1d001fefb5c7c4f5f2073ed4954dfb4acf8221b5f2"
+      },
+      {
+        "id": "19",
+        "url": "https://saudade.site/article/19",
+        "revision": "1542c2a0128514ec79a83fc7925496f605c54c5d5dd5217fa0031ff3cf02b59e"
+      },
+      {
+        "id": "22",
+        "url": "https://saudade.site/article/22",
+        "revision": "6c628a18d85192babfeb1a00706c27375d8d0f3622e1bb3f1d540baf209e90bc"
+      },
+      {
+        "id": "23",
+        "url": "https://saudade.site/article/23",
+        "revision": "2de495a64348f88db8459850623a3d97991f51cbc55376f2295a0dc2a769cc07"
+      },
+      {
+        "id": "46",
+        "url": "https://saudade.site/article/46",
+        "revision": "0c623fb15585bb027a57357b7e1e428754491ae70aaef00187deb71cc3419d64"
+      },
+      {
+        "id": "54",
+        "url": "https://saudade.site/article/54",
+        "revision": "c11dd2ce64a0d34375517c49c18a1ae0690f17e6ef88da98926a1508fae23ba1"
+      },
+      {
+        "id": "62",
+        "url": "https://saudade.site/article/62",
+        "revision": "1f3fc216e168e3468191b7eaa8f1bd6b4b8dbc0d67d95bc5a19ddfaf675120ff"
+      },
+      {
+        "id": "122",
+        "url": "https://saudade.site/article/122",
+        "revision": "9c44e9c395e71bf46a37d4aaa39c3eb6674667e8273f2954c560fb197b9d76e9"
+      }
+    ]
+  },
+  "paired_comparisons": {
+    "bm25_to_vector": {
+      "Success@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 0,
+          "losses": 0,
+          "unchanged": 54,
+          "exact_mcnemar_p": 1.0,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      },
+      "R@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "RR@8": {
+        "pairs": 54,
+        "mean_delta": -0.009259259259259259,
+        "paired_bootstrap_95": [
+          -0.037037037037037035,
+          0.018518518518518517
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 2
+      },
+      "nDCG@8": {
+        "pairs": 54,
+        "mean_delta": -0.009108424649823947,
+        "paired_bootstrap_95": [
+          -0.03188611768589021,
+          0.01594305884294511
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 3
+      },
+      "EvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "PassageEvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": -0.09259259259259259,
+        "paired_bootstrap_95": [
+          -0.17592592592592593,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 7
+      },
+      "AllPassageEvidence@8": {
+        "pairs": 54,
+        "mean_delta": -0.1111111111111111,
+        "paired_bootstrap_95": [
+          -0.2037037037037037,
+          -0.018518518518518517
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 7,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 1,
+          "losses": 7,
+          "unchanged": 46,
+          "exact_mcnemar_p": 0.0703125,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      }
+    },
+    "bm25_to_hybrid": {
+      "Success@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 0,
+          "losses": 0,
+          "unchanged": 54,
+          "exact_mcnemar_p": 1.0,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      },
+      "R@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "RR@8": {
+        "pairs": 54,
+        "mean_delta": 0.009259259259259259,
+        "paired_bootstrap_95": [
+          -0.009259259259259259,
+          0.018518518518518517
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 0
+      },
+      "nDCG@8": {
+        "pairs": 54,
+        "mean_delta": 0.006834634193121157,
+        "paired_bootstrap_95": [
+          -0.006834634193121157,
+          0.013669268386242314
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 0
+      },
+      "EvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "PassageEvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": 0.018518518518518517,
+        "paired_bootstrap_95": [
+          -0.018518518518518517,
+          0.037037037037037035
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 0
+      },
+      "AllPassageEvidence@8": {
+        "pairs": 54,
+        "mean_delta": 0.018518518518518517,
+        "paired_bootstrap_95": [
+          -0.018518518518518517,
+          0.037037037037037035
+        ],
+        "resampling_unit": "complete case",
+        "wins": 1,
+        "losses": 0,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 1,
+          "losses": 0,
+          "unchanged": 53,
+          "exact_mcnemar_p": 1.0,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      }
+    },
+    "vector_to_hybrid": {
+      "Success@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 0,
+          "losses": 0,
+          "unchanged": 54,
+          "exact_mcnemar_p": 1.0,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      },
+      "R@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "RR@8": {
+        "pairs": 54,
+        "mean_delta": 0.018518518518518517,
+        "paired_bootstrap_95": [
+          -0.009259259259259259,
+          0.037037037037037035
+        ],
+        "resampling_unit": "complete case",
+        "wins": 2,
+        "losses": 0
+      },
+      "nDCG@8": {
+        "pairs": 54,
+        "mean_delta": 0.015943058842945106,
+        "paired_bootstrap_95": [
+          -0.004560843736418366,
+          0.03188611768589021
+        ],
+        "resampling_unit": "complete case",
+        "wins": 3,
+        "losses": 0
+      },
+      "EvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": 0.0,
+        "paired_bootstrap_95": [
+          0.0,
+          0.0
+        ],
+        "resampling_unit": "complete case",
+        "wins": 0,
+        "losses": 0
+      },
+      "PassageEvidenceCoverage@8": {
+        "pairs": 54,
+        "mean_delta": 0.1111111111111111,
+        "paired_bootstrap_95": [
+          0.027777777777777762,
+          0.18518518518518517
+        ],
+        "resampling_unit": "complete case",
+        "wins": 7,
+        "losses": 0
+      },
+      "AllPassageEvidence@8": {
+        "pairs": 54,
+        "mean_delta": 0.12962962962962962,
+        "paired_bootstrap_95": [
+          0.037037037037037035,
+          0.2037037037037037
+        ],
+        "resampling_unit": "complete case",
+        "wins": 7,
+        "losses": 0,
+        "outcomes": {
+          "pairs": 54,
+          "wins": 7,
+          "losses": 0,
+          "unchanged": 47,
+          "exact_mcnemar_p": 0.015625,
+          "interpretation": "not significant does not establish equivalence or noninferiority"
+        }
+      }
+    }
+  },
+  "failure_stage_counts": {
+    "bm25": {
+      "retrieval_checks_passed": 51,
+      "document_hit_but_passage_evidence_incomplete": 3,
+      "unanswerable_candidate_observation": 3
+    },
+    "vector": {
+      "retrieval_checks_passed": 45,
+      "document_hit_but_passage_evidence_incomplete": 9,
+      "unanswerable_candidate_observation": 3
+    },
+    "hybrid": {
+      "retrieval_checks_passed": 52,
+      "document_hit_but_passage_evidence_incomplete": 2,
+      "unanswerable_candidate_observation": 3
+    }
+  },
+  "per_query": {
+    "blog-001": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-002": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-003": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-004": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-005": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-007": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-008": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-010": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-013": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-014": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-015": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-016": {
+      "category": "code",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-017": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-018": {
+      "category": "code",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-019": {
+      "category": "code",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-020": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-022": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-023": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-027": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-028": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-029": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-030": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-031": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-032": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "document_hit_but_passage_evidence_incomplete",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "document_hit_but_passage_evidence_incomplete"
+      }
+    },
+    "blog-033": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-034": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-035": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-036": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-037": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-038": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-039": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-040": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-041": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-042": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "document_hit_but_passage_evidence_incomplete",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-043": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-045": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-046": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-048": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-049": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-050": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-051": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-053": {
+      "category": "historical",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-054": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-055": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-056": {
+      "category": "paraphrase",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-057": {
+      "category": "exact_identifier",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-058": {
+      "category": "similar_terms",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-059": {
+      "category": "long_tail",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "blog-060": {
+      "category": "known_article",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "multi-01": {
+      "category": "multi_document",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "multi-02": {
+      "category": "multi_document",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "multi-03": {
+      "category": "multi_document",
+      "stages": {
+        "bm25": "document_hit_but_passage_evidence_incomplete",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "document_hit_but_passage_evidence_incomplete"
+      }
+    },
+    "multi-04": {
+      "category": "multi_document",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "retrieval_checks_passed",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "multi-05": {
+      "category": "multi_document",
+      "stages": {
+        "bm25": "retrieval_checks_passed",
+        "vector": "document_hit_but_passage_evidence_incomplete",
+        "hybrid": "retrieval_checks_passed"
+      }
+    },
+    "absent-01": {
+      "category": "unanswerable",
+      "stages": {
+        "bm25": "unanswerable_candidate_observation",
+        "vector": "unanswerable_candidate_observation",
+        "hybrid": "unanswerable_candidate_observation"
+      }
+    },
+    "absent-02": {
+      "category": "unanswerable",
+      "stages": {
+        "bm25": "unanswerable_candidate_observation",
+        "vector": "unanswerable_candidate_observation",
+        "hybrid": "unanswerable_candidate_observation"
+      }
+    },
+    "absent-05": {
+      "category": "unanswerable",
+      "stages": {
+        "bm25": "unanswerable_candidate_observation",
+        "vector": "unanswerable_candidate_observation",
+        "hybrid": "unanswerable_candidate_observation"
+      }
+    }
+  },
+  "phase_latency": {
+    "lexical": {
+      "samples": 57,
+      "p50_s": 0.06316489912569523,
+      "p95_s": 0.08800276862457394,
+      "max_s": 0.09155373508110642
+    },
+    "vector": {
+      "samples": 57,
+      "p50_s": 0.11895483732223511,
+      "p95_s": 0.13273318503051995,
+      "max_s": 1.7565473360009491
+    },
+    "fusion": {
+      "samples": 57,
+      "p50_s": 0.0012442339211702347,
+      "p95_s": 0.002572941407561302,
+      "max_s": 0.24289589701220393
+    }
+  },
+  "attribution_scope": "Observable top-k failure stage, not inferred model root cause. No full candidate-pool capture: cannot separate recall vs cutoff ranking misses. Vector phase includes query embedding and database access.",
+  "statistics_scope": "Paired bootstrap over queries is descriptive. Shared source documents/question families are correlated; not a production SLA or an independent benchmark claim. No tuning/resampling in this run.",
+  "generation_evaluated": false,
+  "semantic_judge_calls": 0,
+  "presentation_budget_applied": false,
+  "scope": "Retriever candidates before tool-result token trimming, live source visibility checks and body reads; not final model-visible evidence or end-to-end Agent task success.",
+  "source_report_sha256": "e3b50059a7c3aff584385183b23db96c36cba78171c3429fed8802f1b65a0ad0",
+  "analysis_code_sha256": "f13888a4dc5c139f3c09c9f627253b8df4bcc9006c2aa2bdccc4294816b1e6e6"
+}

@@ -16,6 +16,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     ForeignKeyConstraint,
+    Index,
     Integer,
     MetaData,
     String,
@@ -26,6 +27,7 @@ from sqlalchemy import (
     func,
     select,
     text,
+    tuple_,
 )
 from sqlalchemy.dialects.postgresql import JSONB, insert
 from sqlalchemy.engine import make_url
@@ -53,6 +55,9 @@ members = Table(
         ["collection", "key", "dimension"],
         ["rag.embeddings.collection", "rag.embeddings.key", "rag.embeddings.dimension"],
     ),
+)
+member_embedding_index = Index(
+    "ix_rag_members_embedding", members.c.collection, members.c.key, members.c.dimension,
 )
 snapshots = Table(
     "snapshots", metadata,
@@ -105,6 +110,9 @@ class PostgresRepository:
             connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
             connection.execute(text("CREATE SCHEMA IF NOT EXISTS rag"))
             metadata.create_all(connection)
+            # create_all skips indexes on an existing table; setup is also the
+            # explicit upgrade entry for deployments created before this index.
+            member_embedding_index.create(connection, checkfirst=True)
 
     @contextmanager
     def writer(self):
@@ -161,23 +169,22 @@ class PostgresRepository:
             connection.execute(insert(snapshots).values(**row).on_conflict_do_update(
                 index_elements=[snapshots.c.collection], set_=row))
             # The collection contains only the current public corpus and active embedding space.
-            active = select(members.c.key).where(
-                members.c.collection == self.collection,
-                members.c.dimension == embeddings.c.dimension)
+            # Keep the membership subquery uncorrelated. A just-published large
+            # collection may still have tiny row estimates before auto-analyze.
+            active = select(members.c.key, members.c.dimension).where(
+                members.c.collection == self.collection)
             connection.execute(delete(embeddings).where(
                 embeddings.c.collection == self.collection,
-                ~embeddings.c.key.in_(active)))
+                ~tuple_(embeddings.c.key, embeddings.c.dimension).in_(active)))
 
     def _prune_pending(self, connection, space_key, keys, dimension):
-        active = select(members.c.key).where(
-            members.c.collection == embeddings.c.collection,
-            members.c.key == embeddings.c.key,
-            members.c.dimension == embeddings.c.dimension,
-        ).exists()
+        active = select(members.c.key, members.c.dimension).where(
+            members.c.collection == self.collection)
         target = and_(embeddings.c.space == space_key, embeddings.c.key.in_(keys),
                       embeddings.c.dimension == dimension)
         connection.execute(delete(embeddings).where(
-            embeddings.c.collection == self.collection, ~active, ~target))
+            embeddings.c.collection == self.collection,
+            ~tuple_(embeddings.c.key, embeddings.c.dimension).in_(active), ~target))
 
     def scores(self, snapshot: Snapshot, query: list[float], top_k: int, *,
                article_id: int | None = None) -> dict[int, float]:
@@ -193,15 +200,17 @@ class PostgresRepository:
                     raise StaleSnapshot("Published vector corpus changed")
                 if snapshot.count == 0:
                     return {}
-                distance = embeddings.c.embedding.cosine_distance(query)
+                # The FK points to one embedding PK. Keep that lookup scalar so
+                # cold collection estimates cannot turn it into a quadratic join.
+                distance = select(embeddings.c.embedding.cosine_distance(query)).where(
+                    embeddings.c.collection == members.c.collection,
+                    embeddings.c.key == members.c.key,
+                    embeddings.c.dimension == members.c.dimension,
+                ).correlate(members).scalar_subquery()
                 candidates = select(
                     members.c.ordinal, members.c.document_type, members.c.document_id,
                     distance.label("distance"),
-                ).select_from(members.join(embeddings, and_(
-                    members.c.collection == embeddings.c.collection,
-                    members.c.key == embeddings.c.key,
-                    members.c.dimension == embeddings.c.dimension,
-                ))).where(members.c.collection == self.collection,
+                ).select_from(members).where(members.c.collection == self.collection,
                           members.c.dimension == snapshot.dimension,
                           and_(members.c.document_type == "note",
                                members.c.document_id == str(article_id))

@@ -1,0 +1,102 @@
+{
+  "dataset_hashes": {
+    "manifest.json": "ce1080ddd9e9981173974587cb357054b9c6bca454793399af66942d35438dc1",
+    "corpus.jsonl": "517644f3f96caf79761f2fa6b9079e3707aa433d19d76d5f511f37a41c6e2dfd",
+    "queries.jsonl": "d7a193ecafdf7a4350e23ee08f6ccb49de7c4b58d92adc1496a9f5ca76f0bddb",
+    "qrels/test.tsv": "06b5277c78585956087efeddfef525567a3a586a876a100d5403db635e9b082a"
+  },
+  "rows": [
+    {
+      "case": "blog-032",
+      "query": "物联网指南中设备查询 OTA 信息用什么身份认证？",
+      "classification": "document_hit_selected_source_location_missing",
+      "targets": [
+        {
+          "document_id": "22",
+          "expected_section": "s15",
+          "section_rank_within_article": 4,
+          "top_sections": [
+            "s2",
+            "s16",
+            "s9",
+            "s15",
+            "s1",
+            "s5",
+            "s13",
+            "s14"
+          ]
+        }
+      ],
+      "interpretation": "Each lexical article keeps at most3different section locations. This diagnostic inspects the unchanged frozen scoring, not a tuned rerun. Candidate position coverage is not final answer success.",
+      "annotation_review": "Independent human review pending; near-equivalent locations can make the selected-span label incomplete."
+    },
+    {
+      "case": "blog-042",
+      "query": "图谱文档如何评价只追求线长相关性 ρ 指标的可靠性？",
+      "classification": "document_hit_selected_source_location_missing",
+      "targets": [
+        {
+          "document_id": "46",
+          "expected_section": "s22",
+          "section_rank_within_article": 5,
+          "top_sections": [
+            "s36",
+            "s15",
+            "s2",
+            "s21",
+            "s22",
+            "s19",
+            "s43",
+            "s13"
+          ]
+        }
+      ],
+      "interpretation": "Each lexical article keeps at most3different section locations. This diagnostic inspects the unchanged frozen scoring, not a tuned rerun. Candidate position coverage is not final answer success.",
+      "annotation_review": "Independent human review pending; near-equivalent locations can make the selected-span label incomplete."
+    },
+    {
+      "case": "multi-03",
+      "query": "分别按站内教程说明：Git 分支本质是什么，asyncio Future 又是什么？",
+      "classification": "document_hit_selected_source_location_missing",
+      "targets": [
+        {
+          "document_id": "16",
+          "expected_section": "s14",
+          "section_rank_within_article": 2,
+          "top_sections": [
+            "s56",
+            "s14",
+            "s15",
+            "s53",
+            "s20",
+            "s19",
+            "s30",
+            "s13"
+          ]
+        },
+        {
+          "document_id": "23",
+          "expected_section": "s8",
+          "section_rank_within_article": 4,
+          "top_sections": [
+            "s2",
+            "s5",
+            "s9",
+            "s8",
+            "s11",
+            "s19",
+            "s10",
+            "s17"
+          ]
+        }
+      ],
+      "interpretation": "Each lexical article keeps at most3different section locations. This diagnostic inspects the unchanged frozen scoring, not a tuned rerun. Candidate position coverage is not final answer success.",
+      "annotation_review": "Independent human review pending; near-equivalent locations can make the selected-span label incomplete."
+    }
+  ],
+  "model_calls": 0,
+  "semantic_judge_calls": 0,
+  "prior_preflight_source_sha256": "a3ad11d0cfe09a4f6dd2c0e8c79aa6ea1b304bd91044df6909e26c8e40ba1488",
+  "source_report_sha256": "e3b50059a7c3aff584385183b23db96c36cba78171c3429fed8802f1b65a0ad0",
+  "source_rebinding": "Final BM25 ordinal ranks, locations and per-query metrics verified identical to preflight; source labels unchanged."
+}

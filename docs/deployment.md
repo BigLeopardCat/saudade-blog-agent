@@ -161,6 +161,10 @@ curl --fail http://127.0.0.1:8010/version
 python -m rag.manage --env-file /path/to/private-migration.env setup
 ```
 
+已有 `rag` 表的升级也执行这条显式命令，补充成员外键的联合索引
+`ix_rag_members_embedding(collection, key, dimension)`；应在发布新代码前、低流量窗口执行。
+`setup` 可重复执行，保留现有数据。运行账号不会在查询时创建或补充索引。
+
 运行账号只需要目标数据库 CONNECT、`rag` schema USAGE，以及三张表的 CRUD 权限；
 无须超级用户、扩展安装、建表、其他业务表或文件系统写权限。例如由数据库管理员执行：
 

@@ -54,6 +54,30 @@ def chunks(*bodies):
             for index, body in enumerate(bodies, 1)]
 
 
+def test_large_publication_prunes_obsolete_keys_and_dimensions_within_database_budget(database):
+    store, _ = database
+    repository = store.repository
+    count = 20000
+    keys = [f"scale-{index}" for index in range(count)]
+    source = [{"type": "note", "id": index} for index in range(count)]
+    common = {"space": {"model": "scale-fixture"}, "space_key": "scale-fixture",
+              "dimension": 2, "stats": {}, "complete": True}
+    repository.commit(rows=[{"key": key, "dimension": 2, "embedding": [1.0, 0.0]}
+                            for key in keys], chunks=source, keys=keys,
+                      fingerprint="large", **common)
+    assert repository.snapshot().count == count
+    scores = repository.scores(repository.snapshot(), [1.0, 0.0], 24)
+    assert scores == {ordinal: pytest.approx(1.0) for ordinal in range(24)}
+    keep = count // 2
+    repository.commit(rows=[{"key": keys[0], "dimension": 3, "embedding": [1.0, 0.0, 0.0]}],
+                      chunks=source[:keep], keys=keys[:keep], fingerprint="pruned", **common)
+    assert repository.snapshot().count == keep
+    with repository.engine.connect() as connection:
+        retained = connection.execute(select(embeddings.c.key, embeddings.c.dimension).where(
+            embeddings.c.collection == repository.collection)).all()
+    assert set(retained) == {(key, 2) for key in keys[:keep]}
+
+
 def test_database_cosine_ranks_documents_instead_of_truncating_chunks(database, monkeypatch):
     store, _ = database
     rows = [{"type": "note", "id": 1, "title": "long", "section": str(i),
@@ -68,16 +92,19 @@ def test_database_cosine_ranks_documents_instead_of_truncating_chunks(database, 
     assert view.scores([9.0, 0.0], 1, article_id=2) == {20: pytest.approx(0.8)}
     assert view.scores([9.0, 0.0], 1, article_id=999) == {}
     # Results come from the pgvector distance operator, without reading vectors into Python.
-    statements = []
+    statements, result_types = [], []
+    with store.repository.engine.connect() as connection:
+        vector_oid = connection.scalar(text("SELECT 'vector'::regtype::oid"))
     def record(conn, cursor, statement, *args):
         statements.append(statement)
-    event.listen(store.repository.engine, "before_cursor_execute", record)
+        result_types.extend(column.type_code for column in (cursor.description or []))
+    event.listen(store.repository.engine, "after_cursor_execute", record)
     try:
         assert view.scores([0.0, 2.0], 1) == {20: pytest.approx(0.6)}
         assert any("<=>" in statement for statement in statements)
-        assert not any("SELECT rag.embeddings.embedding" in statement for statement in statements)
+        assert result_types and vector_oid not in result_types
     finally:
-        event.remove(store.repository.engine, "before_cursor_execute", record)
+        event.remove(store.repository.engine, "after_cursor_execute", record)
 
 
 @pytest.mark.parametrize("stage", ["embeddings", "members", "snapshots"])
