@@ -160,6 +160,10 @@ profile 的 `chunking_strategy` 可选值为 `token-window-v2`（默认）和
 这不是基于另一个模型计算相似度的语义切分。固定公开全库和读文预算的
 [对照结果](../eval/chunk-context-comparison.md)不支持自动切换默认子片策略；父段收益与读取成本另行记录。
 
+[固定候选重排收尾](../eval/reranker-closeout.md)已验证成熟 cross-encoder 的排序收益与 CPU 额外延迟。
+当前不引入生产 reranker，RAG 本阶段冻结；保持原切窗、融合和读取默认值。
+评分输入的 512-token 上限不覆盖最终正文定位，不能用重排可见范围代替 Agent 阅读证据。
+
 省略该字段保留原有空间签名；显式切换句段策略会生成独立空间，须重新准备索引。
 评测入口可在验证权重声明、tokenizer、前缀、归一化等编码配置完全一致后，按完整输入复用
 独立评测 collection 的向量；这不代表生产自动完成跨策略迁移。

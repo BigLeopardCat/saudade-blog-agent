@@ -16,6 +16,7 @@ from eval.full_corpus_analysis import fusion  # noqa: E402
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
 from eval.replay_retrieval_ranks import read_frozen  # noqa: E402
+from eval.retrieval_evidence import frozen_labels  # noqa: E402
 from eval.statistical_metrics import paired_delta  # noqa: E402
 from rag.corpus import content_revision  # noqa: E402
 from rag.embedding_inputs import active_profile  # noqa: E402
@@ -145,15 +146,7 @@ def compare(data, views, profile, *, groups=None):
     cohorts = {name: {group: {metric: sum(arm["per_query"][q][metric] for q in qids) / len(qids)
         for metric in ("R@8", "nDCG@8", "Success@8")}
         for group, qids in (groups or {}).items()} for name, arm in documents.items()}
-    labels = {"qrels": data["qrels"], "queries": {}}
-    for qid, query in data["queries"].items():
-        item = {key: query[key] for key in ("category", "evidence_groups", "answerable")
-                if key in query}
-        if query.get("evidence_spans"):
-            item["evidence_spans"] = [{key: span[key] for key in (
-                "document_id", "section_id", "start", "end", "group", "revision", "section_schema")
-                if key in span} for span in query["evidence_spans"]]
-        labels["queries"][qid] = item
+    labels = frozen_labels(data)
     return {"dataset": data["manifest"], "input_hashes": data["hashes"],
             "documents": documents, "contexts": contexts, "paired_comparisons": paired,
             "evaluation_labels": labels,

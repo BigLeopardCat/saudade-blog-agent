@@ -6,6 +6,10 @@ ir-measures 指标。它检查候选与排序；最终回答、引用和权限�
 这些成绩不等于模型最终可见的证据覆盖率，也不等于端到端任务成功率。
 已完成的固定数据三路对照、失败归因和复现命令见[中文检索实验报告](chinese-retrieval-comparison.md)。
 
+本阶段已[收尾并冻结 RAG](reranker-closeout.md)：固定候选的成熟 BGE 重排提高公开 dev 排序质量，
+但当前同步 CPU 延迟不达项目预算，不加入生产。报告包含八个阶段案例、资源台账、全部输入重建
+与无模型复算；真实语料迁入并建立证据集或出现可复现业务回归前，不继续追加检索能力或调参。
+
 ## 全库与成熟实现对照
 
 已完成的 100,001 篇源文档、2,000 查询与 CMRC 已知来源诊断见
@@ -235,7 +239,8 @@ python -m eval.retrieval_comparison eval/fixtures/blog_evidence /tmp/blog-report
 也不能推断 embedding 模型根因。相关问题家族的统计不代表独立生产采样。
 无答案候选只记观察，回答事实性与弃答正确性保持未评估，不调用 LLM Judge。
 
-当前没有独立 LLM 查询重写器或 cross-encoder reranker。先用逐题证据判断错误发生在
+当前生产没有独立 LLM 查询重写器或 cross-encoder reranker；成熟 cross-encoder 只保留离线对照。
+先用逐题证据判断错误发生在
 查询、召回、排序还是正文读取，再比较改写/重排带来的质量、时延与费用，不默认增加模型调用。
 
 参考：[BEIR](https://github.com/beir-cellar/beir)、

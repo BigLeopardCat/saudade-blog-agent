@@ -6,6 +6,20 @@ from rag.corpus import content_revision
 from rag.sections import PARSER_VERSION, outline
 
 
+def frozen_labels(data: dict) -> dict:
+    """Keep scoring/group metadata and source coordinates without question text or quotes."""
+    labels = {"qrels": data["qrels"], "queries": {}}
+    for qid, query in data["queries"].items():
+        item = {key: query[key] for key in ("category", "evidence_groups", "answerable")
+                if key in query}
+        if query.get("evidence_spans"):
+            item["evidence_spans"] = [{key: span[key] for key in (
+                "document_id", "section_id", "start", "end", "group", "revision", "section_schema")
+                if key in span} for span in query["evidence_spans"]]
+        labels["queries"][qid] = item
+    return labels
+
+
 def validate(query: dict, corpus: dict, positive: set[str]) -> None:
     scope = query.get("scope_document_id")
     if scope is not None and (scope not in corpus or positive - {scope}):
