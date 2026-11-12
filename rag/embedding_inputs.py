@@ -127,24 +127,34 @@ def _ranges(profile: InputProfile, title: str, heading: str, body: str) -> tuple
     budget = profile.spec.max_tokens - profile.count(document_text(title, heading, profile))
     if budget <= 0:
         raise InputProfileError("embedding metadata leaves no room for source text")
-    encoded = profile.tokenizer.encode(body, add_special_tokens=False)
-    encoded.truncate(budget, stride=min(OVERLAP, budget // 4))
-    windows = [encoded, *encoded.overflowing]
-    spans = []
-    previous_end = 0
-    for i, window in enumerate(windows):
-        offsets = [(low, high) for low, high in window.offsets if high > low]
-        if not offsets:
-            raise InputProfileError("tokenizer returned no source offsets")
-        start = min(offsets[0][0], previous_end)
-        end = len(body) if i == len(windows) - 1 else offsets[-1][1]
-        if start < 0 or end <= start or end > len(body):
-            raise InputProfileError("tokenizer returned an invalid source range")
-        text = heading + body[start:end]
-        profile.validate(document_text(title, text, profile))
-        spans.append((start, end, text))
-        previous_end = end
-    return tuple(spans)
+    return _source_windows(profile, title, heading, body, budget)
+
+
+def _source_windows(profile, title, heading, body, budget):
+    # WordPiece continuation tokens can re-encode to more tokens at a source-window
+    # boundary. Retry only previously invalid windows, retaining all source text.
+    while budget > 0:
+        encoded = profile.tokenizer.encode(body, add_special_tokens=False)
+        encoded.truncate(budget, stride=min(OVERLAP, budget // 4))
+        windows = [encoded, *encoded.overflowing]
+        spans, previous_end, excess = [], 0, 0
+        for i, window in enumerate(windows):
+            offsets = [(low, high) for low, high in window.offsets if high > low]
+            if not offsets:
+                raise InputProfileError("tokenizer returned no source offsets")
+            start = min(offsets[0][0], previous_end)
+            end = len(body) if i == len(windows) - 1 else offsets[-1][1]
+            if start < 0 or end <= start or end > len(body):
+                raise InputProfileError("tokenizer returned an invalid source range")
+            text = heading + body[start:end]
+            excess = max(excess, profile.count(document_text(title, text, profile))
+                         - profile.spec.max_tokens)
+            spans.append((start, end, text))
+            previous_end = end
+        if not excess:
+            return tuple(spans)
+        budget -= excess
+    raise InputProfileError("embedding metadata leaves no room for source text")
 
 
 def vector_chunks(chunks: list[dict]) -> list[dict]:

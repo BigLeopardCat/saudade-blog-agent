@@ -6,6 +6,49 @@ ir-measures 指标。它检查候选与排序；最终回答、引用和权限�
 这些成绩不等于模型最终可见的证据覆盖率，也不等于端到端任务成功率。
 已完成的固定数据三路对照、失败归因和复现命令见[中文检索实验报告](chinese-retrieval-comparison.md)。
 
+## 全库与成熟实现对照
+
+`prepare_duretrieval --full-corpus --queries 2000` 保留固定源的全部 100,001 篇文档与
+2,000 个原始 dev 查询，不添加按 BM25 选取的干扰项，不筛短文。它仍不是独立业务盲测。
+全库入口显式提高加载上限，不放宽普通评测默认的 10,000 篇保护。
+
+以下命令用于独立环境。先按下文准备固定原始 parquet，将本地 embedding 配置放入环境变量
+`EMBEDDING_BASE_URL`、`EMBEDDING_MODEL`、`EMBEDDING_PROFILE`、`EMBEDDING_API_KEY`，并设置
+独立可丢弃库的 `SAUDADE_RAG_EVAL_DSN`。模型服务的 tokenizer 参数必须与 profile 一致。
+
+```sh
+python -m eval.prepare_duretrieval --source-dir /path/to/pinned-source \
+  --output /tmp/du-full --full-corpus --queries 2000
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_cache /tmp/du-full \
+  --output /tmp/du-artifacts --collection eval-du-full
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode chunk --output /tmp/du-artifacts/lexical-chunk.jsonl
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode document --output /tmp/du-artifacts/lexical-document.jsonl
+uv run --frozen --with scikit-learn==1.7.2 --with joblib==1.5.3 --with threadpoolctl==3.6.0 \
+  python -m eval.full_corpus_dense /tmp/du-full \
+  --artifacts /tmp/du-artifacts --collection eval-du-full
+python -m eval.full_corpus_analysis /tmp/du-full \
+  --artifacts /tmp/du-artifacts --output /tmp/du-full-report.json
+```
+
+数据库先由迁移账号执行 `rag.manage setup`。这些入口不连接默认部署库，缓存与查询只接受显式
+评测 DSN 和 `eval-` collection。cache 入口只填充离线评测缓存，分批提交已完成输入；全部齐备后
+才使用生产 repository 发布完整成员快照，不改变生产 VectorStore 的事务语义。
+
+BM25 对照复用同一词法特征、参数和 BM25S，使用其公开 Tokenized 接口控制大语料内存。
+原生评分与应用评分/文档聚合逐题核对，额外记录默认领域别名扩展的影响。整篇索引与切片索引
+的差异同时包含词频统计、切片和聚合，不能归因成单个因素。此入口不测试完整 RagIndex
+刷新或保留字符串 token 的构造器内存。
+
+向量对照用同一份持久化输入向量，在 scikit-learn 精确余弦与生产 PostgreSQL 查询间比较；
+记录数值误差和近似并列次序差异，不把 Q8 与原模型的差异混为数据库误差。另比较先截取
+100 个切片再去重与先按文章聚合再取 100 篇，区分切片预算和文章预算。
+
+分析阶段冻结 24/50/100 三种每路候选窗口，并核对生产 RRF 与直接调用 LangChain RRF 的一致性。
+源码级 qrels 只标注文章，不能用这些分数验收章节证据。博客夹具不作为本轮调参或业务发布门槛，
+回答生成及 LLM Judge 均不在这组实验范围内。
+
 ## 无密钥离线回归
 
 安装锁定 dev 依赖后运行；不读取部署 .env，不访问博客或 embedding 服务：
