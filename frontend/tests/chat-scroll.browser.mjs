@@ -71,7 +71,8 @@ export async function assertChatScroll({ page, reset, passed }) {
   passed('prepending history stays quiet; a distinct new message with identical text still shows the hint');
   await page.evaluate(()=>{
     const {ctx,engine}=window.__chatTest;
-    const row=ctx.dom.messages.querySelector('.chat-msg:last-child .msg-text');
+    const rows=ctx.dom.messages.querySelectorAll('.chat-msg .msg-text');
+    const row=rows[rows.length-1];
     row.textContent+='流式新增内容';engine.scrollToBottom(ctx.dom.messages,false,true);
   });
   await badge.waitFor({state:'visible'});
