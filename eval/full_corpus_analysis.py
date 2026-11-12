@@ -81,6 +81,35 @@ def source_groups(data, chunk_counts):
     return order, groups
 
 
+def candidate_pools(data, rankings):
+    """Label-based upper bounds describe available candidates, not a deployable ranker."""
+    result = {}
+    for pool in (24, 50, 100):
+        samples = []
+        for qid, values in rankings.items():
+            positive = {did for did, grade in data["qrels"][qid].items() if grade > 0}
+            if not positive:
+                continue
+            union = set(values["bm25"][:pool]) | set(values["vector"][:pool])
+            found = positive & union
+            final = positive & set(values[f"hybrid{pool}"][:8])
+            samples.append({"union_positive_recall": len(found) / len(positive),
+                "oracle_recall8_bound": min(8, len(found)) / len(positive),
+                "union_has_positive": bool(found),
+                "positive_in_pool_but_final8_miss": bool(found) and not bool(final),
+                "vector8_hit_hybrid8_miss": bool(positive & set(values["vector"][:8]))
+                                           and not bool(final)})
+        result[str(pool)] = {"positive_queries": len(samples),
+            "mean_union_positive_recall": sum(s["union_positive_recall"] for s in samples)
+                                          / len(samples),
+            "mean_oracle_recall8_bound": sum(s["oracle_recall8_bound"] for s in samples)
+                                        / len(samples),
+            **{key: sum(s[key] for s in samples) for key in (
+                "union_has_positive", "positive_in_pool_but_final8_miss",
+                "vector8_hit_hybrid8_miss")}}
+    return result
+
+
 def summarize(data, scored, rankings, chunk_counts):
     order, groups = source_groups(data, chunk_counts)
     buckets, differences, stages = {}, {}, {}
@@ -112,6 +141,7 @@ def summarize(data, scored, rankings, chunk_counts):
                                       and not bool(positive & final)}
     return {"groups": buckets, "group_queries": {g: len(q) for g, q in groups.items()},
             "group_query_ids": groups,
+            "candidate_pools": candidate_pools(data, rankings),
             "paired_comparisons": differences, "failure_stages": stages,
             "source_indexing": {"source_documents": len(data["corpus"]),
                 "documents_with_vector_chunks": len(chunk_counts),

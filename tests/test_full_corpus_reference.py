@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from eval import full_corpus_dense as dense
-from eval.full_corpus_analysis import fusion, read_stage, source_groups
+from eval.full_corpus_analysis import candidate_pools, fusion, read_stage, source_groups
 from eval.full_corpus_lexical import document_ranks, execute
 
 
@@ -52,6 +52,15 @@ def test_length_strata_use_positive_labels_and_keep_the_original_query_populatio
 def test_native_fusion_and_application_agree_without_dropping_one_route():
     assert fusion(["a", "b", "c"], ["b", "d", "a"], 2) == ["b", "a", "d"]
     assert fusion([], ["b", "a"], 2) == ["b", "a"]
+
+
+def test_candidate_oracle_bound_does_not_turn_missing_labels_into_retrieval_hits():
+    values = {"bm25": ["wrong", "gold"], "vector": ["gold"]}
+    values.update({f"hybrid{pool}": ["wrong"] for pool in (24, 50, 100)})
+    result = candidate_pools({"qrels": {"q": {"gold": 1, "missing": 1}}}, {"q": values})
+    assert result["24"] == {"positive_queries": 1, "mean_union_positive_recall": .5,
+        "mean_oracle_recall8_bound": .5, "union_has_positive": 1,
+        "positive_in_pool_but_final8_miss": 1, "vector8_hit_hybrid8_miss": 1}
 
 
 def test_stage_rejects_changed_data_and_incomplete_queries(tmp_path):
