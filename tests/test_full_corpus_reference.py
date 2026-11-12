@@ -37,8 +37,9 @@ def test_stage_rejects_changed_data_and_incomplete_queries(tmp_path):
         read_stage(path, {**data, "hashes": {"corpus": "changed"}})
 
 
-@pytest.mark.parametrize("mode", ["document", "chunk"])
-def test_native_and_application_lexical_routes_preserve_source_labels(tmp_path, mode):
+@pytest.mark.parametrize("mode,tokenizer", [
+    ("document", "application"), ("chunk", "application"), ("document", "jieba")])
+def test_native_and_application_lexical_routes_preserve_source_labels(tmp_path, mode, tokenizer):
     fixture = tmp_path / "data"
     (fixture / "qrels").mkdir(parents=True)
     (fixture / "manifest.json").write_text(json.dumps({"schema_version": 1, "name": "fixture",
@@ -50,6 +51,6 @@ def test_native_and_application_lexical_routes_preserve_source_labels(tmp_path, 
         json.dumps({"_id": "q", "text": "asyncio Future"}) + "\n")
     (fixture / "qrels/dev.tsv").write_text("query-id\tcorpus-id\tscore\nq\ta\t2\n")
     output = tmp_path / "run.jsonl"
-    execute(fixture, mode, output, 2)
+    execute(fixture, mode, output, 2, tokenizer)
     result = json.loads(output.read_text())
     assert result["reference"] == result["raw_application"] == result["production"] == ["a"]

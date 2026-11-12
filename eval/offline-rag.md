@@ -25,6 +25,8 @@ SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
   --mode chunk --output /tmp/du-artifacts/lexical-chunk.jsonl
 SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
   --mode document --output /tmp/du-artifacts/lexical-document.jsonl
+SAUDADE_IGNORE_ENV_FILE=1 python -m eval.full_corpus_lexical /tmp/du-full \
+  --mode document --tokenizer jieba --output /tmp/du-artifacts/lexical-jieba.jsonl
 uv run --frozen --with scikit-learn==1.7.2 --with joblib==1.5.3 --with threadpoolctl==3.6.0 \
   python -m eval.full_corpus_dense /tmp/du-full \
   --artifacts /tmp/du-artifacts --collection eval-du-full
@@ -40,6 +42,8 @@ BM25 对照复用同一词法特征、参数和 BM25S，使用其公开 Tokenize
 原生评分与应用评分/文档聚合逐题核对，额外记录默认领域别名扩展的影响。整篇索引与切片索引
 的差异同时包含词频统计、切片和聚合，不能归因成单个因素。此入口不测试完整 RagIndex
 刷新或保留字符串 token 的构造器内存。
+另以 Jieba 原生搜索分词（过滤纯空白、保留其余 token）建立整篇 BM25S 基线，帮助识别项目
+自定义特征的影响；不带项目的归一化、词形还原、bigram 回退或别名扩展，不宣称官方基准协议。
 
 向量对照用同一份持久化输入向量，在 scikit-learn 精确余弦与生产 PostgreSQL 查询间比较；
 记录数值误差和近似并列次序差异，不把 Q8 与原模型的差异混为数据库误差。另比较先截取

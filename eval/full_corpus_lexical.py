@@ -33,7 +33,15 @@ def document_ranks(scores, owners, count, limit):
     return [int(i) for i in order[:limit] if maximum[i] > 0]
 
 
-def prepare_tokens(path, mode):
+def features(text, tokenizer):
+    if tokenizer == "jieba":
+        import jieba
+
+        return [term for term in jieba.cut_for_search(text) if term.strip()]
+    return tokenize(text)
+
+
+def prepare_tokens(path, mode, tokenizer="application"):
     vocab, token_ids, chunks, keys, owners = {}, [], [], [], []
     with path.open() as stream:
         for number, line in enumerate(stream):
@@ -44,7 +52,7 @@ def prepare_tokens(path, mode):
             for part in parts:
                 chunk = {**part, "type": "note", "id": number + 1,
                          "title": row.get("title", "")}
-                terms = tokenize(chunk_text(chunk["title"], chunk["text"]))
+                terms = features(chunk_text(chunk["title"], chunk["text"]), tokenizer)
                 # BM25S's public Tokenized API avoids retaining one Python string
                 # per token occurrence; feature values and frequencies are unchanged.
                 token_ids.append(array("i", [vocab.setdefault(t, len(vocab)) for t in terms]))
@@ -55,13 +63,13 @@ def prepare_tokens(path, mode):
     return Tokenized(ids=token_ids, vocab=vocab), chunks, keys, np.asarray(owners)
 
 
-def execute(dataset, mode, output, limit):
+def execute(dataset, mode, output, limit, tokenizer="application"):
     started = time.perf_counter()
     data = load(dataset, "dev", max_docs=100001)
     hashes = data["hashes"]
     # Ground-truth evaluation needs IDs, not another retained copy of every body.
     del data["corpus"]
-    tokens, chunks, keys, owners = prepare_tokens(dataset / "corpus.jsonl", mode)
+    tokens, chunks, keys, owners = prepare_tokens(dataset / "corpus.jsonl", mode, tokenizer)
     model = bm25s.BM25(k1=BM25_K1, b=BM25_B, method=METHOD, dtype=DTYPE,
                        backend="numpy", csc_backend="numpy")
     model.index(tokens, show_progress=False)
@@ -76,17 +84,21 @@ def execute(dataset, mode, output, limit):
     metadata = {"schema_version": 1, "mode": mode, "documents": len(keys),
                 "chunks": len(chunks), "top_k": limit, "input_hashes": hashes,
                 "backend": backend_info(), "build_seconds": build_seconds,
+                "tokenizer": tokenizer,
                 "scope": "BM25S public token-ID build; identical application features. "
                          "Application query scoring/aggregation compared to native scores. "
                          "No whole RagIndex refresh or full string-token constructor benchmark.",
                 "reference_query_expansion": False,
-                "application_query_expansion": expansion_enabled(), "semantic_judge_calls": 0}
+                "application_query_expansion": tokenizer == "application" and expansion_enabled(),
+                "semantic_judge_calls": 0}
     output.parent.mkdir(parents=True, exist_ok=True)
     output.with_suffix(".metadata.json").write_text(json.dumps(metadata, indent=2) + "\n")
     with output.open("w") as stream:
         for number, (qid, query) in enumerate(data["queries"].items(), 1):
             start = time.perf_counter()
-            terms = list(dict.fromkeys(t for t in query_features(query["text"])
+            query_terms = (query_features(query["text"]) if tokenizer == "application"
+                           else features(query["text"], tokenizer))
+            terms = list(dict.fromkeys(t for t in query_terms
                                       if t in adapter.vocabulary))
             scores = model.get_scores(terms) if terms else np.zeros(len(chunks))
             reference = document_ranks(scores, owners, len(keys), limit)
@@ -98,7 +110,8 @@ def execute(dataset, mode, output, limit):
             # This offline run holds one frozen corpus; wall-clock refresh is not part
             # of the reference comparison and must not refetch an unrelated corpus.
             index._last_build = time.time()
-            production = [row["id"] - 1 for row in index._lexical_ranked(query["text"], limit)]
+            production = ([row["id"] - 1 for row in index._lexical_ranked(query["text"], limit)]
+                          if tokenizer == "application" else raw_application)
             positive_chunks = np.flatnonzero(scores > 0)
             order = positive_chunks[np.argsort(-scores[positive_chunks], kind="stable")]
             chunk_first = list(dict.fromkeys(int(owners[i]) for i in order[:limit]))
@@ -122,10 +135,11 @@ def main():
     parser.add_argument("--mode", choices=["document", "chunk"], required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--top-k", type=int, default=100)
+    parser.add_argument("--tokenizer", choices=["application", "jieba"], default="application")
     args = parser.parse_args()
     if not 1 <= args.top_k <= 1000:
         parser.error("bounded top-k required")
-    execute(args.dataset, args.mode, args.output, args.top_k)
+    execute(args.dataset, args.mode, args.output, args.top_k, args.tokenizer)
 
 
 if __name__ == "__main__":

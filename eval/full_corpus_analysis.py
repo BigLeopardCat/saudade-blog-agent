@@ -47,14 +47,15 @@ def fusion(left, right, pool):
     return reference[:100]
 
 
-def runs(lexical, whole, dense):
+def runs(lexical, whole, dense, jieba):
     result = {name: {} for name in ["bm25", "bm25_raw", "bm25_whole_document",
         "vector", "vector_reference", "bm25_chunk_first100", "vector_chunk_first100",
-        "hybrid24", "hybrid50", "hybrid100"]}
+        "hybrid24", "hybrid50", "hybrid100", "bm25_jieba_whole_document"]}
     failures = {}
     for qid, row in lexical.items():
         values = {"bm25": row["production"], "bm25_raw": row["reference"],
                   "bm25_whole_document": whole[qid]["reference"],
+                  "bm25_jieba_whole_document": jieba[qid]["reference"],
                   "vector": dense[qid]["production"],
                   "vector_reference": dense[qid]["reference"],
                   "bm25_chunk_first100": row["chunk_first"],
@@ -109,13 +110,14 @@ def main():
     data = load(args.dataset, "dev", max_docs=100001)
     lexical, lex_meta = read_stage(args.artifacts / "lexical-chunk.jsonl", data)
     whole, whole_meta = read_stage(args.artifacts / "lexical-document.jsonl", data)
+    jieba, jieba_meta = read_stage(args.artifacts / "lexical-jieba.jsonl", data)
     dense, dense_meta = read_stage(args.artifacts / "dense.jsonl", data)
-    ranked, per_query = runs(lexical, whole, dense)
+    ranked, per_query = runs(lexical, whole, dense, jieba)
     scored = {name: evaluate(data, run, [1, 3, 8, 10, 24, 50, 100])
               for name, run in ranked.items()}
     result = {"schema_version": 1, "input_hashes": data["hashes"], "dataset": data["manifest"],
               "stages": {"lexical_chunk": lex_meta, "lexical_document": whole_meta,
-                         "dense": dense_meta}, "arms": scored,
+                         "jieba_document": jieba_meta, "dense": dense_meta}, "arms": scored,
               **summarize(data, scored, per_query), "semantic_judge_calls": 0,
               "scope": "Source dev full corpus. Fixed ablations, no parameter selection. "
                        "Shared pretrained model and document-level qrels: cannot validate "
