@@ -10,6 +10,21 @@ from pathlib import Path
 from eval.replay_chunk_context import costs, metrics
 from eval.replay_retrieval_ranks import scalar_metrics
 from eval.reranker_analysis import decision, quantiles, query_orders, stages
+from eval.statistical_metrics import paired_delta, paired_outcomes
+
+
+def replay_paired(report):
+    for base, comparisons in report.get("paired_comparisons", {}).items():
+        for metric, expected in comparisons.items():
+            queries = report["evaluation_labels"]["queries"]
+            before = [report["documents"][base]["per_query"][q][metric] for q in queries]
+            after = [report["documents"]["reranker"]["per_query"][q][metric] for q in queries]
+            actual = paired_delta(before, after)
+            if metric == "Success@8":
+                actual["outcomes"] = paired_outcomes([bool(v) for v in before],
+                                                    [bool(v) for v in after])
+            if actual != expected:
+                raise ValueError("frozen paired comparison changed")
 
 
 def replay_input_audit(report):
@@ -71,6 +86,7 @@ def replay(report):
     views = {name: {"run": arm["run"]} for name, arm in documents.items()}
     if stages(data, views, report["input_audits"]) != report["failure_stages"]:
         raise ValueError("frozen failure attribution changed")
+    replay_paired(report)
     known_source = (replay_input_audit(report["known_source_input_audit"])
                     if "known_source_input_audit" in report else 0)
     return {"queries": len(data["queries"]), "known_source_audit_queries": known_source,

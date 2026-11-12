@@ -180,3 +180,33 @@ def test_frozen_locators_rebuild_exact_model_inputs_without_embedding(tmp_path):
     report["input_digests"]["q"] = "changed"
     with pytest.raises(ValueError, match="model input digest changed"):
         rebuild(data, report, codec, output)
+
+
+def test_published_reranker_result_replays_all_queries_and_accounting():
+    import hashlib
+    import lzma
+
+    from eval.replay_reranker import replay, replay_paired
+
+    root = Path(__file__).resolve().parents[1] / "eval/report"
+    ledger = json.loads((root / "baseline_reranker_operations_20261112.json").read_text())
+    name = "baseline_reranker_20261112.json.xz"
+    raw = (root / name).read_bytes()
+    assert ledger["published_artifacts"][name] == {
+        "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    report = json.loads(lzma.decompress(raw))
+    plan = (root / "baseline_reranker_plan_20261112.json").read_bytes()
+    assert report["source_artifacts"]["plan"] == hashlib.sha256(plan).hexdigest()
+    assert report["plan"] == json.loads(plan)
+    result = replay(report)
+    assert {k: result[k] for k in ("queries", "candidate_pairs", "arms",
+        "known_source_audit_queries", "model_calls", "database_calls")} == {
+        "queries": 2000, "candidate_pairs": 81903, "arms": 3,
+        "known_source_audit_queries": 3219, "model_calls": 0, "database_calls": 0}
+    assert report["decision"] == ledger["decision"]
+    assert not ledger["decision"]["project_budget_passed"]
+    assert ledger["input_reconstruction"]["candidate_pairs"] == 81903
+    assert ledger["primary_model_usage"]["quality_pairs"] == 81903
+    report["paired_comparisons"]["vector"]["R@8"]["mean_delta"] += .1
+    with pytest.raises(ValueError, match="paired comparison changed"):
+        replay_paired(report)
