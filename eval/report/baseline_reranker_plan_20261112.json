@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "status": "frozen_before_model_quality_run",
+  "base_commit": "a5b069f287ac80e6e89e74cb21a53043d7a2bd9b",
+  "dataset": "Existing pinned DuRetrieval source-dev full corpus, all 2000 queries; no blog tuning or new embedding calls",
+  "candidate_policy": {"lexical": 24, "vector": 24, "fusion_k": 60, "weights": [0.5, 0.5], "output": 8, "chunking": "existing token-window-v2", "rerank_scope": "exact same document union, at most 48; no filtering or added candidates"},
+  "input_policy": {"name": "first-production-rrf-locator-pair-v1", "query": "complete original query, no instruction", "passage": "first existing production RRF source match with title prefix; no new source window or answer-label selection", "max_pair_tokens": 512, "truncation": "only_second, preserve complete query; record exact visible source offsets", "score": "raw single logit, descending; ties retain fixed RRF order"},
+  "model": {"original": "BAAI/bge-reranker-base", "original_revision": "2cfc18c9415c912f9d8155881c133215df768a70", "export": "onnx-community/bge-reranker-base-ONNX", "export_revision": "f131ae72114cb18333648a2ee6b0942849e8ab95", "export_path": "onnx/model_quantized.onnx", "export_sha256": "46a1bb4cf46ff1e300d27589d620141fbf04fc0eaf8e7bb6dea5e044475ff387", "tokenizer_sha256": "14917dd757b81bc44d4af6b028367351702656670c1954e055dabdfcf21593cf", "representation": "community ONNX dynamic INT8; do not call it official full-precision quality", "control": "same fixed public/synthetic pair inputs on author's official FP32 ONNX; report logits/ranks and timing without claiming exhaustive equivalence"},
+  "runtime": {"onnxruntime": "1.23.2", "provider": "CPUExecutionProvider", "intra_op_threads": 2, "inter_op_threads": 1, "execution": "sequential", "spinning": false, "batch_size": 4, "niceness": 15, "concurrent_inference_processes": 1},
+  "comparisons": ["pure vector original top8", "fixed equal RRF top8", "cross-encoder reranked same union top8"],
+  "decision_budget": {"scope": "Project decision budget, not an industry universal standard or a production release claim", "ndcg8_gain_over_each_baseline_min": 0.01, "recall8_delta_vs_vector_min": -0.005, "long_source_recall8_delta_vs_vector_min": -0.01, "added_pretokenized_warm_query_p95_seconds_max": 1.0, "independent_business_validation_available": false, "production_default": "A public-dev pass alone does not enable a new production dependency; state explicitly which quality/latency conditions pass or fail"},
+  "metrics": ["Recall@1/8/24", "nDCG@1/8", "Success@1/8", "candidate union/oracle bounds", "paired query bootstrap95 and win/loss", "fixed old long-source groups", "source truncation rate/visible coverage", "warm query p50/p95/p99 and cold load", "padded/unpadded tokens/model batches/CPU/wall/RSS", "same 4096 framework-token downstream reading cost"],
+  "cmrc": "Only source-input budget/evidence coverage audit if useful; known-source single candidate needs no reranker model call and cannot measure reranking quality",
+  "failure_review": "5-10 deterministic examples spanning candidate miss, RRF suppression, reranker recovery/regression and truncated input; IDs and analytical paraphrases, not redistributed source documents",
+  "end_condition": "Finish this single-model controlled run, reproduce metrics, write adoption decision and freeze RAG. No additional model sweep, feature work, production deployment or semantic Judge. Reopen on real corpus migration with evidence labels or measured business/SLO regression.",
+  "semantic_judge_calls": 0
+}
