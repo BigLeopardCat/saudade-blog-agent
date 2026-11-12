@@ -19,9 +19,10 @@ from rag.corpus import content_revision
 
 
 def test_wordpiece_continuations_are_rechecked_without_losing_source_text():
+    unknown = "[UNK]"
     vocab = {word: i for i, word in enumerate(
         ["[UNK]", "[BOS]", "[EOS]", "aaa", "##bbb", "##ccc", "b", "##b", "c", "##c"])}
-    tokenizer = Tokenizer(models.WordPiece(vocab, unk_token="[UNK]"))
+    tokenizer = Tokenizer(models.WordPiece(vocab, unk_token=unknown))
     tokenizer.pre_tokenizer = pre_tokenizers.Whitespace()
     tokenizer.post_processor = processors.TemplateProcessing(
         single="[BOS] $A [EOS]", special_tokens=[("[BOS]", 1), ("[EOS]", 2)])
