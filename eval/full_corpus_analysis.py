@@ -111,6 +111,7 @@ def summarize(data, scored, rankings, chunk_counts):
             "vector8_hit_hybrid8_miss": bool(positive & set(values["vector"][:8]))
                                       and not bool(positive & final)}
     return {"groups": buckets, "group_queries": {g: len(q) for g, q in groups.items()},
+            "group_query_ids": groups,
             "paired_comparisons": differences, "failure_stages": stages,
             "source_indexing": {"source_documents": len(data["corpus"]),
                 "documents_with_vector_chunks": len(chunk_counts),
