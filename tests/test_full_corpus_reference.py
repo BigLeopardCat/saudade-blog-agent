@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from eval import full_corpus_dense as dense
-from eval.full_corpus_analysis import fusion, read_stage
+from eval.full_corpus_analysis import fusion, read_stage, source_groups
 from eval.full_corpus_lexical import document_ranks, execute
 
 
@@ -37,6 +37,16 @@ def test_document_budget_is_applied_after_chunk_aggregation():
     assert document_ranks(scores, owners, 3, 3) == [0, 1, 2]
     assert list(dict.fromkeys(owners[:3])) == [0]
     assert document_ranks(np.array([0., -.1, 0.]), np.arange(3), 3, 3) == []
+
+
+def test_length_strata_use_positive_labels_and_keep_the_original_query_population():
+    data = {"corpus": {"long": {"text": "x" * 2000}, "short": {"text": "short"}},
+            "queries": {"a": {}, "b": {}},
+            "qrels": {"a": {"long": 2}, "b": {"long": 0, "short": 1}}}
+    order, groups = source_groups(data, {"long": 3, "short": 1})
+    assert set(order) == {"a", "b"}
+    assert groups["has_positive_source_over_1800_chars"] == ["a"]
+    assert groups["has_positive_source_with_multiple_vector_chunks"] == ["a"]
 
 
 def test_native_fusion_and_application_agree_without_dropping_one_route():

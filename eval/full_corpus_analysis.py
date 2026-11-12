@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 os.environ["SAUDADE_IGNORE_ENV_FILE"] = "1"
@@ -68,9 +69,20 @@ def runs(lexical, whole, dense, jieba):
     return result, failures
 
 
-def summarize(data, scored, rankings):
+def source_groups(data, chunk_counts):
     order = sorted(data["queries"], key=lambda q: priority("saudade-du-20261112-v1", "query", q))
     groups = {"prior_200": order[:200], "additional_1800": order[200:]}
+    groups["has_positive_source_over_1800_chars"] = [q for q in order if any(
+        grade > 0 and len(data["corpus"][did]["text"]) > 1800
+        for did, grade in data["qrels"][q].items())]
+    groups["has_positive_source_with_multiple_vector_chunks"] = [q for q in order if any(
+        grade > 0 and chunk_counts.get(did, 0) > 1
+        for did, grade in data["qrels"][q].items())]
+    return order, groups
+
+
+def summarize(data, scored, rankings, chunk_counts):
+    order, groups = source_groups(data, chunk_counts)
     buckets, differences, stages = {}, {}, {}
     for name, arm in scored.items():
         buckets[name] = {group: {metric: sum(arm["per_query"][q][metric] for q in qids) / len(qids)
@@ -98,7 +110,12 @@ def summarize(data, scored, rankings):
             "in_union100_but_not_final8": sorted((positive & union100) - final),
             "vector8_hit_hybrid8_miss": bool(positive & set(values["vector"][:8]))
                                       and not bool(positive & final)}
-    return {"groups": buckets, "paired_comparisons": differences, "failure_stages": stages}
+    return {"groups": buckets, "group_queries": {g: len(q) for g, q in groups.items()},
+            "paired_comparisons": differences, "failure_stages": stages,
+            "source_indexing": {"source_documents": len(data["corpus"]),
+                "documents_with_vector_chunks": len(chunk_counts),
+                "zero_vector_chunk_document_ids": sorted(
+                    data["corpus"].keys() - chunk_counts.keys())}}
 
 
 def main():
@@ -112,13 +129,18 @@ def main():
     whole, whole_meta = read_stage(args.artifacts / "lexical-document.jsonl", data)
     jieba, jieba_meta = read_stage(args.artifacts / "lexical-jieba.jsonl", data)
     dense, dense_meta = read_stage(args.artifacts / "dense.jsonl", data)
+    inventory_metadata = json.loads((args.artifacts / "inventory.json").read_text())
+    if inventory_metadata["input_hashes"] != data["hashes"]:
+        raise ValueError("inventory source binding changed")
+    with (args.artifacts / "inventory.jsonl").open() as stream:
+        chunk_counts = Counter(json.loads(line)["document_id"] for line in stream)
     ranked, per_query = runs(lexical, whole, dense, jieba)
     scored = {name: evaluate(data, run, [1, 3, 8, 10, 24, 50, 100])
               for name, run in ranked.items()}
     result = {"schema_version": 1, "input_hashes": data["hashes"], "dataset": data["manifest"],
               "stages": {"lexical_chunk": lex_meta, "lexical_document": whole_meta,
                          "jieba_document": jieba_meta, "dense": dense_meta}, "arms": scored,
-              **summarize(data, scored, per_query), "semantic_judge_calls": 0,
+              **summarize(data, scored, per_query, chunk_counts), "semantic_judge_calls": 0,
               "scope": "Source dev full corpus. Fixed ablations, no parameter selection. "
                        "Shared pretrained model and document-level qrels: cannot validate "
                        "chapter evidence, generated answers or production success. "
