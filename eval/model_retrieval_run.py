@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import settings  # noqa: E402
 from eval.offline_rag_eval import evaluate  # noqa: E402
 from eval.rag_dataset import load  # noqa: E402
+from eval.retrieval_evidence import locations  # noqa: E402
 from rag import DEFAULT_TOP_K  # noqa: E402
 from rag import chunks as chunking  # noqa: E402
 from rag import vector_index as vectors
@@ -67,14 +68,18 @@ def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
         raise ValueError("unexpected actual vector dimension")
     build_seconds = time.perf_counter() - start
     runs: dict[str, dict] = {name: {} for name in ("bm25", "vector", "hybrid")}
+    source_locations: dict[str, dict] = {name: {} for name in runs}
+    ids = {key: i + 1 for i, key in enumerate(keys)}
     query_seconds, phase_seconds = {}, {}
     with vectors._query_lock:
         cache_entries = len(vectors._query_cache)
     for qid, query in data["queries"].items():
         start = time.perf_counter()
-        lexical = index._lexical_ranked(query["text"], candidates)
+        scope = query.get("scope_document_id")
+        options = {"article_id": ids[scope]} if scope else {}
+        lexical = index._lexical_ranked(query["text"], candidates, **options)
         lexical_done = time.perf_counter()
-        dense, reason, missing = index._vector_ranked(query["text"], candidates)
+        dense, reason, missing = index._vector_ranked(query["text"], candidates, **options)
         vector_done = time.perf_counter()
         if reason not in (None, "no_vector_hits") or missing or lexical is None:
             raise ValueError("query retrieval failed; do not silently score a degraded model")
@@ -89,6 +94,7 @@ def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
                 keys[h["id"] - 1]: float(len(hits) - rank)
                 for rank, h in enumerate(hits[:top_k])
             }
+            source_locations[name][qid] = locations(hits[:top_k], keys)
         print("completed query " + str(len(query_seconds)), flush=True)
     policy = active_profile()
     config = {
@@ -128,7 +134,8 @@ def execute(data: dict, collection: str, candidates: int, expected_dim: int, *,
             "single sequential client; query_seconds includes lexical, vector and fusion; "
             "query cache may warm on repeated text; no hardware isolation"
         ),
-        "arms": {name: evaluate(data, run, cutoffs) for name, run in runs.items()},
+        "arms": {name: {**evaluate(data, run, cutoffs, locations=source_locations[name]),
+                        "locations": source_locations[name]} for name, run in runs.items()},
     }
 
 
@@ -171,7 +178,8 @@ def main(argv=None) -> int:
     log.setLevel(logging.DEBUG)
     root = Path(__file__).resolve().parents[1]
     sources = [*sorted((root / "rag").glob("*.py")), Path(__file__),
-               root / "eval/offline_rag_eval.py", root / "eval/rag_dataset.py"]
+               root / "eval/offline_rag_eval.py", root / "eval/rag_dataset.py",
+               root / "eval/retrieval_evidence.py"]
     code_hash = hashlib.sha256(b"".join(p.read_bytes() for p in sources)).hexdigest()
     data = load(args.dataset, args.split)
     report = execute(data, args.collection, candidates, args.expected_dim,

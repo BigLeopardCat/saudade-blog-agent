@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from eval.retrieval_evidence import validate
+
 
 def _rows(path: Path, limit: int) -> dict[str, dict]:
     rows = {}
@@ -65,6 +67,7 @@ def load(root: Path, split: str, max_docs: int = 10000) -> dict:
     selected = {qid: queries[qid] for qid in qrels}
     for qid, query in selected.items():
         _validate_evidence(query, qrels[qid])
+        validate(query, corpus, {did for did, grade in qrels[qid].items() if grade > 0})
     hashes = {
         p.relative_to(root).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths
     }

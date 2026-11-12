@@ -80,6 +80,21 @@ def test_cli_defaults_share_production_cutoffs_and_record_the_complete_config(en
     assert endpoint
 
 
+def test_article_scope_reaches_both_retrievers_and_keeps_returned_source_locations(endpoint):
+    data = {"manifest": {}, "hashes": {},
+            "corpus": {"a": {"title": "A", "text": "outside-only-identifier"},
+                       "b": {"title": "B", "text": "unrelated scoped body"}},
+            "queries": {"q": {"text": "outside-only-identifier", "scope_document_id": "b"}},
+            "qrels": {"q": {"b": 1}}}
+    report = runner.execute(data, "eval-scoped-source", 24, 2)
+    assert report["arms"]["bm25"]["run"]["q"] == {}
+    for name in ("vector", "hybrid"):
+        arm = report["arms"][name]
+        assert list(arm["run"]["q"]) == ["b"]
+        assert arm["locations"]["q"][0]["document_id"] == "b"
+        assert arm["locations"]["q"][0]["matches"][0]["section_id"] == "s1"
+
+
 def test_research_pool_and_chunk_changes_are_explicit_and_not_output_limits(endpoint, tmp_path):
     assert runner.main(arguments(tmp_path, "--chunk-chars", "128", "--candidates", "5",
                                  "--top-k", "2", "--k", "1", "2")) == 0

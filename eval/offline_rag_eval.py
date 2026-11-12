@@ -45,9 +45,12 @@ def bm25_run(data: dict, top_k: int) -> tuple[dict, dict]:
     index.build()
     timings = {"build_seconds": time.perf_counter() - start, "query_seconds": {}}
     run = {}
+    ids = {key: i + 1 for i, key in enumerate(keys)}
     for qid, query in data["queries"].items():
         start = time.perf_counter()
-        hits = index._lexical_ranked(query["text"], top_k)
+        scope = query.get("scope_document_id")
+        hits = index._lexical_ranked(query["text"], top_k,
+                                     **({"article_id": ids[scope]} if scope else {}))
         if hits is None:
             raise RuntimeError("offline index unavailable")
         timings["query_seconds"][qid] = time.perf_counter() - start
@@ -67,7 +70,7 @@ def read_run(path: Path, data: dict) -> dict:
     return run
 
 
-def evaluate(data: dict, run: dict, cutoffs: list[int]) -> dict:
+def evaluate(data: dict, run: dict, cutoffs: list[int], *, locations: dict | None = None) -> dict:
     if set(run) != set(data["queries"]):
         raise ValueError("run must explicitly include all evaluated queries, including empty runs")
     ranked_run = {
@@ -76,6 +79,10 @@ def evaluate(data: dict, run: dict, cutoffs: list[int]) -> dict:
         }
         for q, hits in run.items()
     }
+    if locations is not None and (set(locations) != set(run) or any(
+            [hit["document_id"] for hit in locations[qid]] != list(ranked_run[qid])
+            for qid in run)):
+        raise ValueError("source locations must match the scored query/document ranks")
     positive = {q: r for q, r in data["qrels"].items() if any(v > 0 for v in r.values())}
     measures = [
         m @ k
@@ -97,6 +104,10 @@ def evaluate(data: dict, run: dict, cutoffs: list[int]) -> dict:
                 per_query[qid][f"EvidenceCoverage@{k}"] = sum(
                     bool(found.intersection(g)) for g in groups
                 ) / len(groups)
+            if query.get("evidence_spans") and locations is not None:
+                from eval.retrieval_evidence import score
+
+                per_query[qid].update(score(query["evidence_spans"], locations[qid], k))
         if qid not in positive:
             per_query[qid]["CandidateReturnedOnUnanswerable"] = float(bool(hits))
     buckets: dict[str, list[str]] = {"all": list(run)}
@@ -113,7 +124,8 @@ def evaluate(data: dict, run: dict, cutoffs: list[int]) -> dict:
             }
             for name in sorted(names)
         }
-    return {"summary": summary, "per_query": per_query, "run": run}
+    return {"summary": summary, "per_query": per_query, "run": run,
+            "evidence_locations_evaluated": locations is not None}
 
 
 def main(argv=None) -> int:
@@ -149,7 +161,8 @@ def main(argv=None) -> int:
     from rag.search import BM25_B, BM25_K1, expansion_enabled, synonyms
 
     root = Path(__file__).resolve().parents[1]
-    sources = [*sorted((root / "rag").glob("*.py")), Path(__file__), root / "eval/rag_dataset.py"]
+    sources = [*sorted((root / "rag").glob("*.py")), Path(__file__), root / "eval/rag_dataset.py",
+               root / "eval/retrieval_evidence.py"]
     result.update(
         schema_version=1,
         run_info=run_info,

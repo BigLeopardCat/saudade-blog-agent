@@ -57,6 +57,17 @@ python -m eval.offline_rag_eval eval/fixtures/bilingual_retrieval --output /tmp/
 按 category 分桶、保留逐题结果和每项样本数，不把文档命中当成正文已读或答案完整。
 未标注文档不能据此断言不相关。公开小集不提供生产性能或置信区间保证。
 
+## 真实博客章节证据
+
+[`blog_evidence`](fixtures/blog_evidence/README.md) 冻结全部公开文章和源范围标注。
+除文章级 qrels，还保存 `evidence_spans` 的必要组/可替代精确原文范围；加载时核对
+内容 SHA、解析版本、章节和字符坐标。`scope_document_id` 用于已知文章内检索。
+三路运行器保留真实返回位置，额外报告 `PassageEvidenceCoverage@k` 与
+`AllPassageEvidence@k`。只有 TREC 文章排名而无位置时，这两项保持未评估。
+
+标注由项目 Agent 编写，源坐标校验不代替独立人工语义复核。这个数据集用于定位文章
+命中后的证据缺口；公开、体量小且问题相关，不能据此宣称通用 RAG 或生产成功率。
+
 ## 实际 embedding 与混合检索
 
 先通过 `rag.manage setup` 初始化评测库，并将其 DSN 放入 `SAUDADE_RAG_EVAL_DSN`；
@@ -100,6 +111,40 @@ run-info 需要 name、revision、非空 config；配置记录模型和输入处
 [BEIR SciFact 验证记录](scifact-local-baseline.md)使用英文科学语料，可补充通用检索控制，
 不代表中文博客效果。公开中文语料可选择许可明确的固定 MIRACL 子集，保留背景与难负例；
 无需将测试材料发布到博客，下载和真实模型执行均显式选择。
+
+## 中文公开基准对照与归因
+
+`eval.prepare_duretrieval` 复用已有固定抽样与 BEIR 读取器，从固定 revision 的
+[MTEB DuRetrieval](https://huggingface.co/datasets/mteb/DuRetrieval) 准备中文对照。
+仅处理本地已下载 parquet，逐文件 SHA-256 不符时拒绝准备；下载来源、路径与校验和
+见该模块常量。原始语料正文不提交仓库，MTEB 卡片未声明语料许可的事实保留在 manifest。
+
+```sh
+python -m eval.prepare_duretrieval --source-dir /path/to/pinned-du-parquets \
+  --output eval/data/du-fixed --queries 200 --background 8192 --pool 10000
+```
+
+按固定 seed 选问题，保留这些问题的全部原始相关性等级，再加入固定背景文档及词法干扰项。
+不按长度筛题、不截断正文；未标注候选不能当成负例。默认准备的是约九千文档的源 dev
+子集，不能报告为官方十万文档完整基准、未见测试集或生产任务成功率。
+
+对它和博客证据集分别使用上面的 `eval.model_retrieval_run`，保持模型、profile、切片、
+候选池、top-k 和 k 相同，使用独立评测数据库/collection，不访问生产向量集合。
+每个进程顺序测词法、向量、融合；向量阶段包含查询 embedding 和数据库访问，
+不把这段时间误算成纯数据库检索，也不把整个三路共测时间算给某一单路。
+
+```sh
+python -m eval.retrieval_comparison eval/data/du-fixed /tmp/du-report.json \
+  --split dev --cutoff 8 --output /tmp/du-attribution.json
+python -m eval.retrieval_comparison eval/fixtures/blog_evidence /tmp/blog-report.json \
+  --split test --cutoff 8 --output /tmp/blog-attribution.json
+```
+
+归因器校验报告与数据哈希，保留每题三路的结果、配对提升/退化数与查询级描述性 bootstrap。
+失败分为 top-k 未命中相关文章、多文证据不全、命中文章但指定证据位置未覆盖；它们是
+可观测阶段。当前不保存每路完整候选池，不能仅据此区分初召回不足和输出截点排序失误，
+也不能推断 embedding 模型根因。相关问题家族的统计不代表独立生产采样。
+无答案候选只记观察，回答事实性与弃答正确性保持未评估，不调用 LLM Judge。
 
 当前没有独立 LLM 查询重写器或 cross-encoder reranker。先用逐题证据判断错误发生在
 查询、召回、排序还是正文读取，再比较改写/重排带来的质量、时延与费用，不默认增加模型调用。

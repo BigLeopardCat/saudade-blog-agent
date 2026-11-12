@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "name": "Frozen public blog section-evidence regression",
+  "source": "https://saudade.site/api/public/rag/corpus",
+  "revision": "20261112-f6317ab14be0ef9c12b0e6476b9e6c28a968f488e2e8fe590f148a9d16c7a80f",
+  "license": "Public blog content retains its source rights; evaluation snapshot included for this repository owner, not relicensed as MIT",
+  "scope": "Project/agent-authored source-bound retrieval regression; not independent human-validated ground truth, blind holdout, current implementation facts, or generation-quality evidence.",
+  "annotation_status": "Authored before retrieval runs; exact quotes, revisions and ranges checked by loader. Independent human semantic annotation review pending. No LLM Judge used.",
+  "section_schema": "commonmark-top-level-source-v1",
+  "snapshot_note": "All10 publicly visible articles retained, including an empty title and a short unrelated post. Historic architecture claims are evaluated as article content, not current production facts.",
+  "splits": {
+    "method": "SHA256 family modulo4; 0=dev, others=test; all is diagnostic union",
+    "dev": "Development labels; no parameter tuning in this run",
+    "test": "Public visible held-out query families for this run, not independent authorship or secret holdout",
+    "all": "Diagnostic union; never an independent test score"
+  },
+  "annotations": {
+    "passage_requirement": "Each group requires full character coverage of at least one alternative exact source span. Selected spans are not exhaustive relevance labels.",
+    "no_answer": "Five authored nonexistent identifiers; returned candidates do not establish generation hallucination."
+  },
+  "documents": [
+    {
+      "id": "12",
+      "url": "https://saudade.site/article/12",
+      "revision": "852643550d6afb1532a45684cf8030efe17bc1b2290f2a20fa07fa973541f81b"
+    },
+    {
+      "id": "14",
+      "url": "https://saudade.site/article/14",
+      "revision": "5d9b44d78484b9d8e273f7173a48c0bae30351de02f9df9da5c7dec532c7dc11"
+    },
+    {
+      "id": "16",
+      "url": "https://saudade.site/article/16",
+      "revision": "7c098855c85ae99737e5cb1d001fefb5c7c4f5f2073ed4954dfb4acf8221b5f2"
+    },
+    {
+      "id": "19",
+      "url": "https://saudade.site/article/19",
+      "revision": "1542c2a0128514ec79a83fc7925496f605c54c5d5dd5217fa0031ff3cf02b59e"
+    },
+    {
+      "id": "22",
+      "url": "https://saudade.site/article/22",
+      "revision": "6c628a18d85192babfeb1a00706c27375d8d0f3622e1bb3f1d540baf209e90bc"
+    },
+    {
+      "id": "23",
+      "url": "https://saudade.site/article/23",
+      "revision": "2de495a64348f88db8459850623a3d97991f51cbc55376f2295a0dc2a769cc07"
+    },
+    {
+      "id": "46",
+      "url": "https://saudade.site/article/46",
+      "revision": "0c623fb15585bb027a57357b7e1e428754491ae70aaef00187deb71cc3419d64"
+    },
+    {
+      "id": "54",
+      "url": "https://saudade.site/article/54",
+      "revision": "c11dd2ce64a0d34375517c49c18a1ae0690f17e6ef88da98926a1508fae23ba1"
+    },
+    {
+      "id": "62",
+      "url": "https://saudade.site/article/62",
+      "revision": "1f3fc216e168e3468191b7eaa8f1bd6b4b8dbc0d67d95bc5a19ddfaf675120ff"
+    },
+    {
+      "id": "122",
+      "url": "https://saudade.site/article/122",
+      "revision": "9c44e9c395e71bf46a37d4aaa39c3eb6674667e8273f2954c560fb197b9d76e9"
+    }
+  ]
+}
