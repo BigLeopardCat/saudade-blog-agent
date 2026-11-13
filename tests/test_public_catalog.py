@@ -282,7 +282,7 @@ def test_real_runtime_binds_canonical_catalog_links_independently_of_api_transpo
 
 
 def test_parent_name_is_one_exact_backend_request_without_listing_parents(backend):
-    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1}
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1, "resolvedParentName": "一级"}
     data = public_catalog.list_tags.invoke({"parent_name": "一级", "level": 2}).data
     assert data["total"] == 1 and data["items"][0]["parentId"] == 1
     assert len(backend["requests"]) == 1
@@ -292,6 +292,12 @@ def test_parent_name_is_one_exact_backend_request_without_listing_parents(backen
     assert public_catalog.list_tags.invoke({"parent_name": "ambiguous"}).kind == "unavailable"
 
 
+@pytest.mark.parametrize("parent", [None, "other"])
+def test_unverified_parent_name_cannot_become_a_scoped_result(backend, parent):
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1, "resolvedParentName": parent}
+    assert public_catalog.list_tags.invoke({"parent_name": "一级"}).kind == "unavailable"
+
+
 @pytest.mark.parametrize("args", [
     {"parent_name": " ", "level": 2}, {"parent_name": "一级", "level": 1},
     {"parent_name": "一级", "parent_id": 1},
@@ -299,3 +305,12 @@ def test_parent_name_is_one_exact_backend_request_without_listing_parents(backen
 def test_invalid_parent_filters_do_not_issue_a_request(backend, args):
     assert public_catalog.list_tags.invoke(args).kind == "invalid_args"
     assert backend["requests"] == []
+
+
+def test_empty_children_still_require_server_verified_parent_scope(backend):
+    backend["override"] = {"code": 200, "data": [], "total": 0}
+    assert public_catalog.list_tags.invoke({"parent_name": "一级"}).kind == "unavailable"
+    backend["override"]["resolvedParentName"] = "一级"
+    data = public_catalog.list_tags.invoke({"parent_name": "一级"}).data
+    assert data["items"] == [] and data["total"] == 0
+    assert data["resolvedParentName"] == "一级"

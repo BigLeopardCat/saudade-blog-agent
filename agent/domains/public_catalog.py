@@ -87,5 +87,8 @@ def list_tags(page: Page = 1, page_size: CatalogLimit = 20, level: Level | None 
         return invalid_args("父标签筛选仅适用于子标签，编号和精确名称只能提供一种。")
     return read_page("tags", page, page_size,
                      {"level": level, "parent_id": parent_id, "parent_name": parent_name}, _tag,
-                     {"level": level, "parentId": parent_id},
-                     identity=lambda row: (row["level"], row["id"]))
+                     {"level": 2 if parent_name is not None else level,
+                      "parentId": parent_id},
+                     identity=lambda row: (row["level"], row["id"]),
+                     expected_page=({"resolvedParentName": parent_name}
+                                    if parent_name is not None else None))
