@@ -1,4 +1,4 @@
-"""Real SDK timeout recovery must not replay output or completed tool work."""
+"""Real SDK transport recovery must not replay output or completed tool work."""
 
 import json
 from types import SimpleNamespace
@@ -9,7 +9,7 @@ from _own_support import config
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import InMemorySaver
-from openai import APITimeoutError
+from openai import APIConnectionError, APITimeoutError
 
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -26,6 +26,8 @@ def event(delta):
         {"index": 0, "delta": delta, "finish_reason": None}]}) + "\n\n").encode()
 
 
+@pytest.mark.parametrize("failure", [httpx.ReadTimeout, httpx.ConnectError,
+                                     httpx.ReadError, httpx.RemoteProtocolError])
 @pytest.mark.parametrize("prefix,exhausted,attempts,recovered", [
     (None, False, 3, True),
     ({"role": "assistant", "content": ""}, False, 3, True),
@@ -35,8 +37,8 @@ def event(delta):
     ({"tool_calls": [{"index": 0, "id": "partial", "type": "function", "function": {
         "name": "fixture_read", "arguments": "{"}}]}, False, 2, False),
 ])
-def test_timeout_recovery_is_bounded_and_preserves_the_completed_read(
-        monkeypatch, prefix, exhausted, attempts, recovered):
+def test_transport_recovery_is_bounded_and_preserves_the_completed_read(
+        monkeypatch, failure, prefix, exhausted, attempts, recovered):
     monkeypatch.setattr("config.settings.llm_provider", "opencode")
     monkeypatch.setattr("langchain.agents.middleware.model_retry.time.sleep", lambda _: None)
     requests, calls, observations = [], [], []
@@ -52,13 +54,13 @@ def test_timeout_recovery_is_bounded_and_preserves_the_completed_read(
     class Body(httpx.AsyncByteStream):
         async def __aiter__(self):
             yield event(prefix)
-            raise httpx.ReadTimeout("Synthetic timeout")
+            raise failure("Synthetic transport failure")
 
     async def provider(request):
         requests.append(json.loads(request.content))
         if len(requests) > 1 and (len(requests) == 2 or exhausted):
             if prefix is None:
-                raise httpx.ReadTimeout("Synthetic timeout", request=request)
+                raise failure("Synthetic transport failure", request=request)
             return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Body())
         delta = ({"tool_calls": [{"index": 0, "id": "read", "type": "function", "function": {
             "name": "fixture_read", "arguments": "{}"}}]} if len(requests) == 1 else
@@ -80,7 +82,7 @@ def test_timeout_recovery_is_bounded_and_preserves_the_completed_read(
             assert outcome.reply == "Recovered the persisted fact."
             assert not runtime.store.load(config()).unfinished
         else:
-            with pytest.raises((APITimeoutError, httpx.ReadTimeout)):
+            with pytest.raises((APIConnectionError, httpx.TransportError)):
                 list(runtime.stream_events(inputs, config()))
             assert runtime.store.load(config()).unfinished
     assert len(requests) == attempts and calls == ["read"]
@@ -89,11 +91,18 @@ def test_timeout_recovery_is_bounded_and_preserves_the_completed_read(
     errors = [row for row in observations if row["event"] == "llm_error"]
     assert len(errors) == (2 if exhausted else 1)
     assert all(row["failure_source"] == "transport" for row in errors)
+    output_started = bool(prefix and (prefix.get("content") or prefix.get("reasoning_content")
+                                     or prefix.get("tool_calls")))
+    assert all(row["stream_output_started"] is output_started for row in errors)
 
 
-def test_timeout_requires_explicit_preoutput_evidence():
+@pytest.mark.parametrize("failure", [APIConnectionError, APITimeoutError,
+                                     httpx.ConnectError, httpx.ReadError,
+                                     httpx.RemoteProtocolError])
+def test_connection_recovery_requires_explicit_preoutput_evidence(failure):
     from models.errors import retryable_model_request
 
-    error = APITimeoutError(request=httpx.Request("POST", "https://model.test/v1"))
+    error = (failure(request=httpx.Request("POST", "https://model.test/v1"))
+             if issubclass(failure, APIConnectionError) else failure("synthetic"))
     assert not retryable_model_request(error)
     assert retryable_model_request(error, before_output=True)
