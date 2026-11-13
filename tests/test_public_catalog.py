@@ -53,6 +53,42 @@ def test_public_pages_have_total_without_body_or_identity(backend):
     assert backend["requests"][-1].url.params["top_only"] == "true"
 
 
+@pytest.mark.parametrize("name", ["list_notes", "get_top_notes"])
+def test_article_dates_do_not_conflate_id_order_creation_and_update(backend, name):
+    first, second, third = backend["articles"][:3]
+    for row in backend["articles"]:
+        row.update(createdAt="2026-01-01T00:00:00", updatedAt="2026-01-01T00:00:00")
+    first.update(createdAt="2026-11-05T10:24:08", updatedAt="2026-11-05T10:27:20")
+    second.update(createdAt="2026-10-10T09:31:24", updatedAt="2026-11-07T17:15:18")
+    third.update(createdAt="2026-10-01T02:34:17", updatedAt="2026-11-08T06:24:27")
+    backend["articles"][-1]["updatedAt"] = "2026-12-01T00:00:00"
+    result = getattr(public_catalog, name).invoke({"page_size": 3}).data
+    assert result["returned_summary"] == {
+        "scope": "returned_items",
+        "newestCreated": {"id": first["id"], "createdAt": first["createdAt"]},
+        "newestUpdated": {"id": third["id"], "updatedAt": third["updatedAt"]},
+    }
+    assert result["hasMore"] and len(backend["requests"]) == 1
+
+
+@pytest.mark.parametrize("value", [None, "", "invalid", 123, "2026-11-01T00:00:00+08:00"])
+def test_incomplete_invalid_or_mixed_zone_times_keep_page_freshness_unknown(backend, value):
+    for row in backend["articles"]:
+        row.update(createdAt="2026-11-01T00:00:00", updatedAt="2026-11-02T00:00:00")
+    backend["articles"][0]["updatedAt"] = value
+    result = public_catalog.list_notes.invoke({}).data
+    assert result["returned_summary"]["newestUpdated"] is None
+    assert result["returned_summary"]["newestCreated"]["createdAt"] == "2026-11-01T00:00:00"
+    assert len(backend["requests"]) == 1
+
+
+def test_empty_article_catalog_does_not_invent_time_extrema(backend):
+    backend["articles"] = []
+    result = public_catalog.list_notes.invoke({}).data
+    assert result["returned_summary"] == {
+        "scope": "returned_items", "newestCreated": None, "newestUpdated": None}
+
+
 @pytest.mark.parametrize("field,value", [("status", "draft"), ("isPublic", False), ("isPublic", 1)])
 def test_non_public_results_are_not_exposed(backend, field, value):
     backend["articles"][0][field] = value
