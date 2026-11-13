@@ -290,6 +290,8 @@ class SessionMiddleware(AgentMiddleware):
                        invalid_tool_calls=bool(getattr(response, "invalid_tool_calls", ())),
                        content_chars=len(text_content(getattr(response, "content", ""))),
                        reasoning_chars=len(str(reasoning or "")),
+                       **({"stream_output_started": session.stream_guard.first_token}
+                          if response is None else {}),
                        **usage_fields(response), **error_fields(error))
 
     @hook_config(can_jump_to=["end", "model"])
