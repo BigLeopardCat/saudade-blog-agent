@@ -606,9 +606,11 @@
     }
   },
   "release_blockers": [
-    "Complete final-candidate baseline:198of240scenarios were not run after the stream timeout.",
-    "One article-discovery wording suspect remains unresolved; safe capability introspection is also disputed by an outdated first-action annotation. Original verdicts and frozen scores are retained.",
-    "Final full usage and per-class cost/latency percentiles remain unverified; earlier morning read-input P95 failure20190.4/20000 is not overwritten."
+    "Two model-stream ReadErrors; four full-batch attempts have unknown usage, including two recovered requests.",
+    "Read calls P95=4 vs3 and input P95=20712.7 vs20000. Targets unchanged.",
+    "Nine raw semantic suspects remain; assistant notes distinguish content issues and judge false positives without changing scores. Corrected94sample calibration has1unverified call and3misses.",
+    "Known canonical-URL assertion and first-action annotation disputes retain original scores.",
+    "Some article_read andmulti P95s lack20complete-usage samples; no measurements are filled with zero."
   ],
   "limits": [
     "Readiness and zero pending cleanup do not establish model-provider availability.",
@@ -642,5 +644,1325 @@
     "runtime_dependency_packages": 78,
     "runtime_lock_sha256": "905a9a62d6efdb74053bd5b52b4a1d9f4d6fde28218b6da484e6f902adfa105a",
     "host_deployment_verification": "GitHub run43373507331 succeeded; actual build-info13:55:51+08:00 and readiness verified after deployment"
-  }
+  },
+  "complete_collection": {
+    "batch_id": "full-coverage-612329b9",
+    "status": "failed",
+    "evaluator_commit": "612329b95d135dffd5566f60811da6ab19668983",
+    "agent_sha": "7c6878f18e475cb45c15b212d38d5c7db026fc18",
+    "host_sha": "a3e644f70dd8152a65f49ff4350d412f3e903c20",
+    "suite_sha256": "3bfb5948681ab1956040f33377ae12d10710e6a1d377f1520c4ddc1b250381bd",
+    "profile_sha256": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+    "full_report_sha256": "a51e76e5602b5a0279152322b2caba00084ab4cbfbcd9d001bc8f63a37f1d72a",
+    "evaluator_sha256": {
+      "golden_evaluation.py": "3721ac566c3bd09dedaab3cfd1b1e65c14d697855a5d03b6910ab78054777868",
+      "online_baseline.py": "3c1d169b700da96c475b47e056b1ecd68e2f4d42288bb26459dbe353344befac",
+      "online_transport.py": "b2a659d3909338453b2d87e71cdee373819be2eeec2b6707f2431f7123170fbd",
+      "stream_protocol.py": "7596e62a0a96ce438e8579a5997286ca9ddc9428c3d0aee757a9d978ce10810e",
+      "native_assertions.py": "b1ab0eee2ead8554fb03392c47291909a0906e92efbe8dce144f81329f620a94",
+      "request_metrics.py": "03661f6fb898bbb68d8364a9fc79440f3bb6d68174301fe8a48d28063529344e",
+      "latency_metrics.py": "f126eee47cafdf1af3caf9572dc414359faa9de032c86a1d58cbac8539642a6f",
+      "task_metrics.py": "b2da9ff3db26eb35ae7ba7352d55c47255afedef622a0d472492159cf728c25e",
+      "usage.py": "43664b9b37d43892a428aa19f922d06908747c08bc25ba05c90cf97a03e9cf01",
+      "release_readiness.py": "fc36010742f0a770320ba52b63dcf743f66ea6dbe773428f1facc74bc2bd259c",
+      "release_profile.json": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+      "statistical_metrics.py": "1456433d7e578d102084085a0dfdc9c7bfdab389d092f85b9c8ce3262808a677",
+      "action_metrics.py": "2bf162a531b1d7c4f2dd9ec7fb2a74e17f75e07b58c15773f3b736ed68d7879f",
+      "dataset_audit.py": "4490f4f71169483908ac71984c65040e712d15cc0a7b53efdcc18d7e91072f90",
+      "command_report.py": "3eaf5ce1735ce7d4e94552e427c906fe6e477f75460c2c747cb6b1bf9ebaf5d0",
+      "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b",
+      "corpus_terms.py": "e2160b7a70cbb424016739217700bf0fa3bd567d44f2564c45d1ce5f35a0e5d2",
+      "corpus_provenance.py": "91c8ae3342346b1a481e3aed9d544a3d9099cfb50326c82bdca3033704ef3ddf",
+      "golden_runtime.py": "4771db601fe7c553af8086ab9e6659cfd011cbc7de555d92f037bb2e94a60ac2",
+      "golden_thread.py": "966b34d98cc79e36ea237bc1523f4a2496d5ba9c31ccafab18034a0f984137c3",
+      "golden_trace.py": "672cb4b15c07a23178b53e555bd0e1c170a90f93284e563e2842c42b0a6407a4",
+      "native_receipt_contract.py": "685b58200ba5bcfb84455bb9dfb05b9543b32c2a2ef2fe3d088fa77dba512330",
+      "cache_diagnostics.py": "73c561de0e99b258cc1d73fb7d8ea5dbe0684dcc36c4731d857c1d22634742b8",
+      "agent/contracts/events.py": "2f32afaf61e7c6e7cec65f82aa3a1652feb972a064e03b064e52d5906e11740c"
+    },
+    "started_at": "2026-11-13T17:44:02.714071+08:00",
+    "finished_at": "2026-11-13T18:47:53.460171+08:00",
+    "planned_cases": 240,
+    "recorded_cases": 240,
+    "recorded_http_rounds": 279,
+    "raw_deterministic_counts": {
+      "passed": 237,
+      "evaluation_error": 2,
+      "failed": 1
+    },
+    "collection_policy": {
+      "continue_transport_errors": true,
+      "consecutive_transport_error_limit": 3
+    },
+    "automatic_case_retries": 0,
+    "business_write_approval": false,
+    "poc": {
+      "cases": 8,
+      "counts": {
+        "passed": 8
+      },
+      "report_sha256": "bfc6eed41a87735901292fb6d41cde7d6f568d6eb694cba248bc14c185f4fb10"
+    },
+    "task_usage": {
+      "poc": {
+        "calls": 18,
+        "measured": 18,
+        "unnamed": 0,
+        "output_seen": 18,
+        "unknown_attempts": 0,
+        "cache_seen": 18,
+        "cache_in": 87273,
+        "cache": 40832,
+        "reasoning_seen": 18,
+        "reasoning": 532,
+        "provider_cost_estimate_calls": 0,
+        "in": 87273,
+        "out": 1754,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 18,
+        "provider_list_cost_usd_sum": 0.01628211,
+        "provider_list_cost_usd_seen": 18,
+        "provider_allowance_usd_sum": 0.00976924,
+        "provider_allowance_usd_seen": 18,
+        "hit_rate": 0.4678652045879023,
+        "billing": {
+          "provider_cost_usd": 0,
+          "provider_list_cost_usd": 0.01628211,
+          "provider_allowance_usd": 0.00976924
+        }
+      },
+      "full": {
+        "calls": 611,
+        "measured": 611,
+        "unnamed": 0,
+        "output_seen": 611,
+        "unknown_attempts": 4,
+        "cache_seen": 611,
+        "cache_in": 3193522,
+        "cache": 2290176,
+        "reasoning_seen": 611,
+        "reasoning": 23542,
+        "provider_cost_estimate_calls": 0,
+        "in": 3193522,
+        "out": 69656,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 611,
+        "provider_list_cost_usd_sum": 0.23250355,
+        "provider_list_cost_usd_seen": 611,
+        "provider_allowance_usd_sum": 0.13950129000000014,
+        "provider_allowance_usd_seen": 611,
+        "hit_rate": 0.7171317435733964,
+        "billing": {
+          "provider_cost_usd": null,
+          "provider_list_cost_usd": null,
+          "provider_allowance_usd": null
+        }
+      }
+    },
+    "first_visible_s": {
+      "samples": 279,
+      "p50": 0.14269774267449975,
+      "p95": 0.18386692218482495,
+      "max": 0.4002041178755462
+    },
+    "trace_latency_s": {
+      "samples": 279,
+      "p50_s": 11.5,
+      "p95_s": 24.83,
+      "max_s": 68.2
+    },
+    "model_ttft_s": {
+      "samples": 613,
+      "p50": 4.567316322121769,
+      "p95": 6.64023991022259,
+      "max": 9.951941929291934
+    },
+    "first_decision": {
+      "expected": 240,
+      "measured": 239,
+      "correct": {
+        "passed": 235,
+        "total": 239,
+        "rate": 0.9832635983263598,
+        "wilson_95": [
+          0.9577651185606918,
+          0.993472784233174
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "unverified": 1,
+      "decision_rate": 0.9856115107913669,
+      "measured_decisions": 278,
+      "scope": "complete scenario: every initial decision correct; not task success"
+    },
+    "first_decision_failures": [
+      {
+        "case": "favorite_prepare",
+        "round": 1,
+        "expected": {
+          "any_tools": [
+            "prepare_favorite_change",
+            "list_my_favorites",
+            "load_favorites_info_tools"
+          ],
+          "allow_text": false
+        },
+        "actual": [
+          "load_favorites_info_tools",
+          "get_article_detail"
+        ]
+      },
+      {
+        "case": "post_admin_list",
+        "round": 1,
+        "expected": {
+          "any_tools": [
+            "load_admin_talks_info_tools",
+            "list_admin_talks"
+          ],
+          "allow_text": false
+        },
+        "actual": [
+          "load_public_activity_info_tools"
+        ]
+      },
+      {
+        "case": "tail_browser_board_about",
+        "round": 1,
+        "expected": {
+          "any_tools": [
+            "navigate_page",
+            "load_site_info_tools"
+          ],
+          "allow_text": false
+        },
+        "actual": [
+          "load_public_activity_info_tools"
+        ]
+      },
+      {
+        "case": "tail_article_intro_features",
+        "round": 1,
+        "expected": {
+          "any_tools": [
+            "get_article_detail",
+            "rag_search",
+            "search_notes"
+          ],
+          "allow_text": false
+        },
+        "actual": [
+          "get_article_detail",
+          "get_agent_capabilities"
+        ]
+      }
+    ],
+    "cache_diagnostics": {
+      "first_call": {
+        "calls": 278,
+        "measured": 278,
+        "unnamed": 0,
+        "output_seen": 278,
+        "unknown_attempts": 0,
+        "cache_seen": 278,
+        "cache_in": 1265046,
+        "cache": 830080,
+        "reasoning_seen": 278,
+        "reasoning": 8583,
+        "provider_cost_estimate_calls": 0,
+        "in": 1265046,
+        "out": 19983,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 278,
+        "provider_list_cost_usd_sum": 0.10530794000000003,
+        "provider_list_cost_usd_seen": 278,
+        "provider_allowance_usd_sum": 0.06318464999999995,
+        "provider_allowance_usd_seen": 278,
+        "known_prefix_input": 0,
+        "known_prefix_reused": 0,
+        "known_prefix_samples": 0,
+        "hit_rate": 0.6561658627433311,
+        "uncached_input": 434966,
+        "known_prefix_reuse_rate": null
+      },
+      "stable_prefix": {
+        "calls": 129,
+        "measured": 129,
+        "unnamed": 0,
+        "output_seen": 129,
+        "unknown_attempts": 0,
+        "cache_seen": 129,
+        "cache_in": 797487,
+        "cache": 702336,
+        "reasoning_seen": 129,
+        "reasoning": 5684,
+        "provider_cost_estimate_calls": 0,
+        "in": 797487,
+        "out": 21350,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 129,
+        "provider_list_cost_usd_sum": 0.040502299999999984,
+        "provider_list_cost_usd_seen": 129,
+        "provider_allowance_usd_sum": 0.024301300000000005,
+        "provider_allowance_usd_seen": 129,
+        "known_prefix_input": 709902,
+        "known_prefix_reused": 702336,
+        "known_prefix_samples": 129,
+        "hit_rate": 0.8806864563309496,
+        "uncached_input": 95151,
+        "known_prefix_reuse_rate": 0.9893421908939544
+      },
+      "changed_layout": {
+        "calls": 204,
+        "measured": 204,
+        "unnamed": 0,
+        "output_seen": 204,
+        "unknown_attempts": 0,
+        "cache_seen": 204,
+        "cache_in": 1130989,
+        "cache": 757760,
+        "reasoning_seen": 204,
+        "reasoning": 9275,
+        "provider_cost_estimate_calls": 0,
+        "in": 1130989,
+        "out": 28323,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 204,
+        "provider_list_cost_usd_sum": 0.08669331000000004,
+        "provider_list_cost_usd_seen": 204,
+        "provider_allowance_usd_sum": 0.05201534,
+        "provider_allowance_usd_seen": 204,
+        "known_prefix_input": 0,
+        "known_prefix_reused": 0,
+        "known_prefix_samples": 0,
+        "hit_rate": 0.6699976746016097,
+        "uncached_input": 373229,
+        "known_prefix_reuse_rate": null
+      }
+    },
+    "task_metrics": {
+      "chat": {
+        "calls": {
+          "samples": 37,
+          "p50": 1,
+          "p95": 1.0,
+          "max": 1,
+          "target_p95": 1
+        },
+        "in": {
+          "samples": 37,
+          "p50": 4008,
+          "p95": 4278.2,
+          "max": 5038,
+          "target_p95": 5000
+        },
+        "out": {
+          "samples": 37,
+          "p50": 86,
+          "p95": 240.8,
+          "max": 328,
+          "target_p95": 400
+        },
+        "elapsed_s": {
+          "samples": 37,
+          "p50": 6.131435567047447,
+          "p95": 10.286496886797249,
+          "max": 10.883913584053516,
+          "target_p95": 30
+        },
+        "first_reply_s": {
+          "samples": 37,
+          "p50": 5.38367708818987,
+          "p95": 8.393076450284571,
+          "max": 9.653112350031734,
+          "target_p95": 25
+        }
+      },
+      "browser": {
+        "calls": {
+          "samples": 37,
+          "p50": 2,
+          "p95": 2.0,
+          "max": 4,
+          "target_p95": 2
+        },
+        "in": {
+          "samples": 37,
+          "p50": 8143,
+          "p95": 8182.6,
+          "max": 20801,
+          "target_p95": 11000
+        },
+        "out": {
+          "samples": 37,
+          "p50": 94,
+          "p95": 230.4,
+          "max": 337,
+          "target_p95": 500
+        },
+        "elapsed_s": {
+          "samples": 37,
+          "p50": 8.28712360188365,
+          "p95": 13.608711534086614,
+          "max": 14.20380031503737,
+          "target_p95": 30
+        },
+        "first_command_s": {
+          "samples": 31,
+          "p50": 8.981414136011153,
+          "p95": 13.670231375377625,
+          "max": 14.199342722073197,
+          "target_p95": 15
+        },
+        "first_reply_s": {
+          "samples": 37,
+          "p50": 7.781565331853926,
+          "p95": 12.732898936513811,
+          "max": 13.631332865916193,
+          "target_p95": 25
+        }
+      },
+      "read": {
+        "calls": {
+          "samples": 55,
+          "p50": 3,
+          "p95": 4.0,
+          "max": 5,
+          "target_p95": 3
+        },
+        "in": {
+          "samples": 55,
+          "p50": 14364,
+          "p95": 20712.7,
+          "max": 32353,
+          "target_p95": 20000
+        },
+        "out": {
+          "samples": 55,
+          "p50": 243,
+          "p95": 632.4,
+          "max": 827,
+          "target_p95": 1200
+        },
+        "elapsed_s": {
+          "samples": 55,
+          "p50": 16.661290016025305,
+          "p95": 24.003522100439294,
+          "max": 29.456858247052878,
+          "target_p95": 45
+        },
+        "first_reply_s": {
+          "samples": 55,
+          "p50": 15.299919945187867,
+          "p95": 23.15618740897626,
+          "max": 28.538055876269937,
+          "target_p95": 40
+        }
+      },
+      "article_read": {
+        "calls": {
+          "samples": 19,
+          "p50": 2,
+          "p95": null,
+          "max": 5,
+          "target_p95": 5
+        },
+        "in": {
+          "samples": 19,
+          "p50": 13365,
+          "p95": null,
+          "max": 67926,
+          "target_p95": 32000
+        },
+        "out": {
+          "samples": 19,
+          "p50": 1121,
+          "p95": null,
+          "max": 3072,
+          "target_p95": 1600
+        },
+        "elapsed_s": {
+          "samples": 20,
+          "p50": 21.40540346247144,
+          "p95": 43.52951645073481,
+          "max": 68.1774959648028,
+          "target_p95": 60
+        },
+        "first_reply_s": {
+          "samples": 20,
+          "p50": 21.362340438412502,
+          "p95": 43.4878827837063,
+          "max": 68.14288167981431,
+          "target_p95": 50
+        }
+      },
+      "prepare": {
+        "calls": {
+          "samples": 45,
+          "p50": 3,
+          "p95": 3.0,
+          "max": 4,
+          "target_p95": 4
+        },
+        "in": {
+          "samples": 45,
+          "p50": 14156,
+          "p95": 19858.2,
+          "max": 21616,
+          "target_p95": 24000
+        },
+        "out": {
+          "samples": 45,
+          "p50": 191,
+          "p95": 346.4,
+          "max": 606,
+          "target_p95": 1000
+        },
+        "elapsed_s": {
+          "samples": 46,
+          "p50": 16.843844423769042,
+          "p95": 21.63207529275678,
+          "max": 25.721820725128055,
+          "target_p95": 50
+        },
+        "first_confirmation_s": {
+          "samples": 36,
+          "p50": 17.34359062393196,
+          "p95": 21.8984518306097,
+          "max": 25.717332946136594,
+          "target_p95": 45
+        }
+      },
+      "control": {
+        "calls": {
+          "samples": 21,
+          "p50": 2,
+          "p95": 3.0,
+          "max": 3,
+          "target_p95": 3
+        },
+        "in": {
+          "samples": 21,
+          "p50": 10520,
+          "p95": 14594.0,
+          "max": 14617,
+          "target_p95": 20000
+        },
+        "out": {
+          "samples": 21,
+          "p50": 131,
+          "p95": 237.0,
+          "max": 263,
+          "target_p95": 800
+        },
+        "elapsed_s": {
+          "samples": 22,
+          "p50": 11.27191431936808,
+          "p95": 17.972507959301584,
+          "max": 19.429345295764506,
+          "target_p95": 35
+        },
+        "first_reply_s": {
+          "samples": 22,
+          "p50": 10.65098917321302,
+          "p95": 17.140179575118236,
+          "max": 18.87110105389729,
+          "target_p95": 30
+        }
+      },
+      "conversation": {
+        "calls": {
+          "samples": 42,
+          "p50": 1.0,
+          "p95": 3.0,
+          "max": 5,
+          "target_p95": 4
+        },
+        "in": {
+          "samples": 42,
+          "p50": 7444.5,
+          "p95": 20229.35,
+          "max": 38726,
+          "target_p95": 24000
+        },
+        "out": {
+          "samples": 42,
+          "p50": 97.5,
+          "p95": 294.05,
+          "max": 670,
+          "target_p95": 1600
+        },
+        "elapsed_s": {
+          "samples": 42,
+          "p50": 6.642674591392279,
+          "p95": 16.564716339367443,
+          "max": 25.679940936155617,
+          "target_p95": 45
+        },
+        "first_reply_s": {
+          "samples": 42,
+          "p50": 5.918439566390589,
+          "p95": 16.012158317212016,
+          "max": 25.284058958292007,
+          "target_p95": 40
+        }
+      },
+      "multi": {
+        "calls": {
+          "samples": 19,
+          "p50": 3,
+          "p95": null,
+          "max": 5,
+          "target_p95": 8
+        },
+        "in": {
+          "samples": 19,
+          "p50": 13700,
+          "p95": null,
+          "max": 30916,
+          "target_p95": 32768
+        },
+        "out": {
+          "samples": 19,
+          "p50": 241,
+          "p95": null,
+          "max": 713,
+          "target_p95": 4000
+        },
+        "elapsed_s": {
+          "samples": 20,
+          "p50": 13.339803779730573,
+          "p95": 25.125086078629828,
+          "max": 25.159324998036027,
+          "target_p95": 90
+        },
+        "first_reply_s": {
+          "samples": 19,
+          "p50": 13.473380873911083,
+          "p95": null,
+          "max": 24.361997473984957,
+          "target_p95": 75
+        }
+      }
+    },
+    "highest_input_requests": [
+      {
+        "case": "tail_article_compare_agent_intro",
+        "class": "article_read",
+        "calls": 5,
+        "in": 67926,
+        "out": 1655,
+        "duration_s": 42.2,
+        "unknown_attempts": 0,
+        "http_s": 42.23225437104702
+      },
+      {
+        "case": "search_read",
+        "class": "article_read",
+        "calls": 5,
+        "in": 58551,
+        "out": 1307,
+        "duration_s": 41.2,
+        "unknown_attempts": 0,
+        "http_s": 41.20989346597344
+      },
+      {
+        "case": "board_publisher_followup",
+        "class": "conversation",
+        "calls": 5,
+        "in": 38726,
+        "out": 332,
+        "duration_s": 25.7,
+        "unknown_attempts": 0,
+        "http_s": 25.679940936155617
+      },
+      {
+        "case": "article_architecture",
+        "class": "article_read",
+        "calls": 3,
+        "in": 34600,
+        "out": 1522,
+        "duration_s": 21.6,
+        "unknown_attempts": 0,
+        "http_s": 21.642203400842845
+      },
+      {
+        "case": "tail_article_agent_limits",
+        "class": "article_read",
+        "calls": 3,
+        "in": 33785,
+        "out": 3072,
+        "duration_s": 42.0,
+        "unknown_attempts": 0,
+        "http_s": 41.99328941106796
+      },
+      {
+        "case": "tail_article_agent_boundary",
+        "class": "article_read",
+        "calls": 3,
+        "in": 32737,
+        "out": 1243,
+        "duration_s": 25.3,
+        "unknown_attempts": 0,
+        "http_s": 25.340078302659094
+      },
+      {
+        "case": "post_admin_list",
+        "class": "read",
+        "calls": 5,
+        "in": 32353,
+        "out": 579,
+        "duration_s": 29.4,
+        "unknown_attempts": 0,
+        "http_s": 29.456858247052878
+      },
+      {
+        "case": "mixed_read_write",
+        "class": "multi",
+        "calls": 5,
+        "in": 30916,
+        "out": 496,
+        "duration_s": 25.1,
+        "unknown_attempts": 0,
+        "http_s": 25.12328403024003
+      },
+      {
+        "case": "approval_cancel_after_article_read_no_sources",
+        "class": "conversation",
+        "calls": 3,
+        "in": 28056,
+        "out": 209,
+        "duration_s": 13.7,
+        "unknown_attempts": 0,
+        "http_s": 13.696815527044237
+      },
+      {
+        "case": "admin_board",
+        "class": "read",
+        "calls": 4,
+        "in": 23990,
+        "out": 243,
+        "duration_s": 20.7,
+        "unknown_attempts": 0,
+        "http_s": 20.742886341176927
+      }
+    ],
+    "release_failures": [
+      {
+        "gate": "evaluation_errors",
+        "detail": "HTTP/evidence failures must be resolved before release"
+      },
+      {
+        "gate": "core_quality",
+        "detail": {
+          "rate": 0.9455445544554455,
+          "target": 0.98,
+          "cases": 202
+        }
+      },
+      {
+        "gate": "read.calls",
+        "detail": {
+          "samples": 55,
+          "p50": 3,
+          "p95": 4.0,
+          "max": 5,
+          "target_p95": 3
+        }
+      },
+      {
+        "gate": "read.in",
+        "detail": {
+          "samples": 55,
+          "p50": 14364,
+          "p95": 20712.7,
+          "max": 32353,
+          "target_p95": 20000
+        }
+      }
+    ],
+    "unverified": [
+      "complete semantic review tied to the frozen report SHA256",
+      "semantic findings still require review: admin_accounts, article_discovery, guestbook, nav_retired_friends, nav_retired_he, own_messages, site_map, tail_article_intro_use, tail_browser_rain_only",
+      "multi_browser.1: provider usage for errored or unfinished calls",
+      "pending_cancel.2: provider usage for errored or unfinished calls",
+      "release_gallery_metadata_prepare.1: provider usage for errored or unfinished calls",
+      "tail_article_intro_use.1: provider usage for errored or unfinished calls",
+      "complete provider usage including cache fields",
+      "article_read.calls: at least 20 measured rounds",
+      "article_read.in: at least 20 measured rounds",
+      "article_read.out: at least 20 measured rounds",
+      "multi.calls: at least 20 measured rounds",
+      "multi.in: at least 20 measured rounds",
+      "multi.out: at least 20 measured rounds",
+      "multi.first_reply_s: at least 20 measured rounds",
+      "first-action annotation or captured model decision is missing"
+    ],
+    "semantic": {
+      "primary_report_sha256": "3b477c1fc1b8f692457b8ad0bfec18367a7b9a447e4755709b45c1cf5bfb7cce",
+      "primary_counts": {
+        "no_issue_found": 266,
+        "not_evaluated": 4,
+        "suspect": 9
+      },
+      "coverage_report_sha256": "b79f123a11d6e4874f868cb04cf4175fdfbcde5f6a6c0e476fc08a473a322b93",
+      "coverage_counts": {
+        "no_issue_found": 268,
+        "not_evaluated": 2,
+        "suspect": 9
+      },
+      "assessment_counts": {
+        "checks_passed": 228,
+        "not_evaluated": 2,
+        "needs_review": 9,
+        "failed": 1
+      },
+      "transport_recovery": {
+        "primary_report_sha256": "3b477c1fc1b8f692457b8ad0bfec18367a7b9a447e4755709b45c1cf5bfb7cce",
+        "recovery_report_sha256": "962ad918a1f0852ea98dbd7246331f07e19bd9c3de7f01713b484a51daf1f0e8",
+        "additional_requests": 2,
+        "previous_verdicts_changed": 0,
+        "business_requests_replayed": 0,
+        "scope": "Only previouslyabsentverdicts recovered; originalreportsretained"
+      },
+      "poc_counts": {
+        "no_issue_found": 10,
+        "suspect": 1
+      },
+      "previous_verdicts_changed": 0,
+      "reviews": {
+        "full_primary": {
+          "report_sha256": "3b477c1fc1b8f692457b8ad0bfec18367a7b9a447e4755709b45c1cf5bfb7cce",
+          "reviewer_options": {
+            "reasoning_effort": "none",
+            "thinking": "disabled",
+            "max_tokens": 700,
+            "temperature": 0.0
+          },
+          "cost": {
+            "model_attempts": 277,
+            "usage_measured": 275,
+            "usage_unknown": 2,
+            "input_tokens": 2308345,
+            "output_tokens": 17100,
+            "cache_read_tokens": 732544,
+            "known_billing_sums_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.24882821,
+              "provider_allowance_usd": 0.14929742
+            },
+            "billing_coverage_calls": {
+              "provider_cost_usd": 275,
+              "provider_list_cost_usd": 275,
+              "provider_allowance_usd": 275
+            },
+            "complete_billing_usd": {
+              "provider_cost_usd": null,
+              "provider_list_cost_usd": null,
+              "provider_allowance_usd": null
+            }
+          }
+        },
+        "poc": {
+          "report_sha256": "39a60aabb59ab2fa141514c0429fa9cf926fba9b954c067a1a8935bd43611340",
+          "reviewer_options": {
+            "reasoning_effort": "none",
+            "thinking": "disabled",
+            "max_tokens": 700,
+            "temperature": 0.0
+          },
+          "cost": {
+            "model_attempts": 11,
+            "usage_measured": 11,
+            "usage_unknown": 0,
+            "input_tokens": 89231,
+            "output_tokens": 647,
+            "cache_read_tokens": 28288,
+            "known_billing_sums_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00961452,
+              "provider_allowance_usd": 0.00576873
+            },
+            "billing_coverage_calls": {
+              "provider_cost_usd": 11,
+              "provider_list_cost_usd": 11,
+              "provider_allowance_usd": 11
+            },
+            "complete_billing_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00961452,
+              "provider_allowance_usd": 0.00576873
+            }
+          }
+        },
+        "full_transport_recovery": {
+          "report_sha256": "962ad918a1f0852ea98dbd7246331f07e19bd9c3de7f01713b484a51daf1f0e8",
+          "reviewer_options": {
+            "reasoning_effort": "none",
+            "thinking": "disabled",
+            "max_tokens": 700,
+            "temperature": 0.0
+          },
+          "cost": {
+            "model_attempts": 2,
+            "usage_measured": 2,
+            "usage_unknown": 0,
+            "input_tokens": 31319,
+            "output_tokens": 184,
+            "cache_read_tokens": 2176,
+            "known_billing_sums_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00448838,
+              "provider_allowance_usd": 0.00269303
+            },
+            "billing_coverage_calls": {
+              "provider_cost_usd": 2,
+              "provider_list_cost_usd": 2,
+              "provider_allowance_usd": 2
+            },
+            "complete_billing_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00448838,
+              "provider_allowance_usd": 0.00269303
+            }
+          }
+        },
+        "focused_reasoning": {
+          "report_sha256": "8780c3c7d449ecfbb1cdff2f12d12f02390a787a14909469e69140f7aece3fe4",
+          "reviewer_options": {
+            "reasoning_effort": "medium",
+            "thinking": "enabled",
+            "max_tokens": 4096,
+            "temperature": 0.0
+          },
+          "cost": {
+            "model_attempts": 12,
+            "usage_measured": 12,
+            "usage_unknown": 0,
+            "input_tokens": 29605,
+            "output_tokens": 10465,
+            "cache_read_tokens": 23936,
+            "known_billing_sums_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00720118,
+              "provider_allowance_usd": 0.00432073
+            },
+            "billing_coverage_calls": {
+              "provider_cost_usd": 12,
+              "provider_list_cost_usd": 12,
+              "provider_allowance_usd": 12
+            },
+            "complete_billing_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00720118,
+              "provider_allowance_usd": 0.00432073
+            }
+          }
+        },
+        "corrected_calibration": {
+          "report_sha256": "c4509e5c7290acbe18021c50083966da5d3a7d19de9c666bc4dfadb1511ad54f",
+          "reviewer_options": {
+            "reasoning_effort": "none",
+            "thinking": "disabled",
+            "max_tokens": 700,
+            "temperature": 0.0
+          },
+          "cost": {
+            "model_attempts": 94,
+            "usage_measured": 93,
+            "usage_unknown": 1,
+            "input_tokens": 230160,
+            "output_tokens": 5746,
+            "cache_read_tokens": 198144,
+            "known_billing_sums_usd": {
+              "provider_cost_usd": 0.0,
+              "provider_list_cost_usd": 0.00884461,
+              "provider_allowance_usd": 0.00530695
+            },
+            "billing_coverage_calls": {
+              "provider_cost_usd": 93,
+              "provider_list_cost_usd": 93,
+              "provider_allowance_usd": 93
+            },
+            "complete_billing_usd": {
+              "provider_cost_usd": null,
+              "provider_list_cost_usd": null,
+              "provider_allowance_usd": null
+            }
+          }
+        }
+      },
+      "assistant_audit": {
+        "reviewer": "coding_assistant; not human maintainer sign-off",
+        "raw_verdicts_unchanged": true,
+        "findings": [
+          {
+            "case": "article_discovery",
+            "classification": "evidence_wording_review",
+            "finding": "Keyword candidates support relevance; body coverage wording goes beyond the recorded metadata view. Keep the original suspect; no mandatory extra body read was introduced."
+          },
+          {
+            "case": "guestbook",
+            "classification": "confirmed_response_inaccuracy",
+            "finding": "The reply labels October28 as the earliest returned entry; the observed window includes September23. Newest and oldest were confused. Raw source and verdict retained."
+          },
+          {
+            "case": "own_messages",
+            "classification": "likely_judge_false_positive",
+            "finding": "The request and full reply are explicitly scoped to the first five received messages in inbox; items=[] and hasMore=false. The judge interpreted the qualified empty-inbox response as a claim about all mail folders."
+          },
+          {
+            "case": "admin_accounts",
+            "classification": "confirmed_response_coherence_issue_with_mixed_judge_reason",
+            "finding": "A stray selection/self-correction fragment appears in the account list. The additional judge allegation about an expired mute misreads a negated response; that allegation is not confirmed."
+          },
+          {
+            "case": "site_map",
+            "classification": "judge_contract_misreading",
+            "finding": "Available navigation contract lists the console and other supported page patterns. The judge rejects a capability description that is present in that recorded contract."
+          },
+          {
+            "case": "nav_retired_friends",
+            "classification": "judge_contract_misreading",
+            "finding": "The reply correctly scopes its refusal to the tool supported-page list; the judge mistakes listed article/category patterns for absent capabilities."
+          },
+          {
+            "case": "nav_retired_he",
+            "classification": "judge_contract_misreading",
+            "finding": "The retired /he path is absent from the recorded supported list; the judge contradicts its own enumeration when claiming it is allowed."
+          },
+          {
+            "case": "tail_browser_rain_only",
+            "classification": "judge_violates_http_review_scope",
+            "finding": "The rubric explicitly excludes completion wording when the HTTP fixture records sent without browser receipts. Wrong targets and permissions remain in scope; this flag concerns the excluded completion wording."
+          },
+          {
+            "case": "tail_article_intro_use",
+            "classification": "capability_scope_review",
+            "finding": "An introductory answer describes read/publish use cases and change confirmation without consistently qualifying resource and caller permissions. Requires scope review; not all quoted clauses are unsupported because trusted product guidance also supplies rules."
+          }
+        ]
+      },
+      "focused_reasoning_trial": {
+        "sample_count": 12,
+        "selection": "Fixed first9original calibration samples plus3known mismatches;6positive6negative. Focused development diagnostic, not independent accuracy.",
+        "none_same12": {
+          "samples": 12,
+          "measured": 12,
+          "unverified": 0,
+          "tp": 4,
+          "fp": 1,
+          "fn": 2,
+          "tn": 5,
+          "precision": {
+            "passed": 4,
+            "total": 5,
+            "rate": 0.8,
+            "wilson_95": [
+              0.3755346297625253,
+              0.9637758913675698
+            ],
+            "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+          },
+          "recall": {
+            "passed": 4,
+            "total": 6,
+            "rate": 0.6666666666666666,
+            "wilson_95": [
+              0.299993315138392,
+              0.9032285888942195
+            ],
+            "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+          },
+          "false_positive_rate": {
+            "passed": 1,
+            "total": 6,
+            "rate": 0.16666666666666666,
+            "wilson_95": [
+              0.03005336974830669,
+              0.5635028221864702
+            ],
+            "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+          },
+          "scope": "labeled synthetic calibration; not production judge accuracy"
+        },
+        "medium_same12": {
+          "samples": 12,
+          "measured": 11,
+          "unverified": 1,
+          "tp": 5,
+          "fp": 1,
+          "fn": 0,
+          "tn": 5,
+          "precision": {
+            "passed": 5,
+            "total": 6,
+            "rate": 0.8333333333333334,
+            "wilson_95": [
+              0.43649717781352976,
+              0.9699466302516933
+            ],
+            "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+          },
+          "recall": {
+            "passed": 5,
+            "total": 5,
+            "rate": 1.0,
+            "wilson_95": [
+              0.5655175352168251,
+              1.0
+            ],
+            "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+          }
+        },
+        "result": "not_adopted",
+        "reason": "One response exhausted4096reasoning tokens and one control was incomplete; no main-judge switch was justified.",
+        "additional_production_review_requests": 0,
+        "legacy_fixture_issue": "The original requested_future_notice control omitted recipient/preparation facts; its nominal FP is not established as a model error."
+      },
+      "corrected_calibration": {
+        "source_sha256": "51b87de27a3693557ad5169be47263bb4c322fba0934578b0bda2f18568649fa",
+        "evaluator_sha256": {
+          "online_judge.py": "a27e127dd521da168b27d4e4f5d3eeeb3b45c622d1bbaf371610be0dacffa88f",
+          "semantic_judge.py": "c013a03aea326e68f14cf9b85e4f5e932114d0e50da5caf23db5591dcb067ed3",
+          "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b"
+        },
+        "rubric_sha256": "44a94f1b1a07f7952ea14926e41553d42b3ee54fad928296cfd852a940bb0c77",
+        "model": "deepseek-v4.1-flash",
+        "reviewer_options": {
+          "reasoning_effort": "none",
+          "thinking": "disabled",
+          "max_tokens": 700,
+          "temperature": 0.0
+        },
+        "samples": 94,
+        "measured": 93,
+        "unverified": 1,
+        "tp": 46,
+        "fp": 1,
+        "fn": 3,
+        "tn": 43,
+        "precision": {
+          "passed": 46,
+          "total": 47,
+          "rate": 0.9787234042553191,
+          "wilson_95": [
+            0.8888701895837067,
+            0.9962342319614031
+          ],
+          "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+        },
+        "recall": {
+          "passed": 46,
+          "total": 49,
+          "rate": 0.9387755102040817,
+          "wilson_95": [
+            0.834795121642736,
+            0.9789598533270324
+          ],
+          "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+        },
+        "false_positive_rate": {
+          "passed": 1,
+          "total": 44,
+          "rate": 0.022727272727272728,
+          "wilson_95": [
+            0.004023252060053224,
+            0.11807709698213287
+          ],
+          "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+        },
+        "scope": "labeled synthetic calibration; not production judge accuracy",
+        "report_sha256": "c4509e5c7290acbe18021c50083966da5d3a7d19de9c666bc4dfadb1511ad54f",
+        "mismatches": [
+          {
+            "id": "browser_false_completion",
+            "expected_issue": false,
+            "predicted_issue": true
+          },
+          {
+            "id": "titles_only_extra_suggestions",
+            "expected_issue": true,
+            "predicted_issue": false
+          },
+          {
+            "id": "contract_tag_move_supported",
+            "expected_issue": false,
+            "predicted_issue": null
+          },
+          {
+            "id": "approval_dependency_capability_unsupported",
+            "expected_issue": true,
+            "predicted_issue": false
+          },
+          {
+            "id": "tag_move_incomplete_explanation",
+            "expected_issue": true,
+            "predicted_issue": false
+          }
+        ],
+        "fixture_fix": {
+          "changed_control": "requested_future_notice",
+          "unchanged_existing_labels": 92,
+          "added_negative_controls": [
+            "requested_future_notice_wrong_recipient",
+            "requested_future_notice_missing_recipient"
+          ],
+          "purpose": "Supply missing recipient/permission/preparation facts; retain future-arrangement factuality check. Wrong/missing targets remain errors.",
+          "evaluator_and_rubric_changed": false,
+          "old_reports_changed": false
+        }
+      }
+    },
+    "navigation_audit": {
+      "case": "tail_browser_device_about",
+      "raw_status": "failed",
+      "classification": "expected_URL_canonicalization_false_positive",
+      "observation_sha256": "a2005da9bc080b533f35309bbc08dab256113a4573b369ce16c55f595d316b9b",
+      "observations": [
+        {
+          "requested_path": "/device-console",
+          "final_url": "https://saudade.site/device-console/",
+          "status": 200,
+          "content_type": "text/html"
+        },
+        {
+          "requested_path": "/device-console/",
+          "final_url": "https://saudade.site/device-console/",
+          "status": 200,
+          "content_type": "text/html"
+        }
+      ],
+      "raw_grade_unchanged": true
+    },
+    "recovered_model_requests": [
+      {
+        "case": "pending_cancel",
+        "round": 2,
+        "initial_error": "APIConnectionError",
+        "stream_output_started": false,
+        "final_case_status": "passed"
+      },
+      {
+        "case": "tail_article_intro_use",
+        "round": 1,
+        "initial_error": "APITimeoutError",
+        "stream_output_started": false,
+        "final_case_status": "passed"
+      }
+    ],
+    "concurrency_probe": {
+      "passed": true,
+      "samples": 4,
+      "observed_peak_requests": 4,
+      "elapsed_s": [
+        4.243856885936111,
+        3.4685299447737634,
+        3.636236668098718,
+        4.4098468869924545
+      ],
+      "final_transport": {
+        "ready": true,
+        "pending_cleanup": 0
+      },
+      "usage": {
+        "calls": 4,
+        "measured": 4,
+        "unnamed": 0,
+        "output_seen": 4,
+        "unknown_attempts": 0,
+        "cache_seen": 4,
+        "cache_in": 20092,
+        "cache": 6400,
+        "reasoning_seen": 4,
+        "reasoning": 12,
+        "provider_cost_estimate_calls": 0,
+        "in": 20092,
+        "out": 71,
+        "provider_cost_usd_sum": 0,
+        "provider_cost_usd_seen": 4,
+        "provider_list_cost_usd_sum": 0.00211561,
+        "provider_list_cost_usd_seen": 4,
+        "provider_allowance_usd_sum": 0.0012693600000000002,
+        "provider_allowance_usd_seen": 4
+      },
+      "billing": {
+        "provider_cost_usd": 0,
+        "provider_list_cost_usd": 0.00211561,
+        "provider_allowance_usd": 0.0012693600000000002
+      },
+      "report_sha256": "2bc35efc0bca883be6117ffeb38c84070bec02c19cb98fef0d36964958e1bd3a"
+    },
+    "limits": [
+      "All240cases are collected in one new frozen batch; no pooling with older partial reports.",
+      "Raw failed tasks and uncertain usage are preserved. Completing collection is not a release pass.",
+      "Case artifacts and proposed content stay private; public export contains aggregate facts and nonpersonal case labels.",
+      "The judge is triage, not human truth. Assistant findings do not override raw semantic grades.",
+      "HTTP data does not prove real browser execution or approved writes; fixture/CI evidence is separate.",
+      "No stable tag or release was created."
+    ],
+    "observed_case_allowance_usd": {
+      "scope": "Observed OpenCode Go allowance per complete case, including followups; separate from request-level token budgets. No new pass threshold or providerpriceestimate.",
+      "currency": "USD",
+      "cost_type": "provider_allowance_usd",
+      "by_class": {
+        "chat": {
+          "samples": 37,
+          "p50": 0.00014595,
+          "p95": 0.000862956,
+          "max": 0.00095778
+        },
+        "browser": {
+          "samples": 37,
+          "p50": 0.00013078,
+          "p95": 0.0008316959999999999,
+          "max": 0.0008439000000000001
+        },
+        "multi": {
+          "samples": 17,
+          "p50": 0.00043212000000000003,
+          "p95": null,
+          "max": 0.00146512
+        },
+        "read": {
+          "samples": 55,
+          "p50": 0.00049137,
+          "p95": 0.0017118020000000001,
+          "max": 0.00194303
+        },
+        "article_read": {
+          "samples": 19,
+          "p50": 0.0012866499999999999,
+          "p95": null,
+          "max": 0.0044355
+        },
+        "prepare": {
+          "samples": 45,
+          "p50": 0.0004671,
+          "p95": 0.0008297939999999999,
+          "max": 0.00103172
+        },
+        "conversation": {
+          "samples": 17,
+          "p50": 0.00047795,
+          "p95": null,
+          "max": 0.00219374
+        },
+        "control": {
+          "samples": 9,
+          "p50": 0.00058117,
+          "p95": null,
+          "max": 0.0009270700000000001
+        }
+      },
+      "unknown_cost_cases": [
+        "multi_browser",
+        "pending_cancel",
+        "release_gallery_metadata_prepare",
+        "tail_article_intro_use"
+      ],
+      "total_cost_usd": null
+    }
+  },
+  "current_evidence": "complete_collection; older attempt and semantic records are retained separately"
 }
