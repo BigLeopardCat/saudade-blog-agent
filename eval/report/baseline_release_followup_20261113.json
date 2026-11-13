@@ -335,15 +335,280 @@
     "note": "Known receipts only. Three unfinished calls have unknown tokens and billing; do not substitute zero. Includes all three POCs and all stopped full attempts, excludes earlier morning batch and separate E2E owner runs."
   },
   "semantic": {
-    "status": "not_run",
-    "reason": "Awaiting explicit authorization to resume review of this batch",
-    "calibration_samples_prepared": 92,
-    "model_requests_sent": 0
+    "status": "needs_review",
+    "authorization": "Explicit user approval to resume this batch; only existing recorded materials were sent to the configured OpenCode deepseek-v4.1-flash endpoint.",
+    "calibration": {
+      "source_sha256": "e7b8fb2c602e1e967d13c8d60f5d65e3da584e9d546636c39623a3b5fe243fd9",
+      "evaluator_sha256": {
+        "online_judge.py": "a27e127dd521da168b27d4e4f5d3eeeb3b45c622d1bbaf371610be0dacffa88f",
+        "semantic_judge.py": "c013a03aea326e68f14cf9b85e4f5e932114d0e50da5caf23db5591dcb067ed3",
+        "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b"
+      },
+      "rubric_sha256": "44a94f1b1a07f7952ea14926e41553d42b3ee54fad928296cfd852a940bb0c77",
+      "model": "deepseek-v4.1-flash",
+      "reviewer_options": {
+        "reasoning_effort": "none",
+        "thinking": "disabled",
+        "max_tokens": 700,
+        "temperature": 0.0
+      },
+      "samples": 92,
+      "measured": 92,
+      "unverified": 0,
+      "tp": 45,
+      "fp": 1,
+      "fn": 2,
+      "tn": 44,
+      "precision": {
+        "passed": 45,
+        "total": 46,
+        "rate": 0.9782608695652174,
+        "wilson_95": [
+          0.8866470547848865,
+          0.9961521457419497
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "recall": {
+        "passed": 45,
+        "total": 47,
+        "rate": 0.9574468085106383,
+        "wilson_95": [
+          0.8575147232210055,
+          0.9882517240332106
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "false_positive_rate": {
+        "passed": 1,
+        "total": 45,
+        "rate": 0.022222222222222223,
+        "wilson_95": [
+          0.003933598882833428,
+          0.11566681768414878
+        ],
+        "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+      },
+      "scope": "labeled synthetic calibration; not production judge accuracy",
+      "report_sha256": "9990fedbed15a5da0aa831bd8b80a7e1eef5bc982ef0bc03a10fb6112a705d30",
+      "mismatches": [
+        {
+          "id": "browser_false_completion",
+          "expected_issue": false,
+          "predicted_issue": true
+        },
+        {
+          "id": "titles_only_extra_suggestions",
+          "expected_issue": true,
+          "predicted_issue": false
+        },
+        {
+          "id": "tag_move_incomplete_explanation",
+          "expected_issue": true,
+          "predicted_issue": false
+        }
+      ]
+    },
+    "phases": {
+      "full": {
+        "source_report_sha256": "57e7017c45921d72dbb54d8ac918a795dc2ab9cb2f10560817a8957ad99f102d",
+        "evaluator_sha256": {
+          "online_judge.py": "a27e127dd521da168b27d4e4f5d3eeeb3b45c622d1bbaf371610be0dacffa88f",
+          "semantic_judge.py": "c013a03aea326e68f14cf9b85e4f5e932114d0e50da5caf23db5591dcb067ed3",
+          "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b"
+        },
+        "rubric_sha256": "44a94f1b1a07f7952ea14926e41553d42b3ee54fad928296cfd852a940bb0c77",
+        "counts": {
+          "no_issue_found": 40,
+          "suspect": 1,
+          "not_evaluated": 1
+        },
+        "assessment_counts": {
+          "checks_passed": 40,
+          "needs_review": 1,
+          "not_evaluated": 1
+        },
+        "model": "deepseek-v4.1-flash",
+        "reviewer_options": {
+          "reasoning_effort": "none",
+          "thinking": "disabled",
+          "max_tokens": 700,
+          "temperature": 0.0
+        },
+        "automatic_retries": 0,
+        "business_requests_replayed": 0,
+        "report_sha256": "d39df593aaaf865331e371806242776316b03de777d27d8b6375e221bc6193b9",
+        "rows": 42,
+        "suspects": [
+          {
+            "case": "article_discovery",
+            "round": 1,
+            "status": "suspect",
+            "verdict": {
+              "unsupported": [
+                "本站的[「泠月喵」架构文档](https://saudade.site/article/19)也同时涵盖 Python 相关的内容"
+              ],
+              "answered": true,
+              "verdict": "suspect",
+              "reason": "IoT 与 asyncio 的候选链接均有 search_notes 回执支持，但架构文档“涵盖 Python 相关内容”属未读正文的推断，仅标签含 Python 不足以证明正文内容。"
+            },
+            "review_status": "unresolved; rawverdictunchanged"
+          }
+        ],
+        "readiness_status": "failed",
+        "release_failures": [
+          {
+            "gate": "evaluation_errors",
+            "detail": "HTTP/evidence failures must be resolved before release"
+          },
+          {
+            "gate": "core_quality",
+            "detail": {
+              "rate": 0.9411764705882353,
+              "target": 0.98,
+              "cases": 34
+            }
+          }
+        ],
+        "unverified_requirements": 47
+      },
+      "poc": {
+        "source_report_sha256": "1236b1192dd43c7b2965340733989a9e43ad14606a1b4d0460c5a4187204d1c8",
+        "evaluator_sha256": {
+          "online_judge.py": "a27e127dd521da168b27d4e4f5d3eeeb3b45c622d1bbaf371610be0dacffa88f",
+          "semantic_judge.py": "c013a03aea326e68f14cf9b85e4f5e932114d0e50da5caf23db5591dcb067ed3",
+          "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b"
+        },
+        "rubric_sha256": "44a94f1b1a07f7952ea14926e41553d42b3ee54fad928296cfd852a940bb0c77",
+        "counts": {
+          "no_issue_found": 11
+        },
+        "assessment_counts": {
+          "checks_passed": 8
+        },
+        "model": "deepseek-v4.1-flash",
+        "reviewer_options": {
+          "reasoning_effort": "none",
+          "thinking": "disabled",
+          "max_tokens": 700,
+          "temperature": 0.0
+        },
+        "automatic_retries": 0,
+        "business_requests_replayed": 0,
+        "report_sha256": "8931ace6ae1530a01aa823a8a8beaa32bbfab87f7174b4aeb85e572b33007706",
+        "rows": 11,
+        "suspects": [],
+        "readiness_status": "failed",
+        "release_failures": [
+          {
+            "gate": "first_action",
+            "detail": {
+              "expected": 8,
+              "measured": 8,
+              "correct": {
+                "passed": 7,
+                "total": 8,
+                "rate": 0.875,
+                "wilson_95": [
+                  0.5291118177871464,
+                  0.9775825085499433
+                ],
+                "sampling_note": "curated cases; binomial interval is descriptive, not proof of production success probability"
+              },
+              "unverified": 0,
+              "decision_rate": 0.9090909090909091,
+              "measured_decisions": 11,
+              "scope": "complete scenario: every initial decision correct; not task success"
+            }
+          }
+        ],
+        "unverified_requirements": 44
+      }
+    },
+    "billing": {
+      "calibration": {
+        "measured_model_calls": 92,
+        "input_tokens": 227258,
+        "output_tokens": 5574,
+        "cache_read_tokens": 198144,
+        "complete_billing": true,
+        "billing_usd": {
+          "provider_cost_usd": 0,
+          "provider_list_cost_usd": 0.01661222,
+          "provider_allowance_usd": 0.00996679
+        }
+      },
+      "full": {
+        "measured_model_calls": 41,
+        "input_tokens": 301127,
+        "output_tokens": 2460,
+        "cache_read_tokens": 84864,
+        "complete_billing": true,
+        "billing_usd": {
+          "provider_cost_usd": 0,
+          "provider_list_cost_usd": 0.06834024,
+          "provider_allowance_usd": 0.04100391
+        }
+      },
+      "poc": {
+        "measured_model_calls": 11,
+        "input_tokens": 91807,
+        "output_tokens": 667,
+        "cache_read_tokens": 28288,
+        "complete_billing": true,
+        "billing_usd": {
+          "provider_cost_usd": 0,
+          "provider_list_cost_usd": 0.02002586,
+          "provider_allowance_usd": 0.01201546
+        }
+      }
+    },
+    "annotation_findings": [
+      {
+        "case": "admin_denial",
+        "phase": "poc",
+        "frozen_expectation": null,
+        "actual_first_tools": [
+          "get_agent_capabilities"
+        ],
+        "raw_metric_retained": "7/8 complete scenarios (87.5%); below95% target",
+        "finding": "Frozen first_action disallows every tool, while gold correctly permits role-filtered capability introspection and forbids private admin tools. The Agent called get_agent_capabilities, then declined unavailable monitoring. This is an annotation dispute, not observed admin data access. Do not force blind denial or rewrite old scores.",
+        "resolution": "not_applied; dataset/rubric/source evidence left unchanged"
+      }
+    ],
+    "focused_assistant_review": {
+      "reviewer": "coding_assistant; not a human maintainer sign-off",
+      "calibration_blind_spots_checked": [
+        "format_short realreply has fewerthan20Chinesecharacters andnoextraexplanation",
+        "memory_recall POCfinalreply equals requestednickname; cancellationreply matches recordedrevocation; nounsupportedadditionalrestriction found"
+      ],
+      "article_discovery": "Rawjudge suspect retained. Exact Python tag supports topic relevance, but no body was read; wording should identify metadata match rather than claim body coverage. No additional body call or prompt change was introduced."
+    },
+    "limits": [
+      "The final baseline stoppedafter42of240cases;198casesneverraninthiscandidatebatch. Do not poolPOC orolderattempts toclaimfullcoverage.",
+      "Calibrationiscurateddevelopmentdatawithonefalsepositiveandtwofalsenegatives;notindependentproductionaccuracy.",
+      "Timeoutcasecannotbegradedbysuccessfulpartialtext;itsdeterministicerrorandunknownusagepersist.",
+      "Onearticle-discoverywordingissueawaitsreview;nohumanapprovalorverdictsoverridewasinvented.",
+      "Judgecallsareseparateevaluationcost;thethreeearlierinterruptedAgentcallsstillhaveunknowntotalbilling."
+    ],
+    "private_summary_sha256": "24d04a3fed4f4f97c0b3a5ef306cd89f3f40fdd7a91407c9b034a6ace281c922",
+    "business_requests_replayed": 0,
+    "total_judge_usage": {
+      "measured_model_calls": 144,
+      "input_tokens": 620192,
+      "output_tokens": 8701,
+      "billing_usd": {
+        "provider_cost_usd": 0.0,
+        "provider_list_cost_usd": 0.10497832,
+        "provider_allowance_usd": 0.06298616
+      },
+      "scope": "Calibration plus frozen-record semantic review, separate from Agent task cost;92+41+11 calls, no automatic retries."
+    }
   },
   "release_blockers": [
-    "A complete frozen final-version baseline has not finished: the 7c candidate stopped after partial output with ReadTimeout. Exact failing network/provider hop remains unproven.",
-    "Final semantic review and independent follow-up evidence remain unverified.",
-    "Complete usage and per-class latency/cost percentiles remain unverified; earlier morning read-input P95 failure 20190.4/20000 is not overwritten."
+    "Complete final-candidate baseline:198of240scenarios were not run after the stream timeout.",
+    "One article-discovery wording suspect remains unresolved; safe capability introspection is also disputed by an outdated first-action annotation. Original verdicts and frozen scores are retained.",
+    "Final full usage and per-class cost/latency percentiles remain unverified; earlier morning read-input P95 failure20190.4/20000 is not overwritten."
   ],
   "limits": [
     "Readiness and zero pending cleanup do not establish model-provider availability.",
@@ -369,13 +634,13 @@
     "ready": true,
     "pending_model_cleanup": 0,
     "agent_process_proxy_variables_present": false,
-    "last_observed_host_sha": "beffdc53319cf7989a4b1cbcf7d4fffe6f3ceac3",
+    "last_observed_host_sha": "a3e644f70dd8152a65f49ff4350d412f3e903c20",
     "merged_host_sha": "a3e644f70dd8152a65f49ff4350d412f3e903c20",
     "host_product_trees_unchanged": true,
-    "host_deployment_at_report_creation": "in_progress; merge alone is not evidence of activation",
     "widget_pin": "8909910c627f6fabd2002414543262b565aab404",
     "widget_trees_match": true,
     "runtime_dependency_packages": 78,
-    "runtime_lock_sha256": "905a9a62d6efdb74053bd5b52b4a1d9f4d6fde28218b6da484e6f902adfa105a"
+    "runtime_lock_sha256": "905a9a62d6efdb74053bd5b52b4a1d9f4d6fde28218b6da484e6f902adfa105a",
+    "host_deployment_verification": "GitHub run43373507331 succeeded; actual build-info13:55:51+08:00 and readiness verified after deployment"
   }
 }
