@@ -211,3 +211,29 @@ def test_metadata_fixture_uses_the_body_free_host_envelope():
     assert result.kind == "ok" and result.data["description"] == "已保存的摘要。"
     assert not {"noteContent", "totalChars", "sectionCount"}.intersection(result.data)
     assert state["body_reads"] == [0] and len(state["requests"]) == 1
+
+
+@pytest.mark.parametrize("mode", ["list", "two_details", "repeat_one", "redundant_list",
+                                  "wrong_state", "no_read"])
+def test_partial_write_accepts_distinct_detail_reads_but_requires_both_sources(sdk, mode):
+    reads = [call("list_notifications")]
+    if mode in {"two_details", "repeat_one"}:
+        reads = [call("list_notifications", notification_id=101),
+                 call("list_notifications", notification_id=102 if mode == "two_details" else 101)]
+    elif mode == "redundant_list":
+        reads *= 2
+    reply = json.dumps({"101": True, "102": mode == "wrong_state"})
+    responses = [[call("load_notifications_info_tools")],
+                 [call("prepare_notification_read", scope="all_unread")], "请确认。"]
+    if mode != "no_read":
+        responses.append(reads)
+    responses.append(reply)
+    requests = sdk(responses)
+    row = result("efficiency_partial_write_replay", requests)
+    assert row["passed"] is (mode in {"list", "two_details"}), row
+    assert row["business_writes"] == 1 and row["requests"] == 3
+    assert row["rounds"][-1]["model_calls"] == 0
+    if mode in {"repeat_one", "redundant_list"}:
+        assert "nonrepeated independent evidence" in row["reason"]
+    elif mode == "wrong_state":
+        assert "contradicts" in row["reason"]
