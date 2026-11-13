@@ -1,5 +1,6 @@
 """Public article and taxonomy metadata with database pagination."""
 
+from datetime import datetime
 from typing import Annotated
 
 from langchain_core.tools import tool
@@ -18,6 +19,22 @@ def _article(row):
     if result["isPublic"] is not True or result["status"] not in ("public", "published"):
         raise ValueError("Article is not public")
     return {**result, "sourceUrl": catalog_source_url(row)}
+
+
+def _newest(rows, field):
+    if not rows or any(not isinstance(row.get(field), str) for row in rows):
+        return None
+    try:
+        selected = max(rows, key=lambda row: (datetime.fromisoformat(row[field]), row["id"]))
+    except (ValueError, TypeError):
+        return None
+    return {"id": selected["id"], field: selected[field]}
+
+
+def _article_dates(rows):
+    """Page-local time extrema; ID order does not establish collection freshness."""
+    return {"scope": "returned_items", "newestCreated": _newest(rows, "createdAt"),
+            "newestUpdated": _newest(rows, "updatedAt")}
 
 
 def _taxonomy(row):
@@ -55,7 +72,7 @@ def list_notes(page: Page = 1, page_size: Limit = 5,
     sourceUrl为空表示链接未知，不代表文章不存在。
     """
     return read_page("articles", page, page_size, {"category_id": category_id}, _article,
-                     {"categoryId": category_id})
+                     {"categoryId": category_id}, summarize=_article_dates)
 
 
 @tool
@@ -63,7 +80,8 @@ def get_top_notes(page: Page = 1, page_size: Limit = 5) -> object:
     """分页读取公开置顶文章元数据与总数，默认5条、最多10条；不读取正文。
     一般推荐依据标题、分类和宿主sourceUrl即可，不为此补读或评价正文；sourceUrl为空时保持链接未知。
     """
-    return read_page("articles", page, page_size, {"top_only": True}, _article, {"isTop": 1})
+    return read_page("articles", page, page_size, {"top_only": True}, _article, {"isTop": 1},
+                     summarize=_article_dates)
 
 
 @tool
