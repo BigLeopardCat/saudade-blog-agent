@@ -12,6 +12,20 @@ from eval.rag_dataset import load
 ROOT = Path(__file__).resolve().parents[1] / "eval"
 
 
+def test_archived_experiments_preserve_the_original_artifact_bytes():
+    archive = ROOT / "report" / "archive"
+    manifest = json.loads((archive / "manifest.json").read_text())
+    paths = set()
+    for item in manifest["artifacts"]:
+        relative = Path(item["path"])
+        assert relative.parts[:3] == ("eval", "report", "archive")
+        assert relative.name not in paths
+        paths.add(relative.name)
+        assert hashlib.sha256((archive / relative.name).read_bytes()).hexdigest() == item["sha256"]
+        assert not (ROOT.parent / item["original_path"]).exists()
+    assert paths == {path.name for path in archive.glob("baseline_*.json")}
+
+
 def test_frozen_artifact_hashes_match_the_operation_ledger():
     root = ROOT / "report"
     ledger = json.loads((root / "baseline_rag_benchmark_operations_20261112.json").read_text())

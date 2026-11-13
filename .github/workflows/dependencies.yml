@@ -1,0 +1,45 @@
+name: Dependency audit
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependency-audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081
+        with:
+          version: '0.11.28'
+          python-version: '3.12'
+      - name: Export locked runtime and optional dependencies without installing them
+        run: uv export --frozen --no-dev --all-extras --no-emit-project --output-file "$RUNNER_TEMP/runtime-requirements.txt" > /dev/null
+      - name: Audit the exact versions against PyPI advisories
+        run: >-
+          uvx --from pip-audit==2.10.1 pip-audit --disable-pip --require-hashes
+          -r "$RUNNER_TEMP/runtime-requirements.txt"
+          --format json --output "$RUNNER_TEMP/runtime-audit.json"
+      - name: Preserve the audit and locked input
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: dependency-audit-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/runtime-requirements.txt
+            ${{ runner.temp }}/runtime-audit.json
+          if-no-files-found: warn
+          retention-days: 30

@@ -45,6 +45,16 @@ bash scripts/dev/coverage.sh
 
 真实模型、小批量与全量线上评测独立于普通 PR CI，见[评测说明](docs/eval-observability.md)。
 
+`Dependency audit` 使用 pip-audit 检查锁定的生产依赖及可选 extras，不安装这些依赖、
+不读取运行配置。漏洞服务失败与发现漏洞均阻止该检查通过，原始结果保留为 CI artifact。
+Bandit 检查源码安全，两者不能互相替代。本地复现：
+
+```sh
+uv export --frozen --no-dev --all-extras --no-emit-project --output-file /tmp/agent-runtime-requirements.txt
+uvx --from pip-audit==2.10.1 pip-audit --disable-pip --require-hashes \
+  -r /tmp/agent-runtime-requirements.txt
+```
+
 ## 提交与评审
 
 采用 [Conventional Commits 1.0](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。维护者默认使用中文描述，类型和 scope 使用英文；接受英文贡献，不要求逐行双语。
