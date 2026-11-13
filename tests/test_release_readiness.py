@@ -297,3 +297,29 @@ def test_cache_population_uses_wire_identity_and_preserves_unobserved_usage():
         "first_call", "changed_layout", "unknown_layout", "first_call"]
     assert sum(row["input"] for _, row in rows) == 400
     assert all("known_prefix_input" not in row for _, row in rows)
+
+
+def test_registered_suite_can_measure_every_release_percentile_group():
+    from collections import Counter
+
+    from eval.dataset_audit import audit
+    from eval.golden_evaluation import iter_rounds
+    from eval.online_baseline import load_suite
+
+    profile = json.loads(PROFILE.read_bytes())
+    cases = [case for case in load_suite() if "vision" not in case["tags"]]
+    counts = Counter()
+    command_rounds = 0
+    for case in cases:
+        group = task_class(case["tags"])
+        rounds = iter_rounds(case)
+        counts[group] += len(rounds)
+        if group == "browser":
+            command_rounds += sum(bool(rnd["gold"].get("require_cmd_all")
+                                       or rnd["gold"].get("require_cmd_prefixes"))
+                                  for rnd in rounds)
+    minimum = profile["min_percentile_samples"]
+    assert all(counts[group] >= minimum for group in profile["task_budgets"]), counts
+    assert command_rounds >= minimum
+    assert not audit(cases)["exact_duplicate_inputs"]
+    assert audit(cases)["unannotated_text_decisions"] == 0
