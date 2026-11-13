@@ -1,0 +1,381 @@
+{
+  "schema_version": 1,
+  "status": "blocked",
+  "scope": "2026-11-13 final-version follow-up; partial attempts are retained independently, not pooled into a task pass rate or same-suite cost A/B",
+  "runtime_fix": {
+    "pr": 439,
+    "agent_sha": "7c6878f18e475cb45c15b212d38d5c7db026fc18",
+    "behavior": "LangChain ModelRetryMiddleware: at most one connection/protocol retry before any text, reasoning or tool arguments; started output is never replayed",
+    "focused_tests_passed": 79
+  },
+  "suite": {
+    "text_scenarios": 240,
+    "http_rounds": 279,
+    "known_unsupported_visual_scenarios_separate": 2,
+    "new_scenarios": 50,
+    "coverage": "Every release task class and positive browser-command coverage has at least 20 designed rounds; this does not establish 20 valid measurements or independent traffic sampling"
+  },
+  "profile_sha256": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+  "attempts": [
+    {
+      "attempt": "initial",
+      "agent_sha": "812c46f91c052599d096c257f2e1d5bd07186f71",
+      "blog_sha": "beffdc53319cf7989a4b1cbcf7d4fffe6f3ceac3",
+      "planned": 240,
+      "completed": 93,
+      "counts": {
+        "passed": 92,
+        "evaluation_error": 1
+      },
+      "http_requests": 94,
+      "report_sha256": "14d241e28dd2bfd22fafaf38417f066453abab54165e0856eb26cc32e74d4e74",
+      "suite_sha256": "3bfb5948681ab1956040f33377ae12d10710e6a1d377f1520c4ddc1b250381bd",
+      "evaluator_sha256": {
+        "golden_evaluation.py": "3721ac566c3bd09dedaab3cfd1b1e65c14d697855a5d03b6910ab78054777868",
+        "online_baseline.py": "1b7bd13ff02ff296ab1b968c34c844b5a74c90f5483d42c1acca85058a4b013c",
+        "online_transport.py": "b2a659d3909338453b2d87e71cdee373819be2eeec2b6707f2431f7123170fbd",
+        "stream_protocol.py": "7596e62a0a96ce438e8579a5997286ca9ddc9428c3d0aee757a9d978ce10810e",
+        "native_assertions.py": "b1ab0eee2ead8554fb03392c47291909a0906e92efbe8dce144f81329f620a94",
+        "request_metrics.py": "03661f6fb898bbb68d8364a9fc79440f3bb6d68174301fe8a48d28063529344e",
+        "latency_metrics.py": "f126eee47cafdf1af3caf9572dc414359faa9de032c86a1d58cbac8539642a6f",
+        "task_metrics.py": "b2da9ff3db26eb35ae7ba7352d55c47255afedef622a0d472492159cf728c25e",
+        "usage.py": "43664b9b37d43892a428aa19f922d06908747c08bc25ba05c90cf97a03e9cf01",
+        "release_readiness.py": "fc36010742f0a770320ba52b63dcf743f66ea6dbe773428f1facc74bc2bd259c",
+        "release_profile.json": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+        "statistical_metrics.py": "1456433d7e578d102084085a0dfdc9c7bfdab389d092f85b9c8ce3262808a677",
+        "action_metrics.py": "2bf162a531b1d7c4f2dd9ec7fb2a74e17f75e07b58c15773f3b736ed68d7879f",
+        "dataset_audit.py": "4490f4f71169483908ac71984c65040e712d15cc0a7b53efdcc18d7e91072f90",
+        "command_report.py": "3eaf5ce1735ce7d4e94552e427c906fe6e477f75460c2c747cb6b1bf9ebaf5d0",
+        "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b",
+        "corpus_terms.py": "e2160b7a70cbb424016739217700bf0fa3bd567d44f2564c45d1ce5f35a0e5d2",
+        "corpus_provenance.py": "91c8ae3342346b1a481e3aed9d544a3d9099cfb50326c82bdca3033704ef3ddf",
+        "golden_runtime.py": "4771db601fe7c553af8086ab9e6659cfd011cbc7de555d92f037bb2e94a60ac2",
+        "golden_thread.py": "966b34d98cc79e36ea237bc1523f4a2496d5ba9c31ccafab18034a0f984137c3",
+        "golden_trace.py": "672cb4b15c07a23178b53e555bd0e1c170a90f93284e563e2842c42b0a6407a4",
+        "native_receipt_contract.py": "685b58200ba5bcfb84455bb9dfb05b9543b32c2a2ef2fe3d088fa77dba512330",
+        "cache_diagnostics.py": "73c561de0e99b258cc1d73fb7d8ea5dbe0684dcc36c4731d857c1d22634742b8",
+        "agent/contracts/events.py": "2f32afaf61e7c6e7cec65f82aa3a1652feb972a064e03b064e52d5906e11740c"
+      },
+      "poc": {
+        "planned": 14,
+        "counts": {
+          "passed": 14
+        },
+        "report_sha256": "4160c1cc061b3d97a54836bc844743db02066013795a3bfd3fe10c1a6f95ff68"
+      },
+      "measured_usage": {
+        "poc": {
+          "calls": 37,
+          "in": 192956,
+          "out": 3934,
+          "cache": 114688,
+          "cache_in": 192956,
+          "unknown_attempts": 0,
+          "billing": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.01444467,
+            "provider_allowance_usd": 0.008666740000000001
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.01444467,
+            "provider_allowance_usd": 0.008666740000000001
+          }
+        },
+        "full": {
+          "calls": 218,
+          "in": 1117525,
+          "out": 21637,
+          "cache": 756480,
+          "cache_in": 1117525,
+          "unknown_attempts": 1,
+          "billing": {
+            "provider_cost_usd": null,
+            "provider_list_cost_usd": null,
+            "provider_allowance_usd": null
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.06940843999999997,
+            "provider_allowance_usd": 0.04164476
+          }
+        }
+      },
+      "failure": {
+        "case": "memory_recall",
+        "trace_sha256": "6c98d2f37c8c9f86a7b028bad90ffbb98840d4a9cd9e45e83240d3dca7c7a91e",
+        "error_type": "ReadError",
+        "stream_output_started": true,
+        "failure_source": "transport",
+        "model_span_s": 4.13,
+        "end_reason": "producer_error",
+        "transport_cleanup": {
+          "cancelled": false,
+          "producer_exited": true,
+          "cleanup_complete": true,
+          "responses_closed": true
+        }
+      }
+    },
+    {
+      "attempt": "availability_recheck",
+      "agent_sha": "812c46f91c052599d096c257f2e1d5bd07186f71",
+      "blog_sha": "beffdc53319cf7989a4b1cbcf7d4fffe6f3ceac3",
+      "planned": 240,
+      "completed": 86,
+      "counts": {
+        "passed": 85,
+        "evaluation_error": 1
+      },
+      "http_requests": 86,
+      "report_sha256": "94e44d5e3861b43f067ce93c1696c02055b7bc34e9c5b5f12e0e8c47e42060ac",
+      "suite_sha256": "3bfb5948681ab1956040f33377ae12d10710e6a1d377f1520c4ddc1b250381bd",
+      "evaluator_sha256": {
+        "golden_evaluation.py": "3721ac566c3bd09dedaab3cfd1b1e65c14d697855a5d03b6910ab78054777868",
+        "online_baseline.py": "1b7bd13ff02ff296ab1b968c34c844b5a74c90f5483d42c1acca85058a4b013c",
+        "online_transport.py": "b2a659d3909338453b2d87e71cdee373819be2eeec2b6707f2431f7123170fbd",
+        "stream_protocol.py": "7596e62a0a96ce438e8579a5997286ca9ddc9428c3d0aee757a9d978ce10810e",
+        "native_assertions.py": "b1ab0eee2ead8554fb03392c47291909a0906e92efbe8dce144f81329f620a94",
+        "request_metrics.py": "03661f6fb898bbb68d8364a9fc79440f3bb6d68174301fe8a48d28063529344e",
+        "latency_metrics.py": "f126eee47cafdf1af3caf9572dc414359faa9de032c86a1d58cbac8539642a6f",
+        "task_metrics.py": "b2da9ff3db26eb35ae7ba7352d55c47255afedef622a0d472492159cf728c25e",
+        "usage.py": "43664b9b37d43892a428aa19f922d06908747c08bc25ba05c90cf97a03e9cf01",
+        "release_readiness.py": "fc36010742f0a770320ba52b63dcf743f66ea6dbe773428f1facc74bc2bd259c",
+        "release_profile.json": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+        "statistical_metrics.py": "1456433d7e578d102084085a0dfdc9c7bfdab389d092f85b9c8ce3262808a677",
+        "action_metrics.py": "2bf162a531b1d7c4f2dd9ec7fb2a74e17f75e07b58c15773f3b736ed68d7879f",
+        "dataset_audit.py": "4490f4f71169483908ac71984c65040e712d15cc0a7b53efdcc18d7e91072f90",
+        "command_report.py": "3eaf5ce1735ce7d4e94552e427c906fe6e477f75460c2c747cb6b1bf9ebaf5d0",
+        "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b",
+        "corpus_terms.py": "e2160b7a70cbb424016739217700bf0fa3bd567d44f2564c45d1ce5f35a0e5d2",
+        "corpus_provenance.py": "91c8ae3342346b1a481e3aed9d544a3d9099cfb50326c82bdca3033704ef3ddf",
+        "golden_runtime.py": "4771db601fe7c553af8086ab9e6659cfd011cbc7de555d92f037bb2e94a60ac2",
+        "golden_thread.py": "966b34d98cc79e36ea237bc1523f4a2496d5ba9c31ccafab18034a0f984137c3",
+        "golden_trace.py": "672cb4b15c07a23178b53e555bd0e1c170a90f93284e563e2842c42b0a6407a4",
+        "native_receipt_contract.py": "685b58200ba5bcfb84455bb9dfb05b9543b32c2a2ef2fe3d088fa77dba512330",
+        "cache_diagnostics.py": "73c561de0e99b258cc1d73fb7d8ea5dbe0684dcc36c4731d857c1d22634742b8",
+        "agent/contracts/events.py": "2f32afaf61e7c6e7cec65f82aa3a1652feb972a064e03b064e52d5906e11740c"
+      },
+      "poc": {
+        "planned": 7,
+        "counts": {
+          "passed": 7
+        },
+        "report_sha256": "3d7aa08b5dc5a8dc22439a33222df0555281f10cbf41d36f554b550447222c91"
+      },
+      "measured_usage": {
+        "poc": {
+          "calls": 18,
+          "in": 100407,
+          "out": 1197,
+          "cache": 86272,
+          "cache_in": 100407,
+          "unknown_attempts": 0,
+          "billing": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.00309726,
+            "provider_allowance_usd": 0.0018583299999999996
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.00309726,
+            "provider_allowance_usd": 0.0018583299999999996
+          }
+        },
+        "full": {
+          "calls": 193,
+          "in": 979977,
+          "out": 19208,
+          "cache": 671872,
+          "cache_in": 979977,
+          "unknown_attempts": 1,
+          "billing": {
+            "provider_cost_usd": null,
+            "provider_list_cost_usd": null,
+            "provider_allowance_usd": null
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.05975622000000002,
+            "provider_allowance_usd": 0.03585340999999999
+          }
+        }
+      },
+      "failure": {
+        "case": "todo_after_chat",
+        "trace_sha256": "ad9c1502ca89f87721a04785d33484bac828395b8094632bf418170e8e31d5bd",
+        "error_type": "APIConnectionError",
+        "stream_output_started": false,
+        "failure_source": "transport",
+        "model_span_s": 3.77,
+        "end_reason": "producer_error",
+        "transport_cleanup": {
+          "cancelled": false,
+          "producer_exited": true,
+          "cleanup_complete": true,
+          "responses_closed": true
+        }
+      }
+    },
+    {
+      "attempt": "connection_recovery_candidate",
+      "agent_sha": "7c6878f18e475cb45c15b212d38d5c7db026fc18",
+      "blog_sha": "beffdc53319cf7989a4b1cbcf7d4fffe6f3ceac3",
+      "planned": 240,
+      "completed": 42,
+      "counts": {
+        "passed": 41,
+        "evaluation_error": 1
+      },
+      "http_requests": 42,
+      "report_sha256": "57e7017c45921d72dbb54d8ac918a795dc2ab9cb2f10560817a8957ad99f102d",
+      "suite_sha256": "3bfb5948681ab1956040f33377ae12d10710e6a1d377f1520c4ddc1b250381bd",
+      "evaluator_sha256": {
+        "golden_evaluation.py": "3721ac566c3bd09dedaab3cfd1b1e65c14d697855a5d03b6910ab78054777868",
+        "online_baseline.py": "1b7bd13ff02ff296ab1b968c34c844b5a74c90f5483d42c1acca85058a4b013c",
+        "online_transport.py": "b2a659d3909338453b2d87e71cdee373819be2eeec2b6707f2431f7123170fbd",
+        "stream_protocol.py": "7596e62a0a96ce438e8579a5997286ca9ddc9428c3d0aee757a9d978ce10810e",
+        "native_assertions.py": "b1ab0eee2ead8554fb03392c47291909a0906e92efbe8dce144f81329f620a94",
+        "request_metrics.py": "03661f6fb898bbb68d8364a9fc79440f3bb6d68174301fe8a48d28063529344e",
+        "latency_metrics.py": "f126eee47cafdf1af3caf9572dc414359faa9de032c86a1d58cbac8539642a6f",
+        "task_metrics.py": "b2da9ff3db26eb35ae7ba7352d55c47255afedef622a0d472492159cf728c25e",
+        "usage.py": "43664b9b37d43892a428aa19f922d06908747c08bc25ba05c90cf97a03e9cf01",
+        "release_readiness.py": "fc36010742f0a770320ba52b63dcf743f66ea6dbe773428f1facc74bc2bd259c",
+        "release_profile.json": "237d8f2d23bbdf5cd01eef6773843e295122f6056a2efbc8cd7a8341c086e599",
+        "statistical_metrics.py": "1456433d7e578d102084085a0dfdc9c7bfdab389d092f85b9c8ce3262808a677",
+        "action_metrics.py": "2bf162a531b1d7c4f2dd9ec7fb2a74e17f75e07b58c15773f3b736ed68d7879f",
+        "dataset_audit.py": "4490f4f71169483908ac71984c65040e712d15cc0a7b53efdcc18d7e91072f90",
+        "command_report.py": "3eaf5ce1735ce7d4e94552e427c906fe6e477f75460c2c747cb6b1bf9ebaf5d0",
+        "acceptance.py": "5cc03fc56f45264466f6ec510bb0f5fd07fdca5058fbd32d5c0570a7df42274b",
+        "corpus_terms.py": "e2160b7a70cbb424016739217700bf0fa3bd567d44f2564c45d1ce5f35a0e5d2",
+        "corpus_provenance.py": "91c8ae3342346b1a481e3aed9d544a3d9099cfb50326c82bdca3033704ef3ddf",
+        "golden_runtime.py": "4771db601fe7c553af8086ab9e6659cfd011cbc7de555d92f037bb2e94a60ac2",
+        "golden_thread.py": "966b34d98cc79e36ea237bc1523f4a2496d5ba9c31ccafab18034a0f984137c3",
+        "golden_trace.py": "672cb4b15c07a23178b53e555bd0e1c170a90f93284e563e2842c42b0a6407a4",
+        "native_receipt_contract.py": "685b58200ba5bcfb84455bb9dfb05b9543b32c2a2ef2fe3d088fa77dba512330",
+        "cache_diagnostics.py": "73c561de0e99b258cc1d73fb7d8ea5dbe0684dcc36c4731d857c1d22634742b8",
+        "agent/contracts/events.py": "2f32afaf61e7c6e7cec65f82aa3a1652feb972a064e03b064e52d5906e11740c"
+      },
+      "poc": {
+        "planned": 8,
+        "counts": {
+          "passed": 8
+        },
+        "report_sha256": "1236b1192dd43c7b2965340733989a9e43ad14606a1b4d0460c5a4187204d1c8"
+      },
+      "measured_usage": {
+        "poc": {
+          "calls": 20,
+          "in": 98546,
+          "out": 1986,
+          "cache": 61952,
+          "cache_in": 98546,
+          "unknown_attempts": 0,
+          "billing": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.00686655,
+            "provider_allowance_usd": 0.0041199
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.00686655,
+            "provider_allowance_usd": 0.0041199
+          }
+        },
+        "full": {
+          "calls": 80,
+          "in": 399401,
+          "out": 10357,
+          "cache": 263808,
+          "cache_in": 399401,
+          "unknown_attempts": 1,
+          "billing": {
+            "provider_cost_usd": null,
+            "provider_list_cost_usd": null,
+            "provider_allowance_usd": null
+          },
+          "known_receipt_sums_usd": {
+            "provider_cost_usd": 0,
+            "provider_list_cost_usd": 0.02734452,
+            "provider_allowance_usd": 0.01640662
+          }
+        }
+      },
+      "failure": {
+        "case": "announcements",
+        "trace_sha256": "4034bb8153c83c558bf46c59bd5b39aa5a41e696ed866a738216dbe7f24b7da1",
+        "error_type": "ReadTimeout",
+        "stream_output_started": true,
+        "failure_source": "transport",
+        "model_span_s": 50.01,
+        "end_reason": "producer_error",
+        "transport_cleanup": {
+          "cancelled": false,
+          "producer_exited": true,
+          "cleanup_complete": true,
+          "responses_closed": true
+        }
+      }
+    }
+  ],
+  "all_followup_measured_usage": {
+    "calls": 566,
+    "in": 2888812,
+    "out": 58319,
+    "cache": 1955072,
+    "cache_in": 2888812,
+    "unknown_attempts": 3,
+    "provider_cost_usd_sum": 0,
+    "provider_list_cost_usd_sum": 0.18091766,
+    "provider_allowance_usd_sum": 0.10854975999999998,
+    "known_input_cache_hit_rate": 0.6767737049001458,
+    "complete_billing": false,
+    "total_cost_usd": null,
+    "total_allowance_usd": null,
+    "note": "Known receipts only. Three unfinished calls have unknown tokens and billing; do not substitute zero. Includes all three POCs and all stopped full attempts, excludes earlier morning batch and separate E2E owner runs."
+  },
+  "semantic": {
+    "status": "not_run",
+    "reason": "Awaiting explicit authorization to resume review of this batch",
+    "calibration_samples_prepared": 92,
+    "model_requests_sent": 0
+  },
+  "release_blockers": [
+    "A complete frozen final-version baseline has not finished: the 7c candidate stopped after partial output with ReadTimeout. Exact failing network/provider hop remains unproven.",
+    "Final semantic review and independent follow-up evidence remain unverified.",
+    "Complete usage and per-class latency/cost percentiles remain unverified; earlier morning read-input P95 failure 20190.4/20000 is not overwritten."
+  ],
+  "limits": [
+    "Readiness and zero pending cleanup do not establish model-provider availability.",
+    "HTTP tests prepare writes without approving them. Browser execution and approved-write/idempotency behavior have separate fixture/CI evidence.",
+    "No stable tag or release was created."
+  ],
+  "offline_evidence": {
+    "candidate_evaluator_commit": "e5aec98c6247f27e0d5d9d07cee60fc748998323",
+    "eval_ci": "https://github.com/BigLeopardCat/saudade-blog-agent/actions/runs/43370865467",
+    "offline_passed": 4845,
+    "offline_external_database_skipped": 55,
+    "isolated_postgres_passed": 55,
+    "container_ci": "https://github.com/BigLeopardCat/saudade-blog-agent/actions/runs/43370865554",
+    "dependency_audit_ci": "https://github.com/BigLeopardCat/saudade-blog-agent/actions/runs/43370865469",
+    "targeted_readiness_deployment_recheck_passed": 33,
+    "runtime_recovery_pr": "https://github.com/BigLeopardCat/saudade-blog-agent/pull/439",
+    "host_install_recovery_pr": "https://github.com/BigLeopardCat/Saudade-Blog/pull/268",
+    "host_compose_ci": "https://github.com/BigLeopardCat/Saudade-Blog/actions/runs/43370701061"
+  },
+  "deployment_evidence": {
+    "agent_actual_sha": "7c6878f18e475cb45c15b212d38d5c7db026fc18",
+    "scheduler_same_release": true,
+    "ready": true,
+    "pending_model_cleanup": 0,
+    "agent_process_proxy_variables_present": false,
+    "last_observed_host_sha": "beffdc53319cf7989a4b1cbcf7d4fffe6f3ceac3",
+    "merged_host_sha": "a3e644f70dd8152a65f49ff4350d412f3e903c20",
+    "host_product_trees_unchanged": true,
+    "host_deployment_at_report_creation": "in_progress; merge alone is not evidence of activation",
+    "widget_pin": "8909910c627f6fabd2002414543262b565aab404",
+    "widget_trees_match": true,
+    "runtime_dependency_packages": 78,
+    "runtime_lock_sha256": "905a9a62d6efdb74053bd5b52b4a1d9f4d6fde28218b6da484e6f902adfa105a"
+  }
+}
