@@ -37,6 +37,8 @@ def test_registered_default_read_is_paged_by_backend_without_transferring_bodies
     assert len(result["items"]) == 20 and result["total"] == 125 and result["hasMore"]
     assert result["items"][0]["link"] == "/article/19?cid=1000#reply"
     assert not result["contentIncluded"] and all("content" not in row for row in result["items"])
+    assert result["operation"] == {"kind": "notification_query", "changesReadState": False,
+                                   "preparesConfirmation": False}
     request, = notifications["requests"]
     assert request.url.params["content"] == "none" and request.url.params["pageSize"] == "20"
     assert len(notifications["items"][0]["content"]) == 3000
@@ -76,6 +78,8 @@ def test_detail_is_direct_and_ignores_list_conditions_without_marking_read(notif
     assert result["items"][0]["id"] == 876
     assert len(result["items"][0]["content"]) == 2000
     assert result["items"][0]["contentTruncated"]
+    assert not result["operation"]["changesReadState"]
+    assert not result["operation"]["preparesConfirmation"]
     request, = notifications["requests"]
     assert request.url.path.endswith("/notifications/876") and not request.url.query
     assert json.loads(str(read(notification_id=1)))["items"] == []

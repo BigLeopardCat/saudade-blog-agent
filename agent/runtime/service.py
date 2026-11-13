@@ -379,12 +379,18 @@ def _finish_inputs(session, outcome):
     if not session.input_inbox or not session.task:
         return []
     execution = (outcome.execution or {}) if outcome else {}
+    paused = outcome is None or bool(execution.get("paused_task")
+                                    or execution.get("client_action")
+                                    or execution.get("pending_confirm"))
+    awaiting_confirmation = bool(execution.get("pending_confirm"))
+    if execution.get("blocked"):
+        saved = session.store.load(session.config)
+        if saved.unfinished and (saved.run or {}).get("id") == session.task["id"]:
+            paused = True
+            awaiting_confirmation = saved.has_pending
     try:
         return session.input_inbox.finish(session.task, session.state["applied_inputs"],
-            paused=outcome is None or bool(execution.get("paused_task")
-                                          or execution.get("client_action")
-                                          or execution.get("pending_confirm")),
-            awaiting_confirmation=bool(execution.get("pending_confirm")))
+            paused=paused, awaiting_confirmation=awaiting_confirmation)
     except InputConflict as exc:
         if str(exc) != "task_not_available":
             raise

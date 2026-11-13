@@ -117,7 +117,11 @@ def _posts(state):
 def _chat(turn, state):
     result = turn("你好，随便聊聊，不需要查资料。")
     _require(result["text"].strip() and not result["tool_calls"], "chat used tools or had no reply")
-    _require("主人" not in result["text"] and "杂鱼" not in result["text"],
+    if "主人" in result["text"]:
+        state.setdefault("observations", []).append({
+            "kind": "address_term", "text": result["text"],
+            "scope": "Accepted ordinary-user address observation; not a role/permission judgment."})
+    _require("杂鱼" not in result["text"],
              "ordinary-user chat used another role's default address")
     trace = load_trace(result["trace"])
     _require(trace and request_metrics.summary(trace)["calls"] == 1,
@@ -240,11 +244,12 @@ def _sample(name, backend, contract, run_id, sample):
         store = _Store(str(Path(temp) / "ledger.sqlite3"))
         principal = _principal(state.get("caller_role", "user"))
 
-        def turn(message, token=None):
+        def turn(message, token=None, **controls):
             control = RequestControl(Event(), time.monotonic() + 90)
             started = time.monotonic()
             with request_scope(control):
-                result = run_one(ChatRequest(message=message, user_id=7, conversation_id=42),
+                result = run_one(ChatRequest(message=message, user_id=7, conversation_id=42,
+                                            **controls),
                                  principal, {"run": run_id,
                                              "case": f"native_{name}_{sample}_{len(rounds)}"},
                                  thread="conv_42", confirm_token=token or "")
@@ -253,6 +258,7 @@ def _sample(name, backend, contract, run_id, sample):
             # Persist observable outcomes, never signed confirmation credentials.
             rounds.append({"user_input": message, "text": result["text"],
                            "commands": result["commands"],
+                           "client_commands": result.get("client_commands", []),
                            "confirm_payloads": result["confirm_payloads"],
                            "confirmation_previews": [
                                confirmation_text(json.loads(frame.partition(":")[2]))
@@ -284,6 +290,8 @@ def _sample(name, backend, contract, run_id, sample):
                 outcome["reason"] = str(exc)
         outcome["requests"] = len(rounds)
         outcome["business_writes"] = len(_posts(state))
+        if state.get("observations"):
+            outcome["observations"] = state["observations"]
         if "contract_evidence" in state:
             outcome["evidence"] = state["contract_evidence"]
         if state.get("unsupported_reads"):

@@ -3,6 +3,7 @@
 import json
 import re
 from contextlib import contextmanager
+from functools import partial
 from unittest.mock import patch
 
 import httpx
@@ -138,7 +139,65 @@ def direct(turn, state):
     _navigation(turn("带我去这篇文章：" + url), url)
 
 
+def feedback(turn, state, *, status="completed", path="/guestbook"):
+    from langchain_core.messages import ToolMessage
+
+    from agent.principal import SOURCE_ASSERTION, Principal
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+    from eval import golden_evaluation as golden
+
+    first = turn("请打开留言板。", browser_feedback=True, task_id="native_browser_task")
+    commands = first.get("client_commands", [])
+    _require(len(commands) == 1 and not first["confirm_tokens"],
+             "browser mode did not deliver one unapproved reversible command")
+    command = commands[0]
+    _require(command["kind"] == "navigate" and command["path"] == "/guestbook",
+             "browser command changed destination")
+    runtime = golden.ensure_agent()
+    config = {"configurable": {"user_id": 7, "conversation_id": 42,
+        "thread_id": "conv_42", "principal": Principal(7, "user", SOURCE_ASSERTION)}}
+    saved = runtime.get_state(config, subgraphs=True)
+    _require(saved.interrupts and runtime.store.load(config).unfinished,
+             "navigation did not wait in the framework checkpoint")
+    restored = AgentRuntime(CheckpointConversationStore(runtime.saver),
+                            application=runtime.application,
+                            model_io=runtime.model_io, model_factory=runtime.model_factory)
+    controls = {"resume_task": command["task_id"], "browser_feedback": True}
+    with patch.object(golden, "ensure_agent", lambda: restored):
+        waiting = turn("", **controls)
+        _require(len(waiting["client_commands"]) == 1
+                 and waiting["client_commands"][0]["command_id"] == command["command_id"]
+                 and not waiting["tool_calls"], "missing ack changed or executed the action")
+        ack = {"command_id": command["command_id"], "status": status, "path": path}
+        foreign = turn("", **controls, browser_result={**ack, "command_id": "foreign"})
+        _require(not foreign["client_commands"] and restored.store.load(config).unfinished,
+                 "foreign browser result consumed the pending action")
+        done = turn("", **controls, browser_result=ack)
+        _require(done["text"].strip() and not done["client_commands"]
+                 and not restored.store.load(config).unfinished, "ack did not finish saved task")
+        facts = [json.loads(m.content) for m in restored.store.load(config).messages
+                 if isinstance(m, ToolMessage) and m.name == "navigate_page"]
+        success = status == "completed" and path == "/guestbook"
+        _require(len(facts) == 1 and facts[0]["completion_confirmed"] is success,
+                 "browser outcome was not reflected in the actual tool fact")
+        replay = turn("", **controls, browser_result=ack)
+        _require(not replay["client_commands"] and not replay["tool_calls"],
+                 "duplicate acknowledgement repeated a browser action")
+    rows = (waiting, foreign, replay)
+    _require(all(isinstance(row["native_events"], list)
+                 and not any(e.get("event") == "llm_start" for e in row["native_events"])
+                 for row in rows), "control replay unexpectedly called the model")
+    state["contract_evidence"] = {"checkpoint_reconstructed": True,
+        "missing_foreign_duplicate_ack_model_calls": 0, "status": status,
+        "observed_path": path, "completion_confirmed": success, "browser": "synthetic_ack"}
+
+
 CASES = [("navigation_only_recommend", backend, recommend_only),
          ("navigation_followup", backend, followup),
          ("navigation_combined", backend, recommend_and_open),
-         ("navigation_direct", backend, direct)]
+         ("navigation_direct", backend, direct),
+         ("navigation_feedback_complete", backend, feedback),
+         ("navigation_feedback_failed", backend, partial(feedback, status="failed")),
+         ("navigation_feedback_timeout", backend, partial(feedback, status="timeout")),
+         ("navigation_feedback_wrong_path", backend, partial(feedback, path="/dashboard"))]

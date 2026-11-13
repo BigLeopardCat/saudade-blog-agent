@@ -20,12 +20,10 @@ from agent import (
     confirm,
     runtime_probe,
 )
-from agent.api.context import build_messages as _build_messages
 
 # Evaluation uses the production producer without HTTP.
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
-from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.transport import reply_text
@@ -236,21 +234,14 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
             (principal.role if principal is not None else None), thread=thread,
             runtime=runtime_probe.request_context(runtime))
-    async def collect_frames():
-        queue = asyncio.Queue(maxsize=64)
-        producer = asyncio.create_task(asyncio.to_thread(
-            _run_agent_stream_to_queue, runtime,
-            _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
-            thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
-            confirm_grant, req.conversation_id))
-        return await golden_runtime.collect_frames(queue, producer)
-
-    frames = asyncio.run(collect_frames())
+    frames = asyncio.run(golden_runtime.collect_request(
+        runtime, req, principal, confirm_grant, thread))
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))
     final_text = ""
     commands: list[str] = []
+    client_commands: list[dict] = []
     exec_rows: list[dict] = []
     error = None
     control_frames: list[str] = []
@@ -263,6 +254,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 exec_rows.extend(item.data)
             elif item.name == "command":
                 commands.append(command_report.command_wire(item.data))
+                client_commands.append(item.data)
             elif item.name in {"confirmation", "pending", "task_input"}:
                 control_frames.append(golden_runtime.assertion_frame(item))
     confirm_tokens, confirm_payloads = [], []
@@ -276,7 +268,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         if tk:
             confirm_tokens.append(tk)
             confirm_payloads.append(confirm.inspect(tk) or {})
-    return {"text": final_text, "commands": commands, "tool_calls": native_names,
+    return {"text": final_text, "commands": commands, "client_commands": client_commands,
+            "tool_calls": native_names,
             "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],

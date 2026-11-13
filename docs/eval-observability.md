@@ -39,6 +39,21 @@ python -m eval.release_readiness --help
 语料夹具共用 `golden_evaluation`。语义复核只通过 `online_judge` 审评固定报告，
 普通离线测试统一由 pytest 收集，不在生产 cron 中串联这些入口。
 
+`native_contracts` 使用真实模型、合成业务 API、临时 SQLite 执行账和内存 checkpoint，
+检查确认后的真实夹具状态、取消、重放及显式恢复；不连接生产业务库，不证明 PostgreSQL 耐久性。
+可用 `--case` 选核心链路，`--fail-fast` 在首次失败时停止扩量；保留首次 journal、报告及 trace。
+`navigation_feedback_*` 经过与生产相同的回执控制入口，核对 checkpoint 重建、错误回执拒绝、
+完成/失败/超时/错误路径和重复回执。这些回执是合成观察，真实浏览器交互另由 Playwright CI 验证。
+
+普通用户回复出现“主人”按已接受口径保留原话至 `observations`，不单凭该词判失败。
+此观察不证明角色陈述正确；身份与权限、对象、精确交付数据、确认签名、写入次数及回执状态仍独立校验。
+其余已接受的轻微语气/措辞观察不新增禁词断言，显式 JSON、校验码及拟写正文的精确要求不放宽。
+
+部分写入后的核对检查 Agent 本轮成功查询的工具证据，不依赖内部 HTTP 次数或列表路径。
+两个指定编号可以一次列表读取，也可以分别读取详情；两者均须有直接、无重复的状态证据。
+写入准备调用上限复用 `release_profile.json`；三次调用仍是该效率场景的优化目标，
+超过三次但未超过既有发布上限时保留原话和实际调用数为效率观察，不称为优化成功。
+
 语义 judge 使用开发依赖 OpenEvals，由 `eval/semantic_judge.py` 适配当前模型协议。
 执行前用 `uv sync --locked` 安装开发依赖，生产服务无需安装 OpenEvals。
 业务 rubric、证据投影、引用校验和最终验收仍由项目维护；解析失败、截断或材料缺失

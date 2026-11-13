@@ -172,11 +172,11 @@ def test_gallery_followup_reuses_observed_image_without_business_io(sdk, monkeyp
 
 
 @pytest.mark.parametrize("completed", [False, True])
-@pytest.mark.parametrize("prelist", [False, True])
+@pytest.mark.parametrize("prelist", [0, 1, 2])
 def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, completed, prelist):
     reply = json.dumps({"101": True, "102": completed})
     responses = [[call("load_notifications_info_tools")]]
-    if prelist:
+    for _ in range(prelist):
         responses.append([call("list_notifications", unread_only=True)])
     responses.extend([
         [call("prepare_notification_read", scope="all_unread")],
@@ -185,7 +185,7 @@ def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, 
     ])
     requests = sdk(responses)
     row = result("efficiency_partial_write_replay", requests)
-    assert row["passed"] is (not completed and not prelist), row
+    assert row["passed"] is (not completed and prelist <= 1), row
     assert row["requests"] == len(row["rounds"]) == 3
     assert row["rounds"][0]["model_calls"] == 3 + prelist
     assert row["business_writes"] == 1
@@ -199,8 +199,13 @@ def test_partial_write_replay_has_one_write_and_cannot_claim_all_completed(sdk, 
     assert not row["rounds"][1]["exec_rows"] and not row["rounds"][2]["exec_rows"]
     if completed:
         assert "contradicts" in row["reason"]
-    elif prelist:
-        assert "4 > 3" in row["reason"]
+    elif prelist == 2:
+        assert "5 > 4" in row["reason"]
+    elif prelist == 1:
+        assert row["observations"][0]["kind"] == "preparation_efficiency"
+        assert row["observations"][0]["actual_calls"] == 4
+        assert row["observations"][0]["target_calls"] == 3
+        assert row["observations"][0]["release_limit"] == 4
 
 
 def test_metadata_fixture_uses_the_body_free_host_envelope():
@@ -211,3 +216,29 @@ def test_metadata_fixture_uses_the_body_free_host_envelope():
     assert result.kind == "ok" and result.data["description"] == "已保存的摘要。"
     assert not {"noteContent", "totalChars", "sectionCount"}.intersection(result.data)
     assert state["body_reads"] == [0] and len(state["requests"]) == 1
+
+
+@pytest.mark.parametrize("mode", ["list", "two_details", "repeat_one", "redundant_list",
+                                  "wrong_state", "no_read"])
+def test_partial_write_accepts_distinct_detail_reads_but_requires_both_sources(sdk, mode):
+    reads = [call("list_notifications")]
+    if mode in {"two_details", "repeat_one"}:
+        reads = [call("list_notifications", notification_id=101),
+                 call("list_notifications", notification_id=102 if mode == "two_details" else 101)]
+    elif mode == "redundant_list":
+        reads *= 2
+    reply = json.dumps({"101": True, "102": mode == "wrong_state"})
+    responses = [[call("load_notifications_info_tools")],
+                 [call("prepare_notification_read", scope="all_unread")], "请确认。"]
+    if mode != "no_read":
+        responses.append(reads)
+    responses.append(reply)
+    requests = sdk(responses)
+    row = result("efficiency_partial_write_replay", requests)
+    assert row["passed"] is (mode in {"list", "two_details"}), row
+    assert row["business_writes"] == 1 and row["requests"] == 3
+    assert row["rounds"][-1]["model_calls"] == 0
+    if mode in {"repeat_one", "redundant_list"}:
+        assert "nonrepeated independent evidence" in row["reason"]
+    elif mode == "wrong_state":
+        assert "contradicts" in row["reason"]

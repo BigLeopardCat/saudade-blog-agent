@@ -4,6 +4,7 @@ from contextlib import contextmanager
 
 from agent import confirm
 from eval.admin_task_contracts import require
+from eval.native_assertions import observations
 from eval.own_fixtures import notification_backend
 
 
@@ -26,9 +27,9 @@ def partial_read(turn, state):
             "unverified mutation produced success evidence or no answer")
     writes = [i for i, request in enumerate(state["requests"]) if request.method == "POST"]
     require(len(writes) == 1, "partial mutation was repeated")
-    readbacks = [request for request in state["requests"][writes[0] + 1:]
-                if request.method == "GET" and request.url.path.endswith("/notifications")]
-    require(len(readbacks) >= 2,
+    readbacks = [event for event in observations(done.get("native_events") or [])
+                if event.get("name") == "list_notifications" and event.get("kind") == "ok"]
+    require(readbacks,
             "Agent did not independently read after domain verification failed")
     actual = {row["id"]: row["isRead"] for row in state["items"]}
     require(actual == {101: True, 102: False, 103: True}, "incorrect partial business effect")

@@ -131,6 +131,18 @@ def test_duplicate_ack_does_not_generate_another_reply(navigation):
     assert result.execution["blocked"] and len(model.calls) == 2
 
 
+def test_rejected_ack_does_not_finish_the_pending_task_input_record(navigation):
+    runtime, model, config, _, command = navigation
+    rejected = list(runtime().stream_events({"resume_task": "page-task"},
+        acknowledge(config, {**command, "command_id": "foreign"})))[-1]
+    assert rejected.execution["blocked"] and len(model.calls) == 1
+    assert runtime().store.load(config).unfinished
+    done = list(runtime().stream_events({"resume_task": "page-task"},
+        acknowledge(config, command)))[-1]
+    assert done.reply == "页面操作结果已收到。" and len(model.calls) == 2
+    assert not runtime().store.load(config).unfinished
+
+
 def test_disconnect_after_ack_resumes_saved_reply_without_replaying_browser_action(navigation):
     from agent.runtime.control import AgentCancelled
 

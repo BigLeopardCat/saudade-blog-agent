@@ -1,0 +1,45 @@
+{
+  "base_commit": "753b3656d2b3ac3a2ec543882184d0e79975bcaa",
+  "scope": "Existing native_contracts real model with synthetic business HTTP, memory checkpoints and temporary SQLite ledger. No production business writes, no semantic Judge. Existing Playwright and real PostgreSQL matrix in CI.",
+  "primary_cases": [
+    "chat",
+    "favorite_cancel",
+    "favorite_confirm",
+    "notification_replay",
+    "message_read_replay",
+    "navigation_followup",
+    "navigation_feedback_complete",
+    "navigation_feedback_failed",
+    "navigation_feedback_timeout",
+    "navigation_feedback_wrong_path",
+    "notice_then_role",
+    "notice_role_cancel",
+    "notice_done_cancel_role",
+    "notice_preparation_recovery",
+    "composite_notifications",
+    "composite_notifications_cancel",
+    "notification_partial_readback",
+    "task_defer_resume",
+    "efficiency_partial_write_replay"
+  ],
+  "independent_repeat_after_primary_pass": [
+    "favorite_cancel",
+    "favorite_confirm",
+    "notification_replay",
+    "navigation_feedback_complete",
+    "task_defer_resume",
+    "efficiency_partial_write_replay"
+  ],
+  "repeat_unit": "Distinct fresh fixture/runtime/ledger samples; report19unique scenarios and6planned repeats separately, not25independent user tasks.",
+  "policy": "Fail fast on first live failure; preserve all first attempts, no automatic resampling. Inspect actual model/tool/fixture/checkpoint evidence before changing code or oracle. Approved wording/address observations remain observations with originaltext; precise data, scope, grants, writes and actual browser facts stay strict.",
+  "confirmed_runtime_issue": "Foreign browser acknowledgement preserved checkpoint but completed task-input record, blocking subsequent correct ack. Direct runtime regression failed before corefix. Preserve checkpoint task status on blocked outcome.",
+  "release_state": "Previous full190/190 HTTP candidate a2; read.inP95 exceeded20000by.95%;semanticpaused andsparsegroups remain unverified. Do not rewrite prior verdict or publishformal tag without resolving/explicitlyaccepting gaps.",
+  "model": "Current configured OpenCode Go/deepseek-v4.1-flash; existing credentials read in-memory. Send project prompts/schema and synthetic cases only; no Judge uploads.",
+  "previous_attempt": {
+    "commit": "99a7607ed47d8be29359e95c518c95d75387570b",
+    "classification": "Preparation optimization hint failed to remove pre-list:4calls again; correct exact JSON and zero-I/O replay. Revert unproven prompt change. Preserve raw strict3-target failure. Existing committed release_profile prepare budget is4calls/24000input/50s, unchanged since baseline."
+  },
+  "change_under_test": "Evaluation aligns preparation hard cap with existing release_profile, keeps3call optimization misses as observations including original reply and actual count.5calls still fail; precise JSON, direct state sources, nonoverlap, exactly1write, zero replay I/O unchanged. No production code change vs a97cf2f3.",
+  "diagnosis_cases": [],
+  "sequence": "Run all original19 core scenarios and original6 independent repeats at final candidate. No resampling failed samples. No semantic Judge. Clearly report observation count and old failed efficiency attempts; do not claim fewer model calls."
+}
