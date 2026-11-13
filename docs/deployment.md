@@ -4,6 +4,20 @@ Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 Postg
 
 首次安装与升级是不同操作。下文初始化命令只用于新安装；已有站点不要重建数据库、覆盖配置或重新初始化 `current`。
 
+## 正式发行
+
+发行前冻结通过验收的 Agent 与博客完整提交。宿主契约测试源码由 `.github/host-contract.json` 固定，
+组件由博客的 `frontend/widget.lock.json` 固定；容器运行版本另由
+博客的 `deploy/docker/agent.lock.json` 固定。三个锁用途不同，不要求互相追逐 HEAD；
+发行说明必须列明实际验证的组合，不能将另一版本的回归成绩套用到安装包。
+
+先关闭严重缺陷并完成最终候选的 CI、任务验收及隔离恢复演练，再决定稳定版本号与 tag。
+README、包版本、Changelog 和发行说明的稳定性声明应一致；证据不足时保持候选状态。
+发行资产附源码提交、适用数据库迁移、校验值、已知限制和升级/回滚步骤。
+生产凭据、数据库备份、原始私有 trace 不进入公开发行资产。
+
+使用干净工作树构建发布，保留旧开发目录中的未提交工作；不以 reset 覆盖并行会话。
+
 ## 版本与配置边界
 
 生产运行 `/srv/saudade-agent/releases/<完整提交 SHA>`，每版有独立锁定 venv。启动脚本解析真实目录后执行 `agent.main:app`，不会在运行中导入开发 checkout 的变更。Agent 与博客分别发布；博客的 widget pin 只控制前端资源。
