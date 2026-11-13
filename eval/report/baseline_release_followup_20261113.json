@@ -1964,5 +1964,110 @@
       "total_cost_usd": null
     }
   },
-  "current_evidence": "complete_collection; older attempt and semantic records are retained separately"
+  "current_evidence": "complete_collection; older attempt and semantic records are retained separately",
+  "read_evidence_followup": {
+    "scope": "23 fixed targeted development cases, including explicit repeats; not a full regression or independent holdout. Exact original prompts compared to one frozen full-batch observation; cache, time and provider prices differ, not a randomized A/B.",
+    "agent_sha": "6ba8849297d6520a8fdee8b341a3d24d5d21b9ef",
+    "host_sha": "8015eb13a2f0f638a008803224760ac4be8dc451",
+    "evaluator_commit": "25d5e3693645f4c7139c8c0dae8e193f904f2e51",
+    "report_sha256": "2829be2cd7b78e232678402abab22fc62c9f3ebf41d7cc671e6890fbfe807560",
+    "original_full_report_sha256": "a51e76e5602b5a0279152322b2caba00084ab4cbfbcd9d001bc8f63a37f1d72a",
+    "counts": {
+      "passed": 22,
+      "failed": 1
+    },
+    "usage": {
+      "calls": 64,
+      "unknown_attempts": 0,
+      "in": 314704,
+      "out": 6166,
+      "cache": 211712
+    },
+    "cache_rate": 0.6727337434541665,
+    "billing_usd": {
+      "provider_cost_usd": 0,
+      "provider_list_cost_usd": 0.019783580000000002,
+      "provider_allowance_usd": 0.011870079999999998
+    },
+    "focused_read_comparison": {
+      "post_admin_list": {
+        "before_model_calls": 5,
+        "after_model_calls": [
+          3,
+          3,
+          3
+        ],
+        "before_input": 32353,
+        "after_input": [
+          16753,
+          16731,
+          16777
+        ],
+        "before_go_allowance_usd": 0.00098647,
+        "after_go_allowance_usd": [
+          0.00061223,
+          0.0006482100000000001,
+          0.0001478
+        ]
+      },
+      "tags_children": {
+        "before_model_calls": 4,
+        "after_model_calls": [
+          4,
+          4,
+          3
+        ],
+        "before_input": 19491,
+        "after_input": [
+          19229,
+          19258,
+          13715
+        ],
+        "before_go_allowance_usd": 0.0005907,
+        "after_go_allowance_usd": [
+          0.0006131099999999999,
+          0.00064272,
+          0.00013883
+        ]
+      }
+    },
+    "remaining_performance_issue": {
+      "case": "read_followup_tags_children_2",
+      "observed_model_calls": 4,
+      "limit": 3,
+      "limit_unchanged": true,
+      "reason": "The model still chose a parent-ID lookup followed by a child query in two of three fixed repeated prompts. Direct name lookup worked once; stable benefit is not yet established."
+    },
+    "semantic_counts": {
+      "no_issue_found": 18,
+      "suspect": 5
+    },
+    "semantic_suspect_cases": [
+      "catalog_recommendation_link",
+      "nav_retired_friends",
+      "nav_retired_he",
+      "tail_browser_rain_only",
+      "tail_article_intro_use"
+    ],
+    "semantic_report_sha256": "96004f9eba6c888d5b81ca54ff97744844c3814c7f860147cce7f650e208f6cf",
+    "navigation_reassessment": {
+      "case": "tail_browser_device_about",
+      "source_report_sha256": "a51e76e5602b5a0279152322b2caba00084ab4cbfbcd9d001bc8f63a37f1d72a",
+      "original_status": "failed",
+      "reassessed_failures": [],
+      "checker_commit": "25d5e3693645f4c7139c8c0dae8e193f904f2e51",
+      "checker_sha256": "6a9e2b3f89dcec7edb121cda968b70c81e05977372148f5a2c86fa0a94b41dd5",
+      "basis": "The host redirects only the known device-console root to its directory URL. Origin/query/fragment remain strict.",
+      "model_calls": 0,
+      "source_modified": false
+    },
+    "previous_scores_or_thresholds_changed": false,
+    "release_certified": false,
+    "limits": [
+      "Development repeats are not additional independent coverage.",
+      "The strict three-call child-tag diagnostic failed once; its limit remains unchanged.",
+      "Raw semantic suspect findings are triage, not a maintainer verdict; five require evidence review.",
+      "No full-suite acceptance, browser execution or approved write success is inferred from these HTTP preparation checks."
+    ]
+  }
 }
