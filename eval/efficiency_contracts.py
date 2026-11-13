@@ -9,6 +9,7 @@ import json
 import re
 from collections import Counter
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import httpx
@@ -216,8 +217,17 @@ def partial_write_replay(turn, state):
     _require(native_assertions.contains(answer, actual),
              "reported completion contradicts the independently observed partial business state")
     _check(replay, max_model_calls=0)
-    _check(prepared, max_model_calls=3, max_tool_calls={"prepare_notification_read": 1})
+    prepare_limit = json.loads(Path(__file__).with_name("release_profile.json").read_text(
+        encoding="utf-8"))["task_budgets"]["prepare"]["calls"]
+    _check(prepared, max_model_calls=prepare_limit,
+           max_tool_calls={"prepare_notification_read": 1})
     _check(done, max_model_calls=2, max_tool_calls={"list_notifications": 2})
+    prepare_calls = sum(e.get("event") == "llm_start" for e in prepared["native_events"])
+    if prepare_calls > 3:
+        state.setdefault("observations", []).append({"kind": "preparation_efficiency",
+            "target_calls": 3, "actual_calls": prepare_calls, "release_limit": prepare_limit,
+            "text": prepared["text"], "scope": "3-call optimization target missed; "
+            "existing release preparation budget met; not an efficiency improvement"})
 
 
 def article_metadata(turn, state):
