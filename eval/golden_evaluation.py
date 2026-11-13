@@ -242,7 +242,12 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             _run_agent_stream_to_queue, runtime,
             _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
             thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
-            confirm_grant, req.conversation_id))
+            confirm_grant, req.conversation_id,
+            task_id=req.task_id, turn_id=req.turn_id, resume_task=req.resume_task,
+            browser_feedback=req.browser_feedback,
+            browser_result=req.browser_result.model_dump() if req.browser_result else None,
+            task_inputs=req.task_inputs,
+            image_event=req.image_event.model_dump() if req.image_event else None))
         return await golden_runtime.collect_frames(queue, producer)
 
     frames = asyncio.run(collect_frames())
@@ -251,6 +256,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                                           len(frames))
     final_text = ""
     commands: list[str] = []
+    client_commands: list[dict] = []
     exec_rows: list[dict] = []
     error = None
     control_frames: list[str] = []
@@ -263,6 +269,7 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
                 exec_rows.extend(item.data)
             elif item.name == "command":
                 commands.append(command_report.command_wire(item.data))
+                client_commands.append(item.data)
             elif item.name in {"confirmation", "pending", "task_input"}:
                 control_frames.append(golden_runtime.assertion_frame(item))
     confirm_tokens, confirm_payloads = [], []
@@ -276,7 +283,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
         if tk:
             confirm_tokens.append(tk)
             confirm_payloads.append(confirm.inspect(tk) or {})
-    return {"text": final_text, "commands": commands, "tool_calls": native_names,
+    return {"text": final_text, "commands": commands, "client_commands": client_commands,
+            "tool_calls": native_names,
             "frames": control_frames,
             "exec_rows": exec_rows,
             "exec_tools": [r.get("tool", "") for r in exec_rows],

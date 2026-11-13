@@ -243,6 +243,41 @@ def test_browser_ack_then_disconnect_recovers_the_actual_child_checkpoint(inboxe
     assert not runtime().store.load(cfg).unfinished
 
 
+def test_rejected_browser_ack_preserves_postgres_resume_after_worker_rebuild(inboxes):
+    from _browser_support import Model, acknowledge
+    from _own_support import config
+    from langchain_core.messages import HumanMessage
+    from langgraph.checkpoint.postgres import PostgresSaver
+
+    from agent.runtime import checkpoint_store
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    pool = inboxes[0].storage.pool
+    PostgresSaver(pool).setup()
+    with pool.connection() as conn:
+        checkpoint_store.setup(conn)
+    model, cfg = Model(), config(browser_feedback=True)
+
+    def runtime():
+        return AgentRuntime(CheckpointConversationStore(PostgresSaver(pool)),
+            application=BlogApplication(), model_factory=lambda **_: model)
+
+    first = list(runtime().stream_events({"messages": [HumanMessage(content="去留言板")],
+                                         "task_id": "page-task"}, cfg))[-1]
+    command = first.execution["client_action"]
+    task = runtime().store.load(cfg).run
+    rejected = list(runtime().stream_events({"resume_task": "page-task"},
+        acknowledge(cfg, {**command, "command_id": "foreign"})))[-1]
+    assert rejected.execution["blocked"] and len(model.calls) == 1
+    assert runtime().inputs.read(task["id"], task["scope"])["phase"] == "paused"
+    done = list(runtime().stream_events({"resume_task": "page-task"},
+        acknowledge(cfg, command)))[-1]
+    assert done.reply == "页面操作结果已收到。" and len(model.calls) == 2
+    assert not runtime().store.load(cfg).unfinished
+    assert runtime().inputs.read(task["id"], task["scope"])["phase"] == "completed"
+
+
 @pytest.mark.parametrize("phase", ["commit", "feedback"])
 def test_actual_process_exit_recovers_durable_task_once(inboxes, tmp_path, monkeypatch, phase):
     import secrets

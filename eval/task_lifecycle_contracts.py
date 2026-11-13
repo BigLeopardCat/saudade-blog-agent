@@ -37,6 +37,23 @@ def defer_explanation(turn, state):
     deferred(turn, state, "给我讲一下零知识证明，先挂起这个任务，等我点继续再讲")
 
 
+def defer_and_resume(turn, state):
+    from eval import golden_evaluation as golden
+
+    paused = turn("简要解释零知识证明，先挂起，等我点击继续任务后再解释。",
+                  task_id="native_deferred_task")
+    if not any(row.get("event") == "turn_state" and row.get("phase") == "paused"
+               for row in paused.get("native_events") or []):
+        raise ValueError("requested deferral did not pause")
+    resumed = turn("", resume_task="native_deferred_task")
+    config = {"configurable": {"user_id": 7, "conversation_id": 42, "thread_id": "conv_42",
+        "principal": Principal(7, state.get("caller_role", "user"), "assertion")}}
+    if (not resumed["text"].strip() or golden.ensure_agent().store.load(config).unfinished
+            or paused["confirm_tokens"] or resumed["confirm_tokens"] or state["requests"]):
+        raise ValueError("saved explanation did not finish without a business operation")
+    state["contract_evidence"] = {"explicit_resume_completed": True, "business_writes": 0}
+
+
 def scheduled_publication(turn, state):
     result = turn("五分钟后发公告，标题“定时测试”，正文“这是一条定时测试公告。”")
     tokens = result["confirm_tokens"]
@@ -54,4 +71,5 @@ def scheduled_publication(turn, state):
 
 CASES = [("task_defer_category", backend, defer_category),
          ("task_defer_explanation", backend, defer_explanation),
+         ("task_defer_resume", backend, defer_and_resume),
          ("scheduled_publication_prepare", backend, scheduled_publication)]

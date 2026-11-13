@@ -313,7 +313,8 @@ def test_navigation_samples_keep_failed_attempts_and_real_effects(monkeypatch, t
     monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
     monkeypatch.delenv(golden_trace.ENV_OFF, raising=False)
     report = native_contracts.run(
-        [case[0] for case in native_contracts.navigation_contracts.CASES], repeat=2
+        ["navigation_only_recommend", "navigation_followup", "navigation_combined",
+         "navigation_direct"], repeat=2
     )
     combined = [row for row in report["cases"] if row["case"] == "navigation_combined"]
     assert [row["passed"] for row in combined] == [False, True]
@@ -454,3 +455,77 @@ def test_read_only_post_contracts_cannot_hide_lookalike_business_mutations(resou
               httpx.Request("POST", "http://blog/api/protected/" + resource),
               httpx.Request("DELETE", "http://blog/api/public/" + resource)]
     assert native_contracts._posts({"requests": reads + writes}) == writes
+
+
+@pytest.mark.parametrize("text,passed,observed", [
+    ("你好喵～", True, False), ("你好，主人喵～", True, True),
+    ("你好，杂鱼。", False, False),
+])
+def test_accepted_address_observation_preserves_text_and_execution_checks(
+        monkeypatch, tmp_path, text, passed, observed):
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, *args, **kwargs):
+            return AIMessage(content=text)
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run(["chat"])["cases"][0]
+    assert row["passed"] is passed and row["business_writes"] == 0
+    assert row["rounds"][0]["text"] == text
+    assert bool(row.get("observations")) is observed
+    if observed:
+        assert row["observations"][0]["text"] == text
+
+
+@pytest.mark.parametrize("case,confirmed", [
+    ("navigation_feedback_complete", True), ("navigation_feedback_failed", False),
+    ("navigation_feedback_timeout", False), ("navigation_feedback_wrong_path", False),
+])
+def test_existing_evaluator_carries_browser_ack_and_reuses_saved_checkpoint(
+        monkeypatch, tmp_path, case, confirmed):
+    calls = []
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            calls.append(messages)
+            if len(calls) == 1:
+                return AIMessage(content="", tool_calls=[{"name": "navigate_page",
+                    "args": {"path": "/guestbook"}, "id": "navigation"}])
+            return AIMessage(content="页面操作回执已收到。")
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run([case])["cases"][0]
+    assert row["passed"], {"reason": row.get("reason"), "rounds": [
+        {k: r[k] for k in ("text", "model_calls", "client_commands")}
+        for r in row["rounds"]]}
+    assert row["evidence"]["completion_confirmed"] is confirmed
+    assert len(calls) == 2 and row["business_writes"] == 0
+    assert [r["model_calls"] for r in row["rounds"]] == [1, 0, 0, 1, 0]
+
+
+def test_explicit_task_resume_reaches_the_saved_model_task(monkeypatch, tmp_path):
+    calls = []
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            calls.append(messages)
+            if len(calls) == 1:
+                return AIMessage(content="", tool_calls=[{"name": "pause_task",
+                    "args": {"instruction": "简要解释零知识证明。"}, "id": "pause"}])
+            return AIMessage(content="零知识证明可以在不泄露秘密的情况下验证声明。")
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run(["task_defer_resume"])["cases"][0]
+    assert row["passed"], row.get("reason")
+    assert row["evidence"]["explicit_resume_completed"] and len(calls) == 2
