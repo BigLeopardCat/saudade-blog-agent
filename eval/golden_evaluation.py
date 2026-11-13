@@ -20,12 +20,10 @@ from agent import (
     confirm,
     runtime_probe,
 )
-from agent.api.context import build_messages as _build_messages
 
 # Evaluation uses the production producer without HTTP.
 from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
-from agent.api.turns import stream_to_queue as _run_agent_stream_to_queue
 from agent.contracts.events import StreamEvent
 from agent.principal import Principal
 from agent.transport import reply_text
@@ -236,21 +234,8 @@ def run_one(req: ChatRequest, principal: "Principal | None" = None,
             trace_ctx["run"], trace_ctx.get("case", ""), req.message or "",
             (principal.role if principal is not None else None), thread=thread,
             runtime=runtime_probe.request_context(runtime))
-    async def collect_frames():
-        queue = asyncio.Queue(maxsize=64)
-        producer = asyncio.create_task(asyncio.to_thread(
-            _run_agent_stream_to_queue, runtime,
-            _build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
-            thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
-            confirm_grant, req.conversation_id,
-            task_id=req.task_id, turn_id=req.turn_id, resume_task=req.resume_task,
-            browser_feedback=req.browser_feedback,
-            browser_result=req.browser_result.model_dump() if req.browser_result else None,
-            task_inputs=req.task_inputs,
-            image_event=req.image_event.model_dump() if req.image_event else None))
-        return await golden_runtime.collect_frames(queue, producer)
-
-    frames = asyncio.run(collect_frames())
+    frames = asyncio.run(golden_runtime.collect_request(
+        runtime, req, principal, confirm_grant, thread))
     native_names, native_rounds = golden_trace.tool_call_stats(trace_id)
     trace_path = golden_trace.finish_case(trace_id, time.monotonic() - t_trace0,
                                           len(frames))

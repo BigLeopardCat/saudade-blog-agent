@@ -6,9 +6,10 @@ from langchain_core.messages import AIMessage
 from eval import native_contracts
 
 
-@pytest.mark.parametrize("reply,passed", [("你好呀～", True), ("主人早上好～", False),
+@pytest.mark.parametrize("reply,passed", [("你好呀～", True), ("主人早上好～", True),
                                          ("杂鱼早上好～", False)])
-def test_default_user_address_is_part_of_chat_acceptance(monkeypatch, tmp_path, reply, passed):
+def test_default_user_address_matches_accepted_observation_policy(
+        monkeypatch, tmp_path, reply, passed):
     class Model:
         def bind_tools(self, *args, **kwargs):
             return self
@@ -21,6 +22,7 @@ def test_default_user_address_is_part_of_chat_acceptance(monkeypatch, tmp_path, 
                         lambda: str(tmp_path / "traces"))
     result = native_contracts.run(["chat"])["cases"][0]
     assert result["evaluated"] and result["passed"] == passed
+    assert bool(result.get("observations")) == ("主人" in reply)
 
 
 @pytest.mark.parametrize("failure", [None, "wrong_target", "no_read", "repeat_read"])

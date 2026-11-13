@@ -69,6 +69,8 @@ def _response(data, page, limit, preview, unread_only, notification_id, term):
     if len({row["id"] for row in selected}) != len(selected):
         raise ValueError("duplicate notification identity")
     result["items"] = [_entry(row, notification_id is not None, preview) for row in selected]
+    result["operation"] = {"kind": "notification_query", "changesReadState": False,
+                           "preparesConfirmation": False}
     return result
 
 
@@ -96,7 +98,8 @@ def list_notifications(config: RunnableConfig, limit: _Limit | None = None, page
     默认每页20条；include_preview=true时默认10条、每条最多240字。
     notification_id读取任意历史单条正文（最多2000字），忽略列表条件。
     total是匹配总数，hasMore表示还有下一页，unreadTotal是全局未读数。
-    查看不会标记已读；站内信使用list_my_messages。
+    本工具只读，不标记已读、不生成确认卡；变更已读状态需另行准备确认。
+    站内信使用list_my_messages。
     """
     # Registry construction also occurs during policy imports; enforce after bootstrap.
     from agent.authz import SCOPE_READ_OWN, holds

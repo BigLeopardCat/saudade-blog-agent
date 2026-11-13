@@ -80,3 +80,23 @@ async def collect_frames(queue, producer):
     if isinstance(completed, BaseException) and not any(item is completed for item in frames):
         frames.append(completed)
     return frames
+
+
+async def collect_request(runtime, req, principal, confirm_grant, thread):
+    """Forward the same request controls as the production stream adapter."""
+    from agent import runtime_probe
+    from agent.api.context import build_messages
+    from agent.api.turns import stream_to_queue
+
+    queue = asyncio.Queue(maxsize=64)
+    producer = asyncio.create_task(asyncio.to_thread(
+        stream_to_queue, runtime,
+        build_messages(req, holds_context=runtime_probe.holds_context(runtime)),
+        thread, queue, asyncio.get_running_loop(), req.user_id, None, principal,
+        confirm_grant, req.conversation_id,
+        task_id=req.task_id, turn_id=req.turn_id, resume_task=req.resume_task,
+        browser_feedback=req.browser_feedback,
+        browser_result=req.browser_result.model_dump() if req.browser_result else None,
+        task_inputs=req.task_inputs,
+        image_event=req.image_event.model_dump() if req.image_event else None))
+    return await collect_frames(queue, producer)
