@@ -1,5 +1,7 @@
 """Public announcements and approved activities, with bounded text and real totals."""
 
+from datetime import datetime
+
 from langchain_core.tools import tool
 
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
@@ -36,11 +38,31 @@ def _row(row, source):
     return result
 
 
+def _chronology(rows, *, page, item_id, source):
+    chronological = source != "announcements"
+    # Announcements use ID order; their page does not establish the newest creation time globally.
+    summary = {"scope": "returned_page",
+               "order": "createdAt_desc_id_desc" if chronological else "id_desc",
+               "newest": None, "oldest": None, "includesCollectionNewest": False}
+    if not rows or any(row["createdAt"] is None for row in rows):
+        return summary
+    keys = [(datetime.fromisoformat(row["createdAt"]), row["id"]) for row in rows]
+    if chronological and keys != sorted(keys, reverse=True):
+        raise ValueError("Activity chronology does not match the host contract")
+    ordered = sorted(zip(keys, rows), key=lambda pair: pair[0])
+    summary.update(newest={key: ordered[-1][1][key] for key in ("id", "createdAt")},
+                   oldest={key: ordered[0][1][key] for key in ("id", "createdAt")},
+                   includesCollectionNewest=chronological and page == 1 and item_id is None)
+    return summary
+
+
 def _read(resource, source, page, limit, item_id):
     if item_id is not None:
         page, limit = 1, 1
     return read_page("activity/" + resource, page, limit, {"id": item_id},
-                     lambda row: _row(row, source), {"id": item_id})
+                     lambda row: _row(row, source), {"id": item_id},
+                     summarize=lambda rows: _chronology(
+                         rows, page=page, item_id=item_id, source=source))
 
 
 @tool

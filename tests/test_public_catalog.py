@@ -279,3 +279,79 @@ def test_real_runtime_binds_canonical_catalog_links_independently_of_api_transpo
     assert all("get_article_detail" in menu for menu in model.menus)
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/articles")
+
+
+def test_parent_name_is_one_exact_backend_request_without_listing_parents(backend):
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1,
+                           "resolvedParentName": "一级"}
+    data = public_catalog.list_tags.invoke({"parent_name": "一级", "level": 2}).data
+    assert data["total"] == 1 and data["items"][0]["parentId"] == 1
+    assert len(backend["requests"]) == 1
+    assert dict(backend["requests"][0].url.params) == {
+        "page": "1", "page_size": "20", "level": "2", "parent_name": "一级"}
+    backend["override"] = {"code": 500, "data": None}
+    assert public_catalog.list_tags.invoke({"parent_name": "ambiguous"}).kind == "unavailable"
+
+
+@pytest.mark.parametrize("parent", [None, "other"])
+def test_unverified_parent_name_cannot_become_a_scoped_result(backend, parent):
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1,
+                           "resolvedParentName": parent}
+    assert public_catalog.list_tags.invoke({"parent_name": "一级"}).kind == "unavailable"
+
+
+@pytest.mark.parametrize("args", [
+    {"parent_name": " ", "level": 2}, {"parent_name": "一级", "level": 1},
+    {"parent_name": "一级", "parent_id": 1},
+])
+def test_invalid_parent_filters_do_not_issue_a_request(backend, args):
+    assert public_catalog.list_tags.invoke(args).kind == "invalid_args"
+    assert backend["requests"] == []
+
+
+def test_empty_children_still_require_server_verified_parent_scope(backend):
+    backend["override"] = {"code": 200, "data": [], "total": 0}
+    assert public_catalog.list_tags.invoke({"parent_name": "一级"}).kind == "unavailable"
+    backend["override"]["resolvedParentName"] = "一级"
+    data = public_catalog.list_tags.invoke({"parent_name": "一级"}).data
+    assert data["items"] == [] and data["total"] == 0
+    assert data["resolvedParentName"] == "一级"
+
+
+def test_framework_executes_named_children_with_one_read_and_three_model_calls(backend):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+    from agent.runtime.service import AgentRuntime
+
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1,
+                           "resolvedParentName": "一级"}
+
+    class Model:
+        count = 0
+
+        def bind_tools(self, tools, **kwargs):
+            self.menu = {item["function"]["name"]: item["function"] for item in tools}
+            return self
+
+        def invoke(self, prompt):
+            self.count += 1
+            if self.count == 1:
+                name, args = "load_public_catalog_info_tools", {}
+            elif self.count == 2:
+                assert "parent_name" in self.menu["list_tags"]["parameters"]["properties"]
+                name, args = "list_tags", {"parent_name": "一级"}
+            else:
+                result = next(item for item in reversed(prompt) if isinstance(item, ToolMessage))
+                data = json.loads(result.content)
+                assert data["resolvedParentName"] == "一级" and data["total"] == 1
+                return AIMessage(content="一级下有1个二级标签。")
+            return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])
+
+    model = Model()
+    runtime = AgentRuntime(CheckpointConversationStore(None), application=BlogApplication(),
+                           model_factory=lambda **_: model)
+    result = list(runtime.stream_events(
+        {"messages": [HumanMessage(content="一级下有哪些二级标签？")]}, {}))[-1]
+    assert result.reply == "一级下有1个二级标签。"
+    assert model.count == 3 and len(backend["requests"]) == 1

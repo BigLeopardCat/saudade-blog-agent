@@ -13,7 +13,8 @@ DOMAIN_DESCRIPTIONS = {
     "not remembering facts, business to-dos or timed reminders.",
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
     "then approve gallery storage.",
-    "admin_talks": "Publish or schedule 说说, edit or permanently delete administrator posts; "
+    "admin_talks": "Read administrator 说说 with original publisher account IDs; "
+    "publish or schedule, edit or permanently delete posts; "
     "not guestbook moderation.",
     "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
     "and transfer status. No mutation preparation.",

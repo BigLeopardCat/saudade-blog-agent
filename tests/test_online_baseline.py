@@ -439,6 +439,18 @@ def test_navigation_matches_relative_and_absolute_site_url_without_accepting_oth
                      "AUTO_NAVIGATE:" + SITE_BASE + "/guestbook?lid=42")
 
 
+
+def test_only_the_known_device_directory_alias_is_canonicalized():
+    from tools.base import SITE_BASE
+
+    match = native_assertions.command_matches
+    assert match("NAVIGATE:/device-console", "AUTO_NAVIGATE:" + SITE_BASE + "/device-console/")
+    assert match("NAVIGATE:/device-console/", "AUTO_NAVIGATE:/device-console")
+    assert not match("NAVIGATE:/guestbook", "AUTO_NAVIGATE:/guestbook/")
+    for target in ["https://example.com/device-console/", "/device-console/?next=other",
+                   "/device-console/#other", "/device-console/other"]:
+        assert not match("NAVIGATE:/device-console", "AUTO_NAVIGATE:" + target)
+
 def test_count_case_regex_accepts_digits_and_rejects_persona_suffix():
     case = next(c for c in online_baseline.load_suite() if c["id"] == "count_only")
     pattern = case["gold"]["text_any_regex"][0]

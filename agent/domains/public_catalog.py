@@ -3,7 +3,7 @@
 from typing import Annotated
 
 from langchain_core.tools import tool
-from pydantic import Field, StrictInt
+from pydantic import Field, StrictInt, StrictStr
 
 from agent.domains.article_metadata import article, positive, text
 from agent.domains.articles.evidence import catalog_source_url
@@ -74,11 +74,21 @@ def list_categories(page: Page = 1, page_size: CatalogLimit = 20) -> object:
 
 @tool
 def list_tags(page: Page = 1, page_size: CatalogLimit = 20, level: Level | None = None,
-              parent_id: Identifier | None = None) -> object:
-    """分页读取一二级标签和公开文章计数。编号须结合level识别；parent_id筛选指定一级标签的子标签。"""
-    if level == 1 and parent_id is not None:
+              parent_id: Identifier | None = None,
+              parent_name: Annotated[StrictStr, Field(min_length=1, max_length=100)] | None = None,
+              ) -> object:
+    """分页读取一二级标签和公开文章计数，编号结合level识别。
+    子标签可用parent_id或一级标签精确名称parent_name筛选，二选一；同名歧义不会合并结果。
+    """
+    if (level == 1 and (parent_id is not None or parent_name is not None)
+            or parent_id is not None and parent_name is not None
+            or parent_name is not None and not parent_name.strip()):
         from tools.result import invalid_args
-        return invalid_args("一级标签不能同时筛选父标签。")
-    return read_page("tags", page, page_size, {"level": level, "parent_id": parent_id}, _tag,
-                     {"level": level, "parentId": parent_id},
-                     identity=lambda row: (row["level"], row["id"]))
+        return invalid_args("父标签筛选仅适用于子标签，编号和精确名称只能提供一种。")
+    return read_page("tags", page, page_size,
+                     {"level": level, "parent_id": parent_id, "parent_name": parent_name}, _tag,
+                     {"level": 2 if parent_name is not None else level,
+                      "parentId": parent_id},
+                     identity=lambda row: (row["level"], row["id"]),
+                     expected_page=({"resolvedParentName": parent_name}
+                                    if parent_name is not None else None))
