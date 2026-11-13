@@ -26,6 +26,8 @@ eval/report/*
 !eval/report/baseline_*.json
 !eval/report/baseline_*.gz
 !eval/report/baseline_*.xz
+!eval/report/archive/
+!eval/report/archive/**
 
 eval/data/
 eval/cache/

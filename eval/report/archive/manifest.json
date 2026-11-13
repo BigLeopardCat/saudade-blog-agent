@@ -1,0 +1,61 @@
+{
+  "format": 1,
+  "scope": "historical experiments; not current release acceptance",
+  "artifacts": [
+    {
+      "original_path": "eval/report/baseline_20260829.json",
+      "path": "eval/report/archive/baseline_20260829.json",
+      "sha256": "fbb2d391a25705615f2ec6c450e9d5c1a222b401a4920356355b895bbc6ce8eb"
+    },
+    {
+      "original_path": "eval/report/baseline_20260830.json",
+      "path": "eval/report/archive/baseline_20260830.json",
+      "sha256": "13e6ce040f9519e445fe7e89fad8e2de2bb7fadacb9acf0f985fbf57b5a8495f"
+    },
+    {
+      "original_path": "eval/report/baseline_20260831.json",
+      "path": "eval/report/archive/baseline_20260831.json",
+      "sha256": "8aea4adc34809fd1293d31d09272afb3b7d9b1b5d427ae7b999846228f5c282f"
+    },
+    {
+      "original_path": "eval/report/baseline_20260902_efficiency.json",
+      "path": "eval/report/archive/baseline_20260902_efficiency.json",
+      "sha256": "4b7462b85c6fbdc1fcd0c9da8d70b508ca9660e1b39f8e85c475c1912066eea8"
+    },
+    {
+      "original_path": "eval/report/baseline_20260927_dial_matrix.json",
+      "path": "eval/report/archive/baseline_20260927_dial_matrix.json",
+      "sha256": "0546bb0c671ae75207ea245495ac0d69fc27b03ebc4350f7c05639ab470c1e81"
+    },
+    {
+      "original_path": "eval/report/baseline_20260927_dial_matrix_postfix.json",
+      "path": "eval/report/archive/baseline_20260927_dial_matrix_postfix.json",
+      "sha256": "790fb87c3dd3f1c60aae45cae58c89978847587ca73ff36e6a994133d9bf0c20"
+    },
+    {
+      "original_path": "eval/report/baseline_20260927_multi_step.json",
+      "path": "eval/report/archive/baseline_20260927_multi_step.json",
+      "sha256": "2a243c5be55efb402342edb0502edd6473ff11621684c2b8b8a17384358cacf0"
+    },
+    {
+      "original_path": "eval/report/baseline_20260928_deepseek_pre_msgfix.json",
+      "path": "eval/report/archive/baseline_20260928_deepseek_pre_msgfix.json",
+      "sha256": "5d250e0f8191e1188f372e61fbfed6b3dadbebd4536209cc7d7eafe7cfffe2dd"
+    },
+    {
+      "original_path": "eval/report/baseline_20260928_narrator_pairs_post.json",
+      "path": "eval/report/archive/baseline_20260928_narrator_pairs_post.json",
+      "sha256": "2d52c77780940b28e6e56c72722b3728f9e0b5a96b43844710bedd87be1af6b9"
+    },
+    {
+      "original_path": "eval/report/baseline_20260928_provider_ab.json",
+      "path": "eval/report/archive/baseline_20260928_provider_ab.json",
+      "sha256": "36540136452d36eccf24e048e77587880340244061f4be36e48d5b74e5579712"
+    },
+    {
+      "original_path": "eval/report/baseline_pre_rag_20260828.json",
+      "path": "eval/report/archive/baseline_pre_rag_20260828.json",
+      "sha256": "c5b632a6ab9a53d381c0bfaab06f7848e0a15ca6d73d9d86c2ba5d5e8bc94c9e"
+    }
+  ]
+}
