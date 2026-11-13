@@ -67,6 +67,17 @@ def test_missing_semantic_review_is_unverified(tmp_path):
     assert got["quality_gate_statistics"]["task"]["wilson_lower_meets_target"] is None
 
 
+def test_complete_collection_with_a_network_error_still_fails_release(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path)
+    doc = json.loads(report.read_bytes())
+    doc["cases"][-1]["status"] = "evaluation_error"
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    result = assess(report, semantic_path=semantic, profile_path=profile)
+    assert result["status"] == "failed"
+    assert any(row["gate"] == "evaluation_errors" for row in result["failures"])
+
+
 def test_wilson_diagnostic_does_not_replace_the_observed_rate_gate(tmp_path):
     report, profile, semantic, _ = fixture(tmp_path)
     got = assess(report, semantic_path=semantic, profile_path=profile)
