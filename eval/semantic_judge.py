@@ -69,6 +69,9 @@ def make_llm(*, reasoning_effort="none", **kwargs):
 
     if reasoning_effort not in REASONING_EFFORTS:
         raise ValueError("Unsupported judge reasoning effort")
+    if "max_tokens" in kwargs and (type(kwargs["max_tokens"]) is not int
+                                    or kwargs["max_tokens"] <= 0):
+        raise ValueError("Judge max_tokens must be a positive integer")
     defaults = {"temperature": 0.0, "max_tokens": 700 if reasoning_effort == "none" else 4096,
                 "enable_thinking": reasoning_effort != "none", "max_retries": 0,
                 "streaming": False}

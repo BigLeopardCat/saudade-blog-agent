@@ -74,7 +74,11 @@ def main():
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--reasoning-effort", choices=semantic_judge.REASONING_EFFORTS,
                         default="none")
+    parser.add_argument("--max-output-tokens", type=int,
+                        help="Explicit judge output budget including reasoning; defaults unchanged")
     args = parser.parse_args()
+    if args.max_output_tokens is not None and args.max_output_tokens <= 0:
+        parser.error("--max-output-tokens must be positive")
     samples = load_samples(args.samples)
     args.out.mkdir(mode=0o700, parents=True, exist_ok=False)
     body = args.samples.read_bytes()
@@ -107,6 +111,8 @@ def main():
         try:
             llm = semantic_judge.make_llm(
                 reasoning_effort=args.reasoning_effort,
+                **({"max_tokens": args.max_output_tokens}
+                   if args.max_output_tokens is not None else {}),
                 timeout=60 if args.reasoning_effort != "none" else 30)
             report.update(model=llm.model_name,
                           reviewer_options=semantic_judge.reviewer_options(llm))

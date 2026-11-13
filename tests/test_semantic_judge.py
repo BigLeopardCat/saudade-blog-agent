@@ -102,3 +102,21 @@ def test_review_does_not_enable_langsmith_uploads(monkeypatch):
     monkeypatch.setattr("langsmith.client.Client.create_run", lambda *a, **kw: requests.append(kw))
     evaluate(json.dumps(VERDICT))
     assert requests == []
+
+
+def test_explicit_reasoning_output_budget_preserves_defaults_and_sdk_options():
+    model = semantic_judge.make_llm(reasoning_effort="low", max_tokens=8192,
+                                   model="deepseek-v4.1-flash", api_key="fixture")
+    assert semantic_judge.reviewer_options(model)["max_tokens"] == 8192
+    assert semantic_judge.reviewer_options(model)["reasoning_effort"] == "low"
+    default = semantic_judge.make_llm(model="deepseek-v4.1-flash", api_key="fixture")
+    assert semantic_judge.reviewer_options(default)["max_tokens"] == 700
+    assert semantic_judge.reviewer_options(default)["reasoning_effort"] == "none"
+
+
+@pytest.mark.parametrize("budget", [0, -1, True, 1.5])
+def test_invalid_judge_output_budget_is_rejected_before_client_construction(budget, monkeypatch):
+    monkeypatch.setattr("models.llm.get_llm",
+                        lambda **_: pytest.fail("invalid request constructed"))
+    with pytest.raises(ValueError, match="positive integer"):
+        semantic_judge.make_llm(max_tokens=budget)
