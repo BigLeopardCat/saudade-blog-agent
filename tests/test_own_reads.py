@@ -146,3 +146,21 @@ def test_inbox_discovery_loads_authorized_overview_before_one_read(mailbox):
     assert model.menus[1] == model.menus[2]
     assert len(mailbox["requests"]) == 1
     assert mailbox["requests"][0].url.path.endswith("/notifications/summary")
+
+
+def test_empty_inbox_is_complete_only_within_the_requested_folder(mailbox):
+    mailbox["items"] = []
+    data = _list().data
+    assert data["items"] == [] and data["folder"] == "inbox"
+    assert data["collectionComplete"] is True and data["returnedCount"] == 0
+    assert data["unreadTotal"] is None and data["limit"] == 5
+    sent = _list(folder="outbox").data
+    assert sent["folder"] == "outbox" and sent["returnedCount"] == 1
+    assert len(mailbox["requests"]) == 2
+
+
+def test_bounded_message_preview_does_not_claim_full_folder_coverage(mailbox):
+    mailbox["items"] *= 3
+    data = _list(limit=1).data
+    assert data["hasMore"] is True and data["collectionComplete"] is False
+    assert data["returnedCount"] == data["limit"] == 1 and data["unreadTotal"] is None

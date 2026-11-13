@@ -141,3 +141,53 @@ def test_public_source_text_remains_exact_json_data(backend):
     assert result.data['items'][0]['content'] == original
     assert result.data['items'][0]['contentTruncated'] is False
     assert len(backend['requests']) == 1 and backend['requests'][0].method == 'GET'
+
+
+def test_chronology_distinguishes_page_bounds_from_collection_bounds(backend):
+    backend.update(data=[{**record(12), "createdAt": "2026-10-28T21:50:22.529514"},
+                         {**record(3), "createdAt": "2026-09-23T12:58:41"}], total=5)
+    first = public_activity.list_guestbook.invoke({"limit": 2}).data
+    summary = first["returned_summary"]
+    assert summary["scope"] == "returned_page"
+    assert summary["order"] == "createdAt_desc_id_desc"
+    assert summary["newest"] == {"id": 12, "createdAt": "2026-10-28T21:50:22.529514"}
+    assert summary["oldest"] == {"id": 3, "createdAt": "2026-09-23T12:58:41"}
+    assert summary["includesCollectionNewest"] is True and first["hasMore"] is True
+    later = public_activity.list_guestbook.invoke({"page": 2, "limit": 2}).data
+    assert later["returned_summary"]["includesCollectionNewest"] is False
+    backend.update(data=[backend["data"][1]], total=1)
+    detail = public_activity.list_guestbook.invoke({"item_id": 3}).data
+    assert detail["returned_summary"]["includesCollectionNewest"] is False
+    assert len(backend["requests"]) == 3
+
+
+@pytest.mark.parametrize("times", [
+    ["2026-09-23T12:58:41", "2026-10-28T21:50:22"],
+    ["not-a-time", "2026-09-23T12:58:41"],
+    ["2026-10-28T21:50:22Z", "2026-10-28T21:50:22"],
+])
+def test_invalid_or_inconsistent_chronology_never_becomes_a_newest_claim(backend, times):
+    backend.update(data=[{**record(12-i), "createdAt": date}
+                         for i, date in enumerate(times)], total=2)
+    assert public_activity.list_guestbook.invoke({}).kind == "unavailable"
+
+
+def test_missing_time_and_empty_later_page_do_not_invent_date_bounds(backend):
+    result = public_activity.list_guestbook.invoke({}).data["returned_summary"]
+    assert result["newest"] is None and result["oldest"] is None
+    assert result["includesCollectionNewest"] is False
+    backend.update(data=[], total=5)
+    page = public_activity.list_guestbook.invoke({"page": 2}).data
+    assert page["total"] == 5 and page["returned_summary"]["newest"] is None
+
+
+def test_announcement_id_order_does_not_establish_latest_creation_time(backend):
+    backend.update(data=[{**record(12, "announcements"), "createdAt": "2026-09-23T12:58:41"},
+                         {**record(3, "announcements"), "createdAt": "2026-10-28T21:50:22"}],
+                   total=2)
+    result = public_activity.get_announcements.invoke({})
+    assert result.kind == "ok"
+    summary = result.data["returned_summary"]
+    assert summary["order"] == "id_desc" and summary["newest"]["id"] == 3
+    assert summary["oldest"]["id"] == 12
+    assert summary["includesCollectionNewest"] is False
