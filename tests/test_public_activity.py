@@ -179,3 +179,15 @@ def test_missing_time_and_empty_later_page_do_not_invent_date_bounds(backend):
     backend.update(data=[], total=5)
     page = public_activity.list_guestbook.invoke({"page": 2}).data
     assert page["total"] == 5 and page["returned_summary"]["newest"] is None
+
+
+def test_announcement_id_order_does_not_establish_latest_creation_time(backend):
+    backend.update(data=[{**record(12, "announcements"), "createdAt": "2026-09-23T12:58:41"},
+                         {**record(3, "announcements"), "createdAt": "2026-10-28T21:50:22"}],
+                   total=2)
+    result = public_activity.get_announcements.invoke({})
+    assert result.kind == "ok"
+    summary = result.data["returned_summary"]
+    assert summary["order"] == "id_desc" and summary["newest"]["id"] == 3
+    assert summary["oldest"]["id"] == 12
+    assert summary["includesCollectionNewest"] is False

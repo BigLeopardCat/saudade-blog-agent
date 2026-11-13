@@ -38,18 +38,21 @@ def _row(row, source):
     return result
 
 
-def _chronology(rows, *, page, item_id):
-    # Host pages are ordered by created_at DESC, id DESC; bounds apply only to this page.
-    summary = {"scope": "returned_page", "order": "createdAt_desc_id_desc",
+def _chronology(rows, *, page, item_id, source):
+    chronological = source != "announcements"
+    # Announcements use ID order; their page does not establish the newest creation time globally.
+    summary = {"scope": "returned_page",
+               "order": "createdAt_desc_id_desc" if chronological else "id_desc",
                "newest": None, "oldest": None, "includesCollectionNewest": False}
     if not rows or any(row["createdAt"] is None for row in rows):
         return summary
     keys = [(datetime.fromisoformat(row["createdAt"]), row["id"]) for row in rows]
-    if keys != sorted(keys, reverse=True):
+    if chronological and keys != sorted(keys, reverse=True):
         raise ValueError("Activity chronology does not match the host contract")
-    summary.update(newest={key: rows[0][key] for key in ("id", "createdAt")},
-                   oldest={key: rows[-1][key] for key in ("id", "createdAt")},
-                   includesCollectionNewest=page == 1 and item_id is None)
+    ordered = sorted(zip(keys, rows), key=lambda pair: pair[0])
+    summary.update(newest={key: ordered[-1][1][key] for key in ("id", "createdAt")},
+                   oldest={key: ordered[0][1][key] for key in ("id", "createdAt")},
+                   includesCollectionNewest=chronological and page == 1 and item_id is None)
     return summary
 
 
@@ -58,7 +61,8 @@ def _read(resource, source, page, limit, item_id):
         page, limit = 1, 1
     return read_page("activity/" + resource, page, limit, {"id": item_id},
                      lambda row: _row(row, source), {"id": item_id},
-                     summarize=lambda rows: _chronology(rows, page=page, item_id=item_id))
+                     summarize=lambda rows: _chronology(
+                         rows, page=page, item_id=item_id, source=source))
 
 
 @tool
