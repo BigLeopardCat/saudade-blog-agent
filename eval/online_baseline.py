@@ -230,8 +230,31 @@ def model_availability_failure(result):
     return None
 
 
+def _collection_stop(row, phase, continue_transport_errors, consecutive_errors):
+    failure = row.get("evaluation_failure")
+    if failure:
+        transient = (failure.get("failure_source") == "transport"
+                     and failure.get("retryable") is True
+                     and failure.get("http_status") is None)
+        consecutive_errors = consecutive_errors + 1 if transient else 0
+        if continue_transport_errors and transient:
+            if consecutive_errors < 3:
+                return None, consecutive_errors
+            return "three consecutive model transport failures", consecutive_errors
+        reason = ("captured model availability failure"
+                  if failure["failure_source"] in {"provider", "transport"}
+                  else "captured HTTP or evidence failure")
+        return reason, consecutive_errors
+    reason = ("HTTP/evidence precondition failed"
+              if phase == "poc" and row["status"] == "evaluation_error" else None)
+    return reason, 0
+
+
 def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_vision=False,
-        dataset_role="regression", expected_build=None, evaluation_id=None):
+        dataset_role="regression", expected_build=None, evaluation_id=None,
+        continue_transport_errors=False):
+    if continue_transport_errors and phase != "full":
+        raise ValueError("continuing model transport failures requires a full run")
     excluded = [case for case in cases if not include_vision and "vision" in case["tags"]]
     cases = [case for case in cases if case not in excluded]
     if not cases:
@@ -258,6 +281,9 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
               "identities": profiles, "actor_allowances": allowances,
               "planned": len(cases), "cases": [], "requests": [],
               "automatic_retries": 0, "business_write_approval": False,
+              "collection_policy": {"continue_transport_errors": continue_transport_errors,
+                                    "consecutive_transport_error_limit":
+                                        3 if continue_transport_errors else 1},
               "retry_scope": "No case resampling; model retry attempts are included in metrics",
               "coverage_limits": ["不批准线上业务写入；实际执行、回放和未知结果由隔离契约评测覆盖",
                                   "自动判据验证行为与部分内容；不等同于完整语义或视觉体验验收",
@@ -297,6 +323,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                       finished_at=datetime.now().astimezone().isoformat())
         save()
         return report
+    consecutive_errors = 0
     for case in cases:
         before = transport.client.get(transport.agent_url + "/version")
         before.raise_for_status()
@@ -333,14 +360,10 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
         save()
         print(json.dumps({k: row[k] for k in ("id", "status", "elapsed_s")},
                          ensure_ascii=False), flush=True)
-        if row.get("evaluation_failure"):
-            report["stopped_reason"] = ("captured model availability failure"
-                if row["evaluation_failure"]["failure_source"] in {"provider", "transport"}
-                else "captured HTTP or evidence failure")
-            save()
-            break
-        if phase == "poc" and row["status"] == "evaluation_error":
-            report["stopped_reason"] = "HTTP/evidence precondition failed"
+        stop, consecutive_errors = _collection_stop(
+            row, phase, continue_transport_errors, consecutive_errors)
+        if stop:
+            report["stopped_reason"] = stop
             save()
             break
     report["finished_at"] = datetime.now().astimezone().isoformat()
@@ -381,7 +404,12 @@ def main():
                         help="Select a POC case; repeat to preserve order")
     parser.add_argument("--dataset-role", choices=("regression", "holdout"), default="regression")
     parser.add_argument("--expected-build", help="Require this deployed SHA before any model call")
+    parser.add_argument("--continue-transport-errors", action="store_true",
+                        help="Full only: retain isolated model transport errors and collect "
+                             "independent cases; stop after three consecutive failures")
     args = parser.parse_args()
+    if args.continue_transport_errors and args.phase != "full":
+        parser.error("--continue-transport-errors requires --phase full")
     cases = load_suite(args.suite)
     try:
         cases = select_cases(cases, args.phase, args.case_id)
@@ -395,7 +423,8 @@ def main():
                      args.report_dir, phase=args.phase,
                      suite_hash=hashlib.sha256(args.suite.read_bytes()).hexdigest(),
                      include_vision=args.include_vision, dataset_role=args.dataset_role,
-                     expected_build=args.expected_build)
+                     expected_build=args.expected_build,
+                     continue_transport_errors=args.continue_transport_errors)
     finally:
         transport.client.close()
     complete = len(report["cases"]) == report["planned"]

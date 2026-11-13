@@ -138,3 +138,85 @@ def test_stream_interruption_requires_trace_and_failed_round(
     if failure:
         assert failure["failure_source"] == "transport"
         assert "http_status" not in failure and "provider_error_code" not in failure
+
+
+@pytest.mark.parametrize("sequence,completed,stopped", [
+    (["network", "ok"], 2, False),
+    (["network", "network", "network", "ok"], 3, True),
+    (["network", "ok", "network", "network", "ok"], 5, False),
+    (["http", "ok"], 1, True),
+    (["disconnect", "ok"], 1, True),
+    (["provider_401", "ok"], 1, True),
+    (["provider_402", "ok"], 1, True),
+    (["provider_403", "ok"], 1, True),
+    (["provider_429", "ok"], 1, True),
+    (["provider_503", "ok"], 1, True),
+])
+def test_full_collection_retains_network_errors_without_resampling(
+        tmp_path, monkeypatch, sequence, completed, stopped):
+    attempted = []
+    cases = [{"id": str(index), "identity": "user", "tags": []}
+             for index in range(len(sequence))]
+
+    class Adapter:
+        agent_url = "http://agent"
+        requests = []
+        cleaned_conversations = []
+
+        def __init__(self):
+            self.client = httpx.Client(transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={"sha": "frozen"}, request=request)))
+
+        def profile(self, *_):
+            return "user"
+
+        @contextmanager
+        def conversation(self, *_):
+            yield 42
+
+    def drive(sample, **kwargs):
+        index = int(sample["id"])
+        attempted.append(index)
+        kind = sequence[index]
+        result = response("expected")
+        facts = {"failure_source": "transport", "error_type": "ReadTimeout", "retryable": True}
+        trace = {"events": []}
+        if kind.startswith("provider_"):
+            facts.update(failure_source="provider", http_status=int(kind.split("_")[1]))
+        if kind == "disconnect":
+            trace["end_reason"] = "client_disconnect"
+        if kind != "ok":
+            trace["events"] = [{"event": "llm_error", **facts}]
+            result["error"] = "partial output interrupted"
+        path = tmp_path / f"trace-{index}.json"
+        path.write_text(json.dumps(trace))
+        result.update(trace=str(path), round=1)
+        result["rounds"] = [dict(result)]
+        if kind == "http":
+            result["evaluation_failure"] = {"failure_source": "http", "error_type": "ReadError"}
+        return result
+
+    monkeypatch.setattr(online_baseline.golden, "run_case", drive)
+    adapter = Adapter()
+    try:
+        report = online_baseline.run(cases, adapter, {"user": 7}, tmp_path / "report",
+            phase="full", suite_hash="synthetic", continue_transport_errors=True)
+    finally:
+        adapter.client.close()
+    assert attempted == list(range(completed))
+    assert report["full_run"] is not stopped
+    assert ("stopped_reason" in report) is stopped
+    assert report["automatic_retries"] == 0
+    assert report["collection_policy"] == {
+        "continue_transport_errors": True, "consecutive_transport_error_limit": 3}
+    for index, row in enumerate(report["cases"]):
+        if sequence[index] != "ok":
+            assert row["status"] == "evaluation_error"
+            assert row["result"]["text"] == "expected" and row["errors"]
+
+
+def test_poc_cannot_opt_out_of_fail_fast_before_any_request(tmp_path):
+    with pytest.raises(ValueError, match="requires a full run"):
+        online_baseline.run([], None, {}, tmp_path / "report", phase="poc",
+            suite_hash="synthetic", continue_transport_errors=True)
+    assert not (tmp_path / "report").exists()

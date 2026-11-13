@@ -76,6 +76,24 @@ def test_calibration_keeps_false_positives_false_negatives_and_unknowns():
     assert got["precision"]["rate"] == got["recall"]["rate"] == 0.5
 
 
+def test_future_notice_control_has_a_complete_recipient_and_wrong_target_counterexamples():
+    samples = {row["id"]: row for row in load_samples()}
+    correct = samples["requested_future_notice"]
+    wrong = samples["requested_future_notice_wrong_recipient"]
+    missing = samples["requested_future_notice_missing_recipient"]
+    assert correct["expected_issue"] is False
+    assert wrong["expected_issue"] is missing["expected_issue"] is True
+    turns = [row["material"]["turns"][-1] for row in (correct, wrong, missing)]
+    intents = [turn["proposed_actions_not_facts"][0]["args"]["intent"] for turn in turns]
+    assert len({turn["user_request"] for turn in turns}) == 1
+    assert len({intent["content"] for intent in intents}) == 1
+    assert intents[0]["target"] == {"id": 20}
+    assert intents[1]["target"] == {"id": 21}
+    assert "target" not in intents[2]
+    assert turns[0]["runtime_context"]["caller"]["role"] == "admin"
+    assert turns[0]["validated_preparation_facts"][0]["facts"]["recipient"] == {"id": 20}
+
+
 @pytest.mark.parametrize("reason,correct", [
     ("tool_not_loaded", False), ("unknown_tool", False), ("unavailable", True),
 ])
