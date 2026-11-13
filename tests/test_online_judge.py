@@ -73,8 +73,62 @@ def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp
     assert report["status"] == "not_evaluated" and report["business_requests"] == 0
     assert report["backend"] == semantic_judge.backend_identity()
     assert set(report["evaluator_sha256"]) == {
-        "online_judge.py", "semantic_judge.py", "acceptance.py"}
+        "online_judge.py", "semantic_judge.py", "acceptance.py", "judge_calibration.py"}
     assert (folder / "semantic_judge.py").read_bytes() == Path(semantic_judge.__file__).read_bytes()
+
+
+@pytest.mark.parametrize("interrupt", [False, True])
+def test_calibration_persists_each_attempt_and_keeps_interrupted_usage_unknown(
+    tmp_path, monkeypatch, interrupt,
+):
+    import hashlib
+    import sys
+    from types import SimpleNamespace
+
+    from eval import judge_calibration
+
+    samples = [{"id": str(i), "expected_issue": False, "rationale": "synthetic",
+                "material": {"turns": [{"assistant_reply_to_review": "observed"}]}}
+               for i in range(2)]
+    path, folder = tmp_path / "samples.jsonl", tmp_path / "run"
+    path.write_text("".join(json.dumps(row) + "\n" for row in samples))
+    monkeypatch.setattr(sys, "argv", ["judge_calibration", "--samples", str(path),
+                                     "--out", str(folder)])
+    monkeypatch.setattr(semantic_judge, "make_llm", lambda **_: SimpleNamespace(model_name="stub"))
+    calls = []
+
+    def review(text, model, **kwargs):
+        current = json.loads((folder / "report.json").read_text())
+        index = len(calls)
+        assert current["status"] == "running" and current["planned_samples"] == 2
+        assert len(current["rows"]) == index + 1
+        assert current["rows"][-1]["attempt_status"] == "started"
+        assert current["rows"][-1]["predicted_issue"] is None
+        if index:
+            assert current["rows"][0]["predicted_issue"] is False
+        calls.append(text)
+        if interrupt and index == 1:
+            raise KeyboardInterrupt()
+        kwargs["diagnostics"]["usage"] = {"input_tokens": 100, "output_tokens": 20}
+        return {"unsupported": [], "answered": True, "verdict": "ok", "reason": "observed"}
+
+    monkeypatch.setattr(semantic_judge, "judge_one", review)
+    if interrupt:
+        with pytest.raises(KeyboardInterrupt):
+            judge_calibration.main()
+    else:
+        judge_calibration.main()
+    saved = json.loads((folder / "report.json").read_text())
+    assert saved["status"] == ("interrupted" if interrupt else "completed")
+    assert saved["measured"] == (1 if interrupt else 2)
+    assert saved["unverified"] == int(interrupt)
+    assert saved["rows"][0]["diagnostics"]["usage"]["input_tokens"] == 100
+    assert len(calls) == 2 and saved["automatic_retries"] == saved["business_requests"] == 0
+    assert (folder / "samples.jsonl").read_bytes() == path.read_bytes()
+    driver = Path(judge_calibration.__file__).read_bytes()
+    assert (folder / "judge_calibration.py").read_bytes() == driver
+    assert saved["evaluator_sha256"]["judge_calibration.py"] == hashlib.sha256(driver).hexdigest()
+    assert saved["finished_at"] and not (folder / "report.tmp").exists()
 
 
 def test_calibration_validates_reply_only_samples_without_optional_cards():
@@ -607,3 +661,43 @@ def test_incomplete_preparation_context_stays_unevaluated(tmp_path):
          "complete": False, "facts": None}]})
     with pytest.raises(ValueError, match="runtime preparation context is incomplete"):
         online_judge.material(case, case["result"]["rounds"])
+
+
+def test_calibration_stops_on_provider_failure_without_retrying_or_spending_remaining_samples(
+    tmp_path, monkeypatch,
+):
+    import sys
+    from types import SimpleNamespace
+
+    import httpx
+    from openai import RateLimitError
+
+    from eval import judge_calibration
+
+    samples = [{"id": str(i), "expected_issue": False, "rationale": "synthetic",
+                "material": {"turns": [{"assistant_reply_to_review": "observed"}]}}
+               for i in range(3)]
+    path, folder = tmp_path / "samples.jsonl", tmp_path / "run"
+    path.write_text("".join(json.dumps(row) + "\n" for row in samples))
+    monkeypatch.setattr(sys, "argv", ["calibration", "--samples", str(path), "--out", str(folder)])
+    monkeypatch.setattr(semantic_judge, "make_llm", lambda **_: SimpleNamespace(model_name="stub"))
+    calls = []
+
+    def review(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 2:
+            response = httpx.Response(429, request=httpx.Request("POST", "https://model.test"))
+            raise RateLimitError("private provider message", response=response, body=None)
+        return {"unsupported": [], "answered": True, "verdict": "ok", "reason": "observed"}
+
+    monkeypatch.setattr(semantic_judge, "judge_one", review)
+    with pytest.raises(RateLimitError):
+        judge_calibration.main()
+    saved = json.loads((folder / "report.json").read_text())
+    assert len(calls) == 2 and saved["planned_samples"] == 3
+    assert saved["status"] == "failed" and saved["automatic_retries"] == 0
+    assert saved["measured"] == saved["unverified"] == 1
+    failure = saved["rows"][-1]
+    assert failure["attempt_status"] == "failed" and failure["predicted_issue"] is None
+    assert failure["error_fields"]["http_status"] == 429
+    assert "private provider message" not in (folder / "report.json").read_text()
