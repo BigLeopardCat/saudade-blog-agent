@@ -529,3 +529,48 @@ def test_explicit_task_resume_reaches_the_saved_model_task(monkeypatch, tmp_path
     row = native_contracts.run(["task_defer_resume"])["cases"][0]
     assert row["passed"], row.get("reason")
     assert row["evidence"]["explicit_resume_completed"] and len(calls) == 2
+
+
+@pytest.mark.parametrize("readback", ["single", "none", "internal_only", "unavailable"])
+def test_partial_write_requires_agent_readback_without_extra_internal_http(
+        monkeypatch, tmp_path, readback):
+    from tools import base
+
+    def call(name, **args):
+        return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])
+
+    script = [call("load_notifications_info_tools"),
+              call("prepare_notification_read", scope="all_unread")]
+    if readback in {"single", "unavailable"}:
+        script.append(call("list_notifications", unread_only=True, limit=20))
+    script.append(AIMessage(content="#101 已读，#102 仍未读。"))
+    responses = iter(script)
+    calls = []
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            calls.append(prompt)
+            if len(calls) == 3:
+                if readback == "internal_only":
+                    for _ in range(2):
+                        base._client.get(
+                            "https://blog/api/protected/notifications",
+                            headers={"Authorization": "Bearer offline-fixture"})
+                elif readback == "unavailable":
+                    monkeypatch.setattr(base, "_own_get", lambda *args: base.unavailable(
+                        "synthetic readback unavailable"))
+            return next(responses)
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run(["notification_partial_readback"])["cases"][0]
+    assert row["evaluated"] and row["business_writes"] == 1
+    assert row["passed"] is (readback == "single"), row
+    if readback == "single":
+        assert row["evidence"] == {"read": [101, 103], "unread": [102], "writes": 1}
+        assert row["rounds"][-1]["model_calls"] == 0
+    else:
+        assert row["reason"] == "Agent did not independently read after domain verification failed"
