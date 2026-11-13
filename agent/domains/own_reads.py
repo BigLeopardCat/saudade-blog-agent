@@ -162,4 +162,6 @@ def list_my_messages(
     if any(entry is None for entry in entries):
         return base.unavailable("信件列表包含无法核对的归属或状态，本次不作结论。")
     return _render({"scope": "recent_window", "folder": folder, "items": entries,
+                    "limit": limit, "returnedCount": len(entries),
+                    "collectionComplete": not data["hasMore"],
                     "hasMore": data["hasMore"], "unreadTotal": None})

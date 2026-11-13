@@ -28,7 +28,8 @@ def _response(resource, params, *, method="GET", json_body=None):
             chunks.append(chunk)
     return json.loads(b"".join(chunks))
 
-def read_page(resource, page, limit, filters, project, expected=None, identity=None):
+def read_page(resource, page, limit, filters, project, expected=None, identity=None, *,
+              summarize=None):
     params = {"page": page, "page_size": limit, **filters}
     params = {key: str(value).lower() if type(value) is bool else value
               for key, value in params.items() if value is not None}
@@ -57,6 +58,11 @@ def read_page(resource, page, limit, filters, project, expected=None, identity=N
         return base.unavailable("公开记录与请求范围不一致。")
     result = {"resource": resource, "filters": filters, "items": entries, "total": total,
               "page": page, "pageSize": limit, "hasMore": offset + len(entries) < total}
+    if summarize is not None:
+        try:
+            result["returned_summary"] = summarize(entries)
+        except (ValueError, TypeError, KeyError):
+            return base.unavailable("公开记录顺序无法核对。")
     encoded = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
     if len(encoded) > 7500:
         return base.unavailable("本页内容超过读取上限，请减小limit后重试。")

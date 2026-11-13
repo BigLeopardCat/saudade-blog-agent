@@ -3,12 +3,20 @@
 import json
 import re
 from datetime import datetime, timedelta
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlsplit, urlunsplit
 from zoneinfo import ZoneInfo
 
 from agent.contracts.events import confirmation_text
 from tools.base import SITE_BASE
 from utils.trace_io import load_trace
+
+
+def _navigation_url(target):
+    parsed = urlsplit(urljoin(SITE_BASE + "/", target))
+    # The static device console redirects its root to the directory URL.
+    if parsed.netloc == urlsplit(SITE_BASE).netloc and parsed.path == "/device-console":
+        parsed = parsed._replace(path="/device-console/")
+    return urlunsplit(parsed)
 
 
 def command_matches(expected, actual):
@@ -19,7 +27,7 @@ def command_matches(expected, actual):
     if kind in navigation:
         return actual_kind in navigation and (
             not target
-            or urljoin(SITE_BASE + "/", target) == urljoin(SITE_BASE + "/", actual_target)
+            or _navigation_url(target) == _navigation_url(actual_target)
         )
     return expected in actual
 

@@ -279,3 +279,23 @@ def test_real_runtime_binds_canonical_catalog_links_independently_of_api_transpo
     assert all("get_article_detail" in menu for menu in model.menus)
     assert len(backend["requests"]) == 1
     assert backend["requests"][0].url.path.endswith("/articles")
+
+
+def test_parent_name_is_one_exact_backend_request_without_listing_parents(backend):
+    backend["override"] = {"code": 200, "data": [backend["tags"][1]], "total": 1}
+    data = public_catalog.list_tags.invoke({"parent_name": "一级", "level": 2}).data
+    assert data["total"] == 1 and data["items"][0]["parentId"] == 1
+    assert len(backend["requests"]) == 1
+    assert dict(backend["requests"][0].url.params) == {
+        "page": "1", "page_size": "20", "level": "2", "parent_name": "一级"}
+    backend["override"] = {"code": 500, "data": None}
+    assert public_catalog.list_tags.invoke({"parent_name": "ambiguous"}).kind == "unavailable"
+
+
+@pytest.mark.parametrize("args", [
+    {"parent_name": " ", "level": 2}, {"parent_name": "一级", "level": 1},
+    {"parent_name": "一级", "parent_id": 1},
+])
+def test_invalid_parent_filters_do_not_issue_a_request(backend, args):
+    assert public_catalog.list_tags.invoke(args).kind == "invalid_args"
+    assert backend["requests"] == []
