@@ -146,8 +146,11 @@ BM25S 的文章段落语料和 PG 距离查询的 WHERE 中生效，先限定再
 索引刷新导致候选与快照版本不一致时返回 unavailable，不拼接不同版本的正文。
 工具 schema 与检索入口共用 top_k 上限 50，越界输入在参数校验时拒绝。
 
-get_article_detail 默认 `view=body`、单页最多 32768 字符，使用 offset、max_chars、revision，返回 contentRevision、
-readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
+`get_article_detail` 必须显式选择 `view`：`full_text` 从文首读取原文，
+`source_range` 按已知小节或续读坐标读取。单页最多 32768 字符，使用 offset、max_chars、revision，
+返回 contentRevision、readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
+工具将两种正文范围映射到宿主的 `view=body`；事实定位使用已有 `rag_search(article_id=...)`，
+不因文章编号已知而默认取整篇。已绑定版本的来源范围可以从文档偏移 0 开始。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
 同一任务顺序读取整篇正文时，文章中间件可从已呈现的可信范围补齐下一页缺失的
 revision 与 section_schema，仅限同一文章、无小节选择且 offset 精确等于已返回的
