@@ -7,25 +7,21 @@ from agent.runtime.catalog import capability_overview
 
 # Discovery identifies the task; detailed arguments belong to the loaded tools.
 DOMAIN_DESCRIPTIONS = {
-    "inbox": "Combined unread overview of 通知 + 站内信: counts and recent headers. "
-    "For message-only lists/actions use messages; notice-only lists/actions use notifications.",
+    "inbox": "Combined unread counts and headers for 通知 + 站内信; "
+    "individual actions use notifications or messages.",
     "task_control": "Save and pause the current unfinished task for later explicit resume; "
     "not remembering facts, business to-dos or timed reminders.",
     "admin_image_generation": "AI image generation: approve prompt/references, inspect results, "
     "then approve gallery storage.",
-    "admin_talks": "Read administrator 说说 with original publisher account IDs; "
-    "publish or schedule, edit or permanently delete posts; "
-    "not guestbook moderation.",
-    "admin_gallery": "Read gallery index, folders, full image metadata, image display/inspection "
-    "and transfer status. No mutation preparation.",
-    "admin_gallery_management": "Prepare gallery edits, transfers, favorites, deletion "
-    "and folders. Known IDs go directly to preparation; "
-    "article covers use admin_article_management.",
+    "admin_talks": "Read administrator 说说 and publisher IDs; publish, schedule, edit or delete. "
+    "Guestbook uses admin_moderation.",
+    "admin_gallery": "Read/display/inspect gallery images, metadata, folders and transfer status.",
+    "admin_gallery_management": "Prepare image/folder edits, transfers, favorites and deletion. "
+    "Article covers use admin_article_management.",
     "article_editor": "Collaborate on the open editor: draft, title/body review, summary approval "
     "and in-place publication.",
-    "admin_automations": "Persistent reminders, scheduled read-only reports and approved "
-    "announcements. Other scheduled writes use their domain's prepare tool. "
-    "Relative delays start after approval.",
+    "admin_automations": "Persistent reminders, scheduled read-only reports and announcements. "
+    "Other scheduled writes use their domain.",
     "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
     "entries. Talks are admin-published; display names are not account identities.",
     "utilities": "Read the current time.",
@@ -38,32 +34,26 @@ DOMAIN_DESCRIPTIONS = {
     "own_activity": "Read current-conversation chat history (聊天记录), or your own "
     "河灯/留言 and review status.",
     "admin_catalog": "Read administrator article metadata, including private/drafts.",
-    "admin_article_management": "Prepare article covers (prepare_article_cover), state, "
-    "pinning, tags or permanent deletion. Known IDs need no lookup; tag assignment creates "
-    "missing tags on approval; covers include layout previews.",
-    "admin_notices": "Prepare a personal notification: recipient and body; "
+    "admin_article_management": "Prepare article covers with layout previews, state, pinning, "
+    "tags or permanent deletion.",
+    "admin_notices": "Prepare personal notifications to specified recipients; "
     f"default title: {DEFAULT_TITLE}.",
-    "admin_tags": "Tag dictionary and confirmed edits/deletion. "
-    "Create with a name and optional full parent name; preparation resolves the parent. "
-    "Ask for a missing name before loading; color is optional. "
-    "Article-tag assignment: admin_article_management.",
+    "admin_tags": "Read/create/edit/delete tag dictionary and parent tags. "
+    "Article-tag assignment uses admin_article_management.",
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",
-    "admin_account_actions": "Prepare freeze, mute or role changes directly with a known ID "
-    "or full username; preparation verifies the target and eligibility. "
-    "Mute needs duration or explicit permanence; missing duration uses admin_accounts. "
-    "Resolve ambiguous names first. System notices are fixed templates; "
-    "custom messages use admin_notices. "
+    "admin_account_actions": "Prepare account freeze, mute or role changes. "
+    "Missing mute duration uses admin_accounts; custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
     "also removes recipients' copies.",
     "admin_categories": "Category dictionary; prepare or schedule creation, editing and deletion.",
-    "admin_work_queue": "用户待办 (business to-dos), quota applications/reset, including "
-    "batch deletion. Known account IDs can reset directly; not private planning.",
-    "admin_moderation": "Guestbook/comment counts (get_moderation_status, no body reads), "
-    "records, anonymous publishers (list_admin_board), confirmed moderation/deletion.",
-    "admin_reports": "Article view/like/favorite rankings and totals (get_note_stats), "
-    "period reports, user statistics and server health.",
+    "admin_work_queue": "用户待办 (business to-dos), batch deletion, quota applications/reset; "
+    "not private planning.",
+    "admin_moderation": "Read guestbook/comment counts, records and anonymous publishers; "
+    "prepare moderation/deletion.",
+    "admin_reports": "Aggregate article counters/rankings, period reports, user statistics "
+    "and server health.",
     "site": "Current site feature guide, caller navigation availability, "
     "author profile and social links.",
     "favorites": "Your favorites and confirmed additions/removals.",
