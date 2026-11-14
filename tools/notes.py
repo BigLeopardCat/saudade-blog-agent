@@ -148,13 +148,13 @@ def get_article_detail(
     view: Literal["body", "outline", "metadata"] = "body",
     query: Annotated[str, Field(max_length=500)] = "",
 ) -> str | ToolResult:
-    """Read a known article. Set query to the specific question to return current,
-    version-verified public body passages. Omit query for whole-document summaries,
-    outline or metadata. Query cannot combine with section, offset, revision,
-    section_schema or non-body views.
+    """Read a known public document. Query retrieves passages for one specific fact
+    in an article. For broad overviews and summaries, omit query and read body;
+    it includes the outline and revision. Query cannot combine with section,
+    offset, revision, section_schema or non-body views.
     Author/display facts: metadata; missing stays unknown.
     Copy returned coordinates when more text is needed; do not locate twice.
-    Whole summaries: start view=body without section; it includes outline/revision.
+    Whole summaries: start view=body without section.
     Continue via nextOffset as needed; outline-only paging uses nextSectionsOffset.
     Section end is not document end; conclusions cover read text only. Images stay Markdown.
     source is a body range, not URL; link by ID. Private/drafts: read_current_article;
@@ -170,7 +170,7 @@ def get_article_detail(
                 or section or offset or revision or section_schema):
             return invalid_args("Query reads require a public article body without range/version "
                                 "selectors; omit query for an exact range or other views.")
-        result = rag_search.func(query=query.strip(), article_id=article_id, top_k=1)
+        result = _article_body_search(query=query.strip(), article_id=article_id, top_k=1)
         if result.kind != "ok":
             return result
         return render_search_result(result.data, result.meta, max_chars)
@@ -259,6 +259,11 @@ def rag_search(
     the current task binds known versions at execution. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
+    return _article_body_search(query, top_k, article_id)
+
+
+def _article_body_search(query: str, top_k: int, article_id: int | None) -> ToolResult:
+    """Share verified retrieval between discovery and known-article question reads."""
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
 
