@@ -12,7 +12,9 @@ from langgraph.checkpoint.memory import InMemorySaver
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
+from agent.runtime.budget import BudgetExceeded
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.control import AgentCancelled
 from agent.runtime.service import AgentRuntime
 from models.llm import get_llm
 from rag import search
@@ -252,15 +254,16 @@ def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entrie
 
 
 @pytest.mark.parametrize("read_more", [False, True])
+@pytest.mark.parametrize("query_read", [False, True])
 def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
-    article, monkeypatch, read_more
+    article, monkeypatch, read_more, query_read
 ):
     _, index, calls = article
     arguments = locator(index._lexical_ranked(QUERY, 1, article_id=ARTICLE)[0])
     requests = []
-    actions = [
-        ("rag_search", {"query": QUERY, "top_k": 1, "article_id": ARTICLE}),
-    ]
+    search_name = "get_article_detail" if query_read else "rag_search"
+    actions = [(search_name, {"query": QUERY, "article_id": ARTICLE,
+                             **({} if query_read else {"top_k": 1})})]
     if read_more:
         actions.append(
             (
@@ -371,9 +374,71 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
         message
         for message in native[0]["messages"]
         if message.type == "tool"
-        and message.name == ("get_article_detail" if read_more else "rag_search")
+        and message.name == ("get_article_detail" if read_more else search_name)
+        and message.tool_call_id == f"call{len(actions) - 1}"
     )
     assert observed.artifact["article_evidence"]["read_ranges"][ARTICLE] == ranges
+
+
+@pytest.mark.parametrize("selectors", [
+    {"view": "outline"}, {"view": "metadata"}, {"doc_type": "talk"},
+    {"section": "s22"}, {"offset": 4}, {"revision": "a" * 64},
+    {"section_schema": PARSER_VERSION}, {"query": "   "},
+])
+def test_question_read_rejects_incompatible_selectors_before_io(article, selectors):
+    _, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "query": QUERY, **selectors})
+    assert result.kind == "invalid_args" and calls == []
+
+
+def test_question_read_uses_verified_passages_and_never_fetches_the_whole_body(article):
+    document, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "query": QUERY})
+    assert result.kind == "ok" and [row["id"] for row in result.data] == [ARTICLE]
+    passages = result.data[0]["passages"]
+    assert FACT in "".join(p["text"] for p in passages)
+    assert sum(len(p["text"]) for p in passages) < 2000 < len(document["content"])
+    assert all(p["source"]["revision"] == document["revision"] for p in passages)
+    assert len(calls) == 1 and calls[0].url.path == "/api/public/documents/validate"
+
+
+def test_question_read_budget_does_not_promote_unseen_body_to_evidence(article):
+    result = notes.get_article_detail.invoke(
+        {"article_id": ARTICLE, "query": QUERY, "max_chars": 1})
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", {"article_id": ARTICLE, "query": QUERY}, result)
+    assert result.kind == "unavailable" and result.data is None
+    assert not evidence.documents and not evidence.candidates and evidence.failed
+
+
+def test_question_read_failure_has_no_implicit_whole_body_fallback(article, monkeypatch):
+    _, _, calls = article
+    monkeypatch.setattr(search, "search", lambda *args, **kwargs: None)
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "query": QUERY})
+    assert result.kind == "unavailable" and result.data is None and calls == []
+
+
+@pytest.mark.parametrize(
+    "error", [AgentCancelled(), BudgetExceeded("task_seconds"), TimeoutError()])
+def test_question_read_preserves_request_stop_boundaries(article, monkeypatch, error):
+    _, _, calls = article
+
+    def stop(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(search, "search", stop)
+    with pytest.raises(type(error)):
+        notes.get_article_detail.invoke({"article_id": ARTICLE, "query": QUERY})
+    assert calls == []
+
+
+def test_question_read_does_not_inherit_a_previous_range_version(article):
+    document, _, _ = article
+    state = ArticleEvidence()
+    state._remember_target({"article_id": ARTICLE, "revision": document["revision"],
+                            "section_schema": PARSER_VERSION})
+    args = {"article_id": ARTICLE, "query": QUERY}
+    assert state.bind_read_args(args) == args
 
 
 def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(article, monkeypatch):

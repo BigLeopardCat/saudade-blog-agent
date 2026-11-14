@@ -12,7 +12,7 @@ from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
-from rag.reading import search_frame, search_text
+from rag.reading import render_search_result, search_frame, search_text
 from rag.source import MAX_DOCUMENT_CHARS
 from tools import base as _base
 from tools.result import (
@@ -146,11 +146,14 @@ def get_article_detail(
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
+    query: Annotated[str, Field(max_length=500)] = "",
 ) -> str | ToolResult:
-    """Read public body, outline or metadata; not discovery.
+    """Read a known article. Set query to the specific question to return current,
+    version-verified public body passages. Omit query for whole-document summaries,
+    outline or metadata. Query cannot combine with section, offset, revision,
+    section_schema or non-body views.
     Author/display facts: metadata; missing stays unknown.
-    Specific body facts: rag_search(article_id=...) or known version-bound sections;
-    copy returned coordinates, do not locate twice.
+    Copy returned coordinates when more text is needed; do not locate twice.
     Whole summaries: start view=body without section; it includes outline/revision.
     Continue via nextOffset as needed; outline-only paging uses nextSectionsOffset.
     Section end is not document end; conclusions cover read text only. Images stay Markdown.
@@ -162,6 +165,15 @@ def get_article_detail(
     from agent.domains.articles.reading import project
     from tools.result import invalid_args
 
+    if query:
+        if (not query.strip() or doc_type != "note" or view != "body"
+                or section or offset or revision or section_schema):
+            return invalid_args("Query reads require a public article body without range/version "
+                                "selectors; omit query for an exact range or other views.")
+        result = rag_search.func(query=query.strip(), article_id=article_id, top_k=1)
+        if result.kind != "ok":
+            return result
+        return render_search_result(result.data, result.meta, max_chars)
     if (offset or section.startswith("s") and section[1:].isdigit()) and (
         not revision or not section_schema
     ):
