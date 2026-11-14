@@ -321,6 +321,34 @@ def _body_chars(events):
     return max(totals, default=None)
 
 
+
+def _body_read_failures(gold, events):
+    required = gold.get("require_body_reads", [])
+    if not required:
+        return []
+    snapshots = [event.get("provenance") for event in events
+                 if event.get("node") == "native" and event.get("event") == "article_evidence"]
+    latest = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
+    found = set()
+    reads = latest.get("body_reads")
+    for doc in reads if isinstance(reads, list) else []:
+        if not isinstance(doc, dict) or type(doc.get("id")) is not int or doc["id"] <= 0:
+            continue
+        spans = doc.get("ranges")
+        for span in spans if isinstance(spans, list) else []:
+            if not isinstance(span, dict):
+                continue
+            start, end, size = (span.get(key) for key in ("start", "end", "visible_chars"))
+            revision, section = span.get("revision"), span.get("section_id")
+            if (isinstance(section, str) and re.fullmatch(r"(?:s[1-9][0-9]*)?", section)
+                    and all(type(value) is int for value in (start, end, size))
+                    and 0 <= start < end and end - start == size
+                    and isinstance(revision, str) and re.fullmatch(r"[0-9a-f]{64}", revision)):
+                found.add(doc["id"])
+    return [f"缺少可核对的正文读取证据：{wanted.get('article_id', 'any')}"
+            for wanted in required if not found or
+            "article_id" in wanted and wanted["article_id"] not in found]
+
 def _outcome_failures(gold, result, events):
     limit = gold.get("max_model_calls")
     attempts = sum(event.get("event") == "llm_start" for event in events)
@@ -474,7 +502,7 @@ def _single_confirmation_intent(wanted, result):
 def check(gold, result):
     keys = {
         "max_model_calls", "max_tool_calls", "max_article_body_chars",
-        "require_observations",
+        "require_observations", "require_body_reads",
         "require_observations_any",
         "require_todo_schedule",
         "require_automation_schedule",
@@ -499,6 +527,7 @@ def check(gold, result):
     failures = []
     calls = observations(events)
     failures.extend(_outcome_failures(gold, result, events))
+    failures.extend(_body_read_failures(gold, events))
     failures.extend(_compaction_failures(gold, events))
     failures.extend(_answer_failures(gold, result, calls))
     failures.extend(_conversation_failures(gold, result, events, calls))
