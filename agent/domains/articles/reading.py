@@ -15,7 +15,7 @@ from pydantic import (
 
 from agent.domains.article_metadata import tag_references
 from rag import sections
-from rag.source import Digest, DocumentReference, Kind, SourceRange
+from rag.source import MAX_DOCUMENT_CHARS, Digest, DocumentReference, Kind, SourceRange
 
 Count = Annotated[StrictInt, Field(ge=0)]
 
@@ -69,7 +69,7 @@ class Page(BaseModel):
     type: Kind
     id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
     title: Annotated[StrictStr, Field(max_length=255)]
-    content: Annotated[StrictStr, Field(max_length=24000)]
+    content: Annotated[StrictStr, Field(max_length=MAX_DOCUMENT_CHARS)]
     contentRevision: Digest
     sectionSchema: StrictStr
     readOffset: Count

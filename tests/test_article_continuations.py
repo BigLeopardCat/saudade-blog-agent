@@ -205,7 +205,7 @@ def test_framework_binds_the_observed_directory_cursor_before_host_validation(mo
 
 
 def test_default_body_page_uses_the_host_limit_and_keeps_a_verified_continuation(monkeypatch):
-    body = "source text " * 2500
+    body = "source text " * 4000
     requests = []
 
     def read(path, **kwargs):
@@ -215,13 +215,13 @@ def test_default_body_page_uses_the_host_limit_and_keeps_a_verified_continuation
 
     monkeypatch.setattr(notes, "_get", read)
     first = notes.get_article_detail.invoke({"article_id": ARTICLE})
-    assert requests[0]["limit"] == "24000"
-    assert first.data["noteContent"] == body[:24000] and first.data["nextOffset"] == 24000
+    assert requests[0]["limit"] == "32768"
+    assert first.data["noteContent"] == body[:32768] and first.data["nextOffset"] == 32768
     state = ArticleEvidence()
     state.observe("get_article_detail", {"article_id": ARTICLE}, first)
     second = notes.get_article_detail.invoke(state.bind_read_args({"article_id": ARTICLE,
-                                                                  "offset": 24000}))
-    assert second.kind == "ok" and second.data["noteContent"] == body[24000:]
+                                                                  "offset": 32768}))
+    assert second.kind == "ok" and second.data["noteContent"] == body[32768:]
     assert second.data["readComplete"] and second.data["nextOffset"] is None
 
 

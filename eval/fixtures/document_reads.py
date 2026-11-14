@@ -8,7 +8,7 @@ from rag import sections
 from rag.sections import outline, reading_revision
 
 DEFAULT_READ_CHARS = 12000
-MAX_READ_CHARS = 24000
+MAX_READ_CHARS = 32768
 
 
 class RevisionChanged(ValueError):

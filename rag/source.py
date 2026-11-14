@@ -4,6 +4,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr, model_validator
 
+MAX_DOCUMENT_CHARS = 32768
+
 Kind = Literal["note", "talk", "board", "announcement"]
 Digest = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 

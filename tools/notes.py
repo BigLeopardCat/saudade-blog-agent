@@ -13,6 +13,7 @@ from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import search_frame, search_text
+from rag.source import MAX_DOCUMENT_CHARS
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -140,7 +141,8 @@ def get_article_detail(
     offset: Annotated[
         StrictInt, Field(ge=0, le=2_147_483_647, description=_ARTICLE_OFFSET_DESC)
     ] = 0,
-    max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 24000,
+    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS,
+                                         description=_ARTICLE_LIMIT_DESC)] = MAX_DOCUMENT_CHARS,
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
