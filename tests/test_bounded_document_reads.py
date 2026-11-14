@@ -160,7 +160,7 @@ def test_wrong_identity_range_or_parser_metadata_never_records_body_evidence(bac
 
 
 @pytest.mark.parametrize(
-    "args", [{"article_id": True}, {"article_id": 0}, {"article_id": 19, "max_chars": 24001}]
+    "args", [{"article_id": True}, {"article_id": 0}, {"article_id": 19, "max_chars": 32769}]
 )
 def test_invalid_typed_ids_and_ranges_do_not_make_http_requests(backend, args):
     _, calls, _ = backend
