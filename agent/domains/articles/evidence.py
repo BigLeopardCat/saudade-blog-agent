@@ -16,6 +16,10 @@ SEARCH_TOOLS = frozenset({"rag_search"})
 CATALOG_TOOLS = frozenset({"list_notes", "get_top_notes", "list_admin_notes"})
 
 
+def is_search_read(name: str, args: dict) -> bool:
+    return name in SEARCH_TOOLS or name == "get_article_detail" and args.get("view") == "passages"
+
+
 def catalog_source_url(row):
     """Validate a host catalog link without promoting it to article body evidence."""
     value = row.get("sourceUrl")
@@ -153,7 +157,8 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
-        if name in SEARCH_TOOLS or name == "search_notes" or name in CATALOG_TOOLS:
+        search_read = is_search_read(name, args)
+        if search_read or name == "search_notes" or name in CATALOG_TOOLS:
             rows = payload(value)
             if name in CATALOG_TOOLS or name == "search_notes" and isinstance(rows, dict):
                 rows = (
@@ -174,7 +179,7 @@ class ArticleEvidence:
                             if url := catalog_source_url(row):
                                 self.catalog_references.add(
                                     (urlsplit(url).netloc.casefold(), ident))
-        if name in SEARCH_TOOLS:
+        if search_read:
             self.searched = True
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")
@@ -215,7 +220,7 @@ class ArticleEvidence:
 
     def bind_read_args(self, args):
         """Bind verified coordinates, without choosing a document, section or action."""
-        if type(args.get("article_id")) is not int:
+        if args.get("view") == "passages" or type(args.get("article_id")) is not int:
             return args
         cursor = self.continuations.get(args.get("article_id"))
         if (cursor and args.get("doc_type", "note") == "note"

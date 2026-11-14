@@ -1,10 +1,12 @@
 """Public announcements and approved activities, with bounded text and real totals."""
 
 from datetime import datetime
+from urllib.parse import urlsplit
 
 from langchain_core.tools import tool
 
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
+from tools.result import unavailable
 
 
 def _text(row, key, cap):
@@ -63,6 +65,17 @@ def _read(resource, source, page, limit, item_id):
                      lambda row: _row(row, source), {"id": item_id},
                      summarize=lambda rows: _chronology(
                          rows, page=page, item_id=item_id, source=source))
+
+
+def page_preview(path):
+    """Read a plain public activity destination; filtered/deep links need their own reader."""
+    routes = {"/guestbook": ("guestbook", "board"), "/talk": ("talks", "talk")}
+    selected = urlsplit(path)
+    source = routes.get(selected.path)
+    if source is None or selected.query or selected.fragment:
+        return unavailable("This destination needs a dedicated read tool.",
+                           meta={"reason": "preview_not_supported"})
+    return _read(*source, 1, 5, None)
 
 
 @tool

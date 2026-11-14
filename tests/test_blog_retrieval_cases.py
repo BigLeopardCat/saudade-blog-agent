@@ -151,10 +151,11 @@ def test_duplicate_headings_and_first_window_require_explicit_location(corpus, b
     documents, _ = backend
     source = documents["runtime"]
     expected = data["queries"]["long_tail"]["evidence_spans"][0]
-    ambiguous = get_article_detail.invoke({"article_id": source["id"], "section": "故障恢复"})
+    ambiguous = get_article_detail.invoke(
+        {"view": "body", "article_id": source["id"], "section": "故障恢复"})
     assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
     assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
-    first = get_article_detail.invoke({"article_id": source["id"],
+    first = get_article_detail.invoke({"view": "body", "article_id": source["id"],
                                        "max_chars": DEFAULT_READ_CHARS})
     assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
@@ -172,7 +173,7 @@ def test_search_locator_cannot_read_edited_content_or_another_section_view(
         source["content"] = source["content"].replace("工作线程实际退出时", "工作线程启动时")
     invalidations = []
     monkeypatch.setattr("rag.search.invalidate_document", lambda *args: invalidations.append(args))
-    result = get_article_detail.invoke({
+    result = get_article_detail.invoke({"view": "body",
         "article_id": source["id"], "section": "s4", "revision": hit["document_revision"],
         "section_schema": ("obsolete-parser" if change == "section_schema"
                            else hit["section_schema"])})
@@ -188,7 +189,7 @@ def test_withdrawn_document_cannot_be_read_and_disappears_after_index_rebuild(co
     previous = selected._lexical_ranked(query, 3)
     removed = public.pop("runtime")
     assert previous[0]["id"] == removed["id"]
-    refused = get_article_detail.invoke({
+    refused = get_article_detail.invoke({"view": "body",
         "article_id": removed["id"], "section": "s4", "revision": previous[0]["document_revision"],
         "section_schema": previous[0]["section_schema"]})
     assert refused.kind == "not_found" and refused.data is None and len(calls) == 1

@@ -147,15 +147,16 @@ def test_real_tool_exposes_revision_bound_continuation_and_stable_section_ids(mo
         return document_page("note", 1, source["noteTitle"], source["noteContent"], query)
 
     monkeypatch.setattr(base, "_get", read)
-    first = get_article_detail.invoke({"article_id": 1, "max_chars": 8})
+    first = get_article_detail.invoke({"article_id": 1, "view": "body", "max_chars": 8})
     assert first.kind == "ok" and first.data["nextOffset"] == 8
     second = get_article_detail.invoke(
-        {"article_id": 1, "offset": 8, "revision": first.data["contentRevision"],
+        {"article_id": 1, "view": "body", "offset": 8, "revision": first.data["contentRevision"],
          "section_schema": first.data["sectionSchema"]}
     )
     assert first.data["noteContent"] + second.data["noteContent"] == source["noteContent"]
     selected = get_article_detail.invoke(
-        {"article_id": 1, "section": "s2", "revision": first.data["contentRevision"],
+        {"article_id": 1, "view": "body", "section": "s2",
+         "revision": first.data["contentRevision"],
          "section_schema": first.data["sectionSchema"]}
     )
     assert "second" in selected.data["sectionText"] and "first" not in selected.data["sectionText"]
