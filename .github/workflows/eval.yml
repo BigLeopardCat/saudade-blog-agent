@@ -168,6 +168,43 @@ jobs:
           assert all(int(suite.attrib['skipped']) == 0 for suite in suites), 'Integration tests skipped'
           PYCODE
 
+  deployment-rehearsal:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: rehearsal
+          POSTGRES_DB: agent_deployment_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U postgres"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Fresh install, failed health rollback, upgrade and PostgreSQL restore
+        env:
+          BASE_REVISION: ${{ github.event.pull_request.base.sha || github.event.before || 'HEAD^' }}
+        run: bash scripts/dev/deployment_rehearsal.sh "$BASE_REVISION" eval/report/ci/deployment.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-${{ github.run_id }}-${{ github.run_attempt }}
+          path: eval/report/ci/deployment.json
+          if-no-files-found: error
+          retention-days: 14
+
   widget-pin-drift:
     runs-on: ubuntu-latest
     timeout-minutes: 5

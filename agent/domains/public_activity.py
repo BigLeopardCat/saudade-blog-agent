@@ -1,11 +1,14 @@
 """Public announcements and approved activities, with bounded text and real totals."""
 
 from datetime import datetime
-from urllib.parse import urlsplit
+from typing import Literal
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
+from agent import authz
 from agent.domains.public_pages import Identifier, Limit, Page, read_page
+from agent.runtime.access import scoped_reads_enabled
 from tools.result import unavailable
 
 
@@ -67,14 +70,19 @@ def _read(resource, source, page, limit, item_id):
                          rows, page=page, item_id=item_id, source=source))
 
 
-def page_preview(path):
-    """Read a plain public activity destination; filtered/deep links need their own reader."""
-    routes = {"/guestbook": ("guestbook", "board"), "/talk": ("talks", "talk")}
-    selected = urlsplit(path)
-    source = routes.get(selected.path)
-    if source is None or selected.query or selected.fragment:
-        return unavailable("This destination needs a dedicated read tool.",
-                           meta={"reason": "preview_not_supported"})
+@tool
+def read_public_page(path: Literal["/guestbook", "/talk"], config: RunnableConfig) -> object:
+    """Read the latest five approved guestbook/talk entries without changing pages.
+    Returns source content, counts and scope. Filters, other pages and item details
+    use public_activity tools. A requested visit also needs navigate_page.
+    """
+    cfg = (config or {}).get("configurable") or {}
+    if not scoped_reads_enabled(cfg.get("principal"), authz.SCOPE_READ_PUBLIC, cfg.get("user_id")):
+        return unavailable("Public reading is not authorized.")
+    from agent.runtime.control import check_active
+
+    check_active()
+    source = ("guestbook", "board") if path == "/guestbook" else ("talks", "talk")
     return _read(*source, 1, 5, None)
 
 

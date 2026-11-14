@@ -23,7 +23,7 @@ DOMAIN_DESCRIPTIONS = {
     "admin_automations": "Persistent reminders, scheduled read-only reports and announcements. "
     "Other scheduled writes use their domain.",
     "public_activity": "Read/search public announcements, guestbook (河灯留言) and talks without "
-    "changing pages. Guestbook/talk visits: navigate_page(preview=true). "
+    "changing pages. read_public_page gives a recent overview; visits use navigate_page. "
     "Talks are admin-published; display names are not account identities.",
     "utilities": "Read the current time.",
     "task_planning": "Agent内部执行清单，不是用户待办或提醒。仅用于复杂任务（3步以上）"
@@ -75,6 +75,8 @@ def initial_tools(tools, domains):
     selected = {
         **tools,
         **{name: browser[name] for name in _COMMON_SITE_TOOLS if name in browser},
+        **{name: tool for name, tool in (domains.get("public_activity") or {}).items()
+           if name == "read_public_page"},
     }
     if selected or any(domains.values()):
         overview = capability_overview(selected, domains)

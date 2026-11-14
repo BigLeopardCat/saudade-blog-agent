@@ -149,6 +149,22 @@ def _preparation_facts(events):
     return facts
 
 
+def _read_facts(event):
+    """Recognize typed unread headers without treating a counter as item evidence."""
+    if event.get("name") != "get_inbox_overview" or event.get("kind") != "ok":
+        return {}
+    from agent.domains.own_reads import InboxPreview
+
+    try:
+        data = json.loads(event.get("result", ""))
+        if not isinstance(data, dict) or data.get("itemsIncluded") is not True:
+            return {}
+        InboxPreview.model_validate(data)
+    except (ValueError, TypeError):
+        return {}
+    return {"inbox": {"unread_headers_verified": True}}
+
+
 def observations(events):
     """Apply defaults declared by the actual bound tool, never guessed defaults."""
     defaults, calls, facts = {}, [], _preparation_facts(events)
@@ -160,7 +176,7 @@ def observations(events):
                 k: v["default"] for k, v in properties.items() if "default" in v
             }
         elif event.get("node") == "native" and event.get("event") == "call":
-            details = facts.get(_call_key(event))
+            details = {**(facts.get(_call_key(event)) or {}), **_read_facts(event)}
             calls.append(
                 {**event, "args": {**defaults.get(event.get("name"), {}), **event.get("args", {})},
                  **({"facts": details} if details else {})}

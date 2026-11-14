@@ -66,8 +66,7 @@ class MessageHeader(Header):
     peerName: Annotated[StrictStr, Field(max_length=80)]
 
 
-class InboxOverview(BaseModel):
-    userId: Annotated[StrictInt, Field(gt=0)]
+class InboxPreview(BaseModel):
     notifications: Count
     messages: Count
     total: Count
@@ -89,6 +88,10 @@ class InboxOverview(BaseModel):
                     or len({row.id for row in rows}) != len(rows)):
                 raise ValueError("Incomplete unread preview")
         return self
+
+
+class InboxOverview(InboxPreview):
+    userId: Annotated[StrictInt, Field(gt=0)]
 
 
 @tool

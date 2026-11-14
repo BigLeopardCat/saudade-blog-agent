@@ -1,4 +1,4 @@
-"""Navigation and bounded source reads remain independent observed outcomes."""
+"""Page reads and browser effects use separate native tool calls."""
 
 import json
 import time
@@ -19,132 +19,135 @@ from agent.runtime.service import AgentRuntime
 from tools.result import ok, unavailable
 
 
-@pytest.mark.parametrize("include_source", [False, True])
-def test_compound_task_acceptance_requires_navigation_and_verified_content(include_source):
-    from eval.golden_evaluation import check_gold
-    from eval.online_baseline import load_suite
-
-    case = next(c for c in load_suite() if c["id"] == "nav_guestbook_content")
-    value = {"status": "sent"}
-    if include_source:
-        value["preview"] = {"kind": "ok", "data": preview().data}
-    result = {"text": "Navigation sent.", "commands": ["NAVIGATE:/guestbook"],
-              "tool_calls": ["navigate_page"], "exec_rows": [],
-              "native_events": [{"node": "native", "event": "llm_done", "tokens_prompt": 20,
-                                  "tokens_completion": 5},
-                                 {"node": "native", "event": "call", "name": "navigate_page",
-                                  "args": {"path": "/guestbook", "preview": True},
-                                  "kind": "ok", "result": json.dumps(value)}]}
-    failures = check_gold(case["gold"], result)
-    assert (not failures) is include_source, failures
+def call(name, ident):
+    return {"name": name, "args": {"path": "/guestbook"}, "id": ident, "type": "tool_call"}
 
 
-def call(**args):
-    return {"name": "navigate_page", "args": {"path": "/guestbook", **args},
-            "id": "visit", "type": "tool_call"}
-
-
-def preview():
-    return ok("not duplicated in the model content", data={
-        "resource": "activity/guestbook", "items": [{"id": 9, "content": "public source"}],
+def content():
+    return ok("source", data={"resource": "activity/guestbook",
+        "items": [{"id": 9, "content": "public source"}],
         "total": 12, "page": 1, "pageSize": 5, "hasMore": True})
 
 
-def test_navigation_and_preview_share_one_framework_exchange(monkeypatch):
-    seen = []
-    monkeypatch.setattr(public_activity, "page_preview",
-                        lambda path: seen.append(path) or preview())
-    model = Capture(AIMessageChunk(content="", tool_calls=[call(preview=True)]),
-                    AIMessageChunk(content="Navigation sent; recent public source received."))
+@pytest.mark.parametrize("visit", [False, True])
+def test_native_batch_reads_content_with_navigation_only_when_requested(monkeypatch, visit):
+    reads = []
+    monkeypatch.setattr(public_activity, "_read", lambda *args: reads.append(args) or content())
+    calls = [call("read_public_page", "read")]
+    if visit:
+        calls.insert(0, call("navigate_page", "visit"))
+    model = Capture(AIMessageChunk(content="", tool_calls=calls),
+                    AIMessageChunk(content="The recent public source is available."))
     runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
                            application=BlogApplication(), model_factory=lambda **_: model)
-    result = list(runtime.stream_events(
-        {"messages": [HumanMessage(content="Visit the guestbook and read its latest posts.")]},
+    result = list(runtime.stream_events({"messages": [HumanMessage(content=
+        "Visit and read the guestbook." if visit else "Read without changing the page.")]},
         config()))[-1]
-    assert result.reply and seen == ["/guestbook"] and len(model.prompts) == 2
-    message = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
-    data = json.loads(message.content)
-    assert data == message.artifact["data"]
-    assert data["status"] == "sent" and data["completion_confirmed"] is False
-    assert data["preview"]["data"]["total"] == 12
-    assert data["preview"]["kind"] == "ok" and "message" not in data["preview"]
-    assert "not duplicated" not in message.content
-    assert message.artifact["receipts"][0]["cmd"]["kind"] == "navigate"
+    assert result.reply and len(model.prompts) == 2 and len(reads) == 1
+    messages = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
+    reader = next(m for m in messages if m.name == "read_public_page")
+    assert reader.artifact["data"]["resource"] == "activity/guestbook"
+    assert not reader.artifact.get("receipts")
+    if visit:
+        navigation = next(m for m in messages if m.name == "navigate_page")
+        assert json.loads(navigation.content)["status"] == "sent"
+        assert navigation.artifact["receipts"][0]["cmd"]["kind"] == "navigate"
+        assert "preview" not in navigation.content
+    else:
+        assert all(not m.artifact.get("receipts") for m in messages)
+
+
+@pytest.mark.parametrize("status", ["completed", "failed", "timeout"])
+def test_browser_checkpoint_resumes_the_separate_read_once_after_feedback(monkeypatch, status):
+    from _browser_support import acknowledge
+
+    reads = []
+    monkeypatch.setattr(public_activity, "_read", lambda *args: reads.append(args) or content())
+    model = Capture(AIMessageChunk(content="", tool_calls=[call("navigate_page", "visit"),
+                                                          call("read_public_page", "read")]),
+                    AIMessageChunk(content="Browser result and recent source received."))
+    saver = InMemorySaver()
+
+    def runtime():
+        return AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
+                            model_factory=lambda **_: model)
+
+    cfg = config(browser_feedback=True)
+    first = list(runtime().stream_events({"messages": [HumanMessage(content="Visit and read")],
+                                         "task_id": "visit-read"}, cfg))[-1]
+    command = first.execution["client_action"]
+    assert not reads and len(model.prompts) == 1
+    resumed = acknowledge(cfg, command, status, "/guestbook" if status == "completed" else "/")
+    result = list(runtime().stream_events({"resume_task": "visit-read"}, resumed))[-1]
+    assert result.reply and len(reads) == 1 and len(model.prompts) == 2
+    messages = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
+    navigation = next(m for m in messages if m.name == "navigate_page")
+    assert json.loads(navigation.content)["completion_confirmed"] is (status == "completed")
+    assert any(m.name == "read_public_page" and m.artifact["kind"] == "ok" for m in messages)
+    duplicate = list(runtime().stream_events({"resume_task": "visit-read"}, resumed))[-1]
+    assert duplicate.execution["blocked"] and len(reads) == 1 and len(model.prompts) == 2
 
 
 @pytest.mark.parametrize("state", ["completed", "timeout", "failed"])
-def test_preview_waits_for_browser_completion_and_skips_failed_navigation(monkeypatch, state):
-    seen = []
+def test_navigation_receipt_tracks_browser_feedback_and_never_reads(monkeypatch, state):
     monkeypatch.setattr(browser, "_await_browser", lambda *args: {"status": state,
                                                                 "path": "/guestbook"})
-    monkeypatch.setattr(public_activity, "page_preview",
-                        lambda path: seen.append(path) or preview())
-    value = browser.navigate_page.invoke(call(preview=True),
+    monkeypatch.setattr(public_activity, "_read", lambda *args: pytest.fail("Navigation read"))
+    value = browser.navigate_page.invoke(call("navigate_page", "visit"),
         config=config(browser_feedback=True, browser_task={"id": "task"}))
     frame = json.loads(value.content)
     assert frame["completion_confirmed"] is (state == "completed")
-    assert seen == (["/guestbook"] if state == "completed" else [])
-    assert frame["preview"]["kind"] == ("ok" if state == "completed" else "unavailable")
     assert value.artifact["kind"] == ("ok" if state == "completed" else "unavailable")
 
 
-def test_preview_failure_does_not_erase_navigation_receipt(monkeypatch):
-    monkeypatch.setattr(public_activity, "page_preview", lambda _: unavailable("outage"))
-    value = browser.navigate_page.invoke(call(preview=True), config=config())
-    assert value.artifact["kind"] == "ok" and value.artifact["receipts"]
-    frame = json.loads(value.content)
-    assert frame["status"] == "sent" and frame["preview"]["kind"] == "unavailable"
-    assert frame["preview"]["data"] is None
+def test_read_failure_does_not_claim_a_navigation_or_write(monkeypatch):
+    monkeypatch.setattr(public_activity, "_read", lambda *args: unavailable("outage"))
+    result = public_activity.read_public_page.invoke({"path": "/guestbook"}, config=config())
+    assert result.kind == "unavailable" and result.data is None
 
 
-def test_cancel_after_browser_completion_prevents_preview_io(monkeypatch):
+def test_cancelled_request_does_not_start_public_read_io(monkeypatch):
     stop = Event()
-
-    def completed(*args):
+    monkeypatch.setattr(public_activity, "_read", lambda *args: pytest.fail("Read after cancel"))
+    with request_scope(RequestControl(stop, time.monotonic() + 60)):
         stop.set()
-        return {"status": "completed", "path": "/guestbook"}
-
-    monkeypatch.setattr(browser, "_await_browser", completed)
-    monkeypatch.setattr(public_activity, "page_preview", lambda _: pytest.fail("Read after cancel"))
-    with request_scope(RequestControl(stop, time.monotonic() + 60)), pytest.raises(AgentCancelled):
-        browser.navigate_page.invoke(call(preview=True),
-            config=config(browser_feedback=True, browser_task={"id": "task"}))
+        with pytest.raises(AgentCancelled):
+            public_activity.read_public_page.invoke({"path": "/guestbook"}, config=config())
 
 
-def test_plain_navigation_never_reads_content(monkeypatch):
-    def unexpected(_):
-        pytest.fail("No preview was requested")
-
-    monkeypatch.setattr(public_activity, "page_preview", unexpected)
-    value = browser.navigate_page.invoke(call(), config=config())
-    assert "preview" not in json.loads(value.content) and "data" not in value.artifact
-
-
-def test_preview_rechecks_public_read_permission(monkeypatch):
-    original = browser.authz.holds
-    monkeypatch.setattr(browser.authz, "holds", lambda principal, scope:
-                        scope != browser.authz.SCOPE_READ_PUBLIC and original(principal, scope))
-    monkeypatch.setattr(public_activity, "page_preview", lambda _: pytest.fail("Unauthorized read"))
-    value = browser.navigate_page.invoke(call(preview=True), config=config())
-    assert json.loads(value.content)["preview"]["meta"]["reason"] == "preview_denied"
-
-
-def test_preview_is_a_strict_boolean():
-    with pytest.raises(ValidationError):
-        browser.navigate_page.invoke(call(preview="true"), config=config())
+def test_direct_read_rechecks_the_verified_public_scope(monkeypatch):
+    monkeypatch.setattr(public_activity, "_read", lambda *args: pytest.fail("Unauthorized read"))
+    result = public_activity.read_public_page.invoke({"path": "/talk"}, config={})
+    assert result.kind == "unavailable"
 
 
 @pytest.mark.parametrize("path", ["/about", "/dashboard/users", "/guestbook?lid=9", "/talk#item"])
-def test_preview_never_substitutes_recent_rows_for_a_different_scope(monkeypatch, path):
+def test_reader_never_substitutes_recent_rows_for_a_different_scope(monkeypatch, path):
     monkeypatch.setattr(public_activity, "_read", lambda *args: pytest.fail("Wrong source read"))
-    result = public_activity.page_preview(path)
-    assert result.kind == "unavailable" and result.meta["reason"] == "preview_not_supported"
+    with pytest.raises(ValidationError):
+        public_activity.read_public_page.invoke({"path": path}, config=config())
 
 
 @pytest.mark.parametrize("path,source", [("/guestbook", ("guestbook", "board")),
                                         ("/talk", ("talks", "talk"))])
-def test_preview_uses_the_existing_bounded_public_reader(monkeypatch, path, source):
+def test_reader_uses_the_existing_bounded_public_source(monkeypatch, path, source):
     seen = []
-    monkeypatch.setattr(public_activity, "_read", lambda *args: seen.append(args) or preview())
-    result = public_activity.page_preview(path)
+    monkeypatch.setattr(public_activity, "_read", lambda *args: seen.append(args) or content())
+    result = public_activity.read_public_page.invoke({"path": path}, config=config())
     assert result.kind == "ok" and seen == [(*source, 1, 5, None)]
+
+
+@pytest.mark.parametrize("navigate,read", [(False, False), (True, False),
+                                         (False, True), (True, True)])
+def test_compound_acceptance_requires_both_effect_and_actual_content(navigate, read):
+    from eval.golden_evaluation import check_gold
+    from eval.online_baseline import load_suite
+
+    case = next(c for c in load_suite() if c["id"] == "nav_guestbook_content")
+    result = {"text": "Source received.", "commands": ["NAVIGATE:/guestbook"] if navigate else [],
+              "tool_calls": ["read_public_page"] if read else [], "exec_rows": [],
+              "native_events": [{"node": "native", "event": "llm_start"},
+                *([{"node": "native", "event": "call", "name": "read_public_page",
+                    "args": {"path": "/guestbook"}, "kind": "ok",
+                    "result": json.dumps(content().data)}] if read else [])]}
+    assert (not check_gold(case["gold"], result)) is (navigate and read)

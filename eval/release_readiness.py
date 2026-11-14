@@ -257,7 +257,7 @@ def _quality(report, semantic, profile):
 
 
 def _budget_metrics(metrics, profile):
-    totals, failures, missing = metrics["usage"], [], []
+    totals, failures, missing, findings = metrics["usage"], [], [], []
     coverage = (min(totals["measured"], totals["output_seen"], totals["cache_seen"])
                 / (totals["calls"] + totals["unknown_attempts"])
                 if totals["calls"] + totals["unknown_attempts"] else None)
@@ -276,7 +276,8 @@ def _budget_metrics(metrics, profile):
             if stat["p95"] is None:
                 missing.append(f"{name}.{field}: at least {minimum} measured rounds")
             else:
-                _reject(failures, f"{name}.{field}", stat["p95"] <= limit, costs[name][field])
+                target = findings if field in profile.get("diagnostic_metrics", []) else failures
+                _reject(target, f"{name}.{field}", stat["p95"] <= limit, costs[name][field])
     visible = distribution(metrics["first_visible"], minimum)
     if visible["p95"] is None:
         missing.append("first visible event latency sample size")
@@ -289,7 +290,8 @@ def _budget_metrics(metrics, profile):
     elif decision["correct"]["rate"] is not None:
         _reject(failures, "first_action", decision["correct"]["rate"] >=
                 profile.get("first_action_target", 0.95), decision)
-    result = {"task_metrics": costs, "first_visible_s": visible, "usage_coverage": coverage,
+    result = {"task_metrics": costs, "efficiency_findings": findings,
+              "first_visible_s": visible, "usage_coverage": coverage,
               "model_ttft_s": distribution(metrics["model_ttft_s"], minimum),
               "model_ttft_coverage": {"measured": len(metrics["model_ttft_s"]),
                                       "model_calls": totals["calls"]},
@@ -305,8 +307,16 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
     ids = [case["id"] for case in report["cases"]]
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("baseline cases must be nonempty and unique")
-    if profile.get("version") != 1:
+    if profile.get("version") not in {1, 2}:
         raise ValueError("unsupported release profile version")
+    if profile["version"] == 1 and profile.get("diagnostic_metrics"):
+        raise ValueError("frozen version-1 efficiency targets are blocking")
+    diagnostic = profile.get("diagnostic_metrics", [])
+    if (not isinstance(diagnostic, list)
+            or any(not isinstance(field, str) or field not in {"calls", "in", "out"}
+                   for field in diagnostic)
+            or len(diagnostic) != len(set(diagnostic))):
+        raise ValueError("only model calls and token counts may be diagnostic targets")
     reviewed = (acceptance.assess(source, json.loads(Path(semantic_path).read_bytes()))
                 if semantic_path else None)
     semantic = {case["id"]: case["status"] for case in reviewed["cases"]} if reviewed else {}
