@@ -152,7 +152,8 @@ def test_duplicate_headings_and_first_window_require_explicit_location(corpus, b
     ambiguous = get_article_detail.invoke({"article_id": source["id"], "section": "故障恢复"})
     assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
     assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
-    first = get_article_detail.invoke({"article_id": source["id"]})
+    first = get_article_detail.invoke({"article_id": source["id"],
+                                       "max_chars": DEFAULT_READ_CHARS})
     assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
 

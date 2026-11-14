@@ -1,13 +1,14 @@
 """Expanded reading windows preserve leaf provenance and obey source/reading budgets."""
 
 import copy
+import json
 from types import SimpleNamespace
 
 import pytest
 
 from rag.context_windows import context_range, expand_context
 from rag.reading import candidate_text
-from rag.sections import body_blocks
+from rag.sections import PARSER_VERSION, body_blocks
 
 PROFILE = SimpleNamespace(count=len)
 
@@ -37,11 +38,15 @@ def test_context_clips_margins_without_removing_the_retrieved_anchor():
 def test_read_hint_expands_only_the_read_locator_and_keeps_rank_score_and_excerpt():
     text = "before needle after"
     hit = {"type": "note", "id": 1, "title": "T", "score": .8,
-           "document_revision": "version", "sections": ["S"], "section_ids": ["s1"],
+           "document_revision": "a" * 64, "section_schema": PARSER_VERSION,
+           "sections": ["S"], "section_ids": ["s1"],
            "matches": [{"section_id": "s1", "offset": 7, "end": 13}]}
     saved = copy.deepcopy(hit)
     expanded = expand_context([hit], lambda *_: text, PROFILE, max_tokens=100)
     assert hit == saved and expanded[0]["score"] == .8
     assert expanded[0]["matches"][0]["offset"] == 7
     hint = candidate_text(1, expanded[0])
-    assert "index_range=[7:13]" in hint and "offset=0 max_chars=19" in hint
+    request = json.loads(hint)["read_requests"][0]["request"]
+    assert expanded[0]["matches"][0]["end"] == 13
+    assert request["offset"] == 0 and request["max_chars"] == len(text)
+    assert request["revision"] == "a" * 64 and request["section_schema"] == PARSER_VERSION
