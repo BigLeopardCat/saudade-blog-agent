@@ -77,9 +77,10 @@ def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp
     assert (folder / "semantic_judge.py").read_bytes() == Path(semantic_judge.__file__).read_bytes()
 
 
+@pytest.mark.parametrize("reviewer_model", ["", "glm-5.3-flash"])
 @pytest.mark.parametrize("interrupt", [False, True])
 def test_calibration_persists_each_attempt_and_keeps_interrupted_usage_unknown(
-    tmp_path, monkeypatch, interrupt,
+    tmp_path, monkeypatch, interrupt, reviewer_model,
 ):
     import hashlib
     import sys
@@ -93,9 +94,14 @@ def test_calibration_persists_each_attempt_and_keeps_interrupted_usage_unknown(
     path, folder = tmp_path / "samples.jsonl", tmp_path / "run"
     path.write_text("".join(json.dumps(row) + "\n" for row in samples))
     monkeypatch.setattr(sys, "argv", ["judge_calibration", "--samples", str(path),
-                                     "--out", str(folder), "--max-output-tokens", "8192"])
-    monkeypatch.setattr(semantic_judge, "make_llm", lambda **kwargs: SimpleNamespace(
-        model_name="stub", max_tokens=kwargs["max_tokens"]))
+                                     "--out", str(folder), "--max-output-tokens", "8192",
+                                     *(["--model", reviewer_model] if reviewer_model else [])])
+    def make_llm(**kwargs):
+        assert kwargs.get("model", "") == reviewer_model
+        return SimpleNamespace(model_name=kwargs.get("model", "stub"),
+                               max_tokens=kwargs["max_tokens"])
+
+    monkeypatch.setattr(semantic_judge, "make_llm", make_llm)
     calls = []
 
     def review(text, model, **kwargs):
@@ -121,6 +127,7 @@ def test_calibration_persists_each_attempt_and_keeps_interrupted_usage_unknown(
         judge_calibration.main()
     saved = json.loads((folder / "report.json").read_text())
     assert saved["status"] == ("interrupted" if interrupt else "completed")
+    assert saved["model"] == (reviewer_model or "stub")
     assert saved["reviewer_options"]["max_tokens"] == 8192
     assert saved["measured"] == (1 if interrupt else 2)
     assert saved["unverified"] == int(interrupt)
