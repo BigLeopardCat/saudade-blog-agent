@@ -114,7 +114,7 @@ def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpu
     canonical = content_revision(source["title"], source["content"])
     assert hit["document_revision"] == hit["content_revision"] == canonical
     assert hit["section_schema"] == PARSER_VERSION
-    args = {"article_id": source["id"], "section": expected["section_id"],
+    args = {"article_id": source["id"], "view": "body", "section": expected["section_id"],
             "revision": hit["document_revision"], "section_schema": hit["section_schema"],
             "max_chars": 1024}
     model = Capture(AIMessage(content="", tool_calls=[{

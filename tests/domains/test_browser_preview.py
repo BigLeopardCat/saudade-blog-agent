@@ -1,6 +1,8 @@
 """Navigation and bounded source reads remain independent observed outcomes."""
 
 import json
+import time
+from threading import Event
 
 import pytest
 from _memory_support import Capture
@@ -12,8 +14,29 @@ from pydantic import ValidationError
 from agent.domains import browser, public_activity
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.control import AgentCancelled, RequestControl, request_scope
 from agent.runtime.service import AgentRuntime
 from tools.result import ok, unavailable
+
+
+@pytest.mark.parametrize("include_source", [False, True])
+def test_compound_task_acceptance_requires_navigation_and_verified_content(include_source):
+    from eval.golden_evaluation import check_gold
+    from eval.online_baseline import load_suite
+
+    case = next(c for c in load_suite() if c["id"] == "nav_guestbook_content")
+    value = {"status": "sent"}
+    if include_source:
+        value["preview"] = {"kind": "ok", "data": preview().data}
+    result = {"text": "Navigation sent.", "commands": ["NAVIGATE:/guestbook"],
+              "tool_calls": ["navigate_page"], "exec_rows": [],
+              "native_events": [{"node": "native", "event": "llm_done", "tokens_prompt": 20,
+                                  "tokens_completion": 5},
+                                 {"node": "native", "event": "call", "name": "navigate_page",
+                                  "args": {"path": "/guestbook", "preview": True},
+                                  "kind": "ok", "result": json.dumps(value)}]}
+    failures = check_gold(case["gold"], result)
+    assert (not failures) is include_source, failures
 
 
 def call(**args):
@@ -72,6 +95,20 @@ def test_preview_failure_does_not_erase_navigation_receipt(monkeypatch):
     frame = json.loads(value.content)
     assert frame["status"] == "sent" and frame["preview"]["kind"] == "unavailable"
     assert frame["preview"]["data"] is None
+
+
+def test_cancel_after_browser_completion_prevents_preview_io(monkeypatch):
+    stop = Event()
+
+    def completed(*args):
+        stop.set()
+        return {"status": "completed", "path": "/guestbook"}
+
+    monkeypatch.setattr(browser, "_await_browser", completed)
+    monkeypatch.setattr(public_activity, "page_preview", lambda _: pytest.fail("Read after cancel"))
+    with request_scope(RequestControl(stop, time.monotonic() + 60)), pytest.raises(AgentCancelled):
+        browser.navigate_page.invoke(call(preview=True),
+            config=config(browser_feedback=True, browser_task={"id": "task"}))
 
 
 def test_plain_navigation_never_reads_content(monkeypatch):

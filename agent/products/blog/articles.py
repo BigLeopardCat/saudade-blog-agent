@@ -6,7 +6,7 @@ from langchain.agents.middleware import AgentMiddleware, AgentState
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from agent.domains.articles.evidence import ArticleEvidence, is_search_read
+from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
 from rag.reading import article_frame_text, render_article_result, render_search_result
@@ -97,8 +97,7 @@ class ArticleMiddleware(AgentMiddleware):
             artifact = {**artifact, "kind": "error"}
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"
-        search_read = is_search_read(call["name"], call["args"])
-        if success and call["name"] == "get_article_detail" and not search_read:
+        if success and call["name"] == "get_article_detail":
             data = artifact.get("data")
             if isinstance(data, dict):
                 limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}))
@@ -110,7 +109,7 @@ class ArticleMiddleware(AgentMiddleware):
                              **({"kind": "unavailable", "meta": {
                                  **(artifact.get("meta") or {}), "reason": "presentation_budget"}}
                                 if failed else {})}})
-        elif success and search_read and isinstance(artifact.get("data"), list):
+        elif success and call["name"] == "rag_search" and isinstance(artifact.get("data"), list):
             presented = render_search_result(artifact["data"],
                                              artifact.get("meta") or {}, limit)
             value = value.model_copy(update={"content": presented.text,

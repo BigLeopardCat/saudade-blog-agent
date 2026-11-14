@@ -254,16 +254,13 @@ def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entrie
 
 
 @pytest.mark.parametrize("read_more", [False, True])
-@pytest.mark.parametrize("passage_view", [False, True])
 def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
-    article, monkeypatch, read_more, passage_view
+    article, monkeypatch, read_more
 ):
     _, index, calls = article
     arguments = locator(index._lexical_ranked(QUERY, 1, article_id=ARTICLE)[0])
     requests = []
-    search_name = "get_article_detail" if passage_view else "rag_search"
-    actions = [(search_name, {"query": QUERY, "article_id": ARTICLE,
-                             **({"view": "passages"} if passage_view else {"top_k": 1})})]
+    actions = [("rag_search", {"query": QUERY, "article_id": ARTICLE, "top_k": 1})]
     if read_more:
         actions.append(
             (
@@ -374,7 +371,7 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
         message
         for message in native[0]["messages"]
         if message.type == "tool"
-        and message.name == ("get_article_detail" if read_more else search_name)
+        and message.name == ("get_article_detail" if read_more else "rag_search")
         and message.tool_call_id == f"call{len(actions) - 1}"
     )
     assert observed.artifact["article_evidence"]["read_ranges"][ARTICLE] == ranges
@@ -385,48 +382,6 @@ def test_read_scope_is_required_before_any_body_fetch(article):
     with pytest.raises(ValidationError, match="view"):
         notes.get_article_detail.invoke({"article_id": ARTICLE})
     assert calls == []
-
-
-@pytest.mark.parametrize("selectors", [
-    {"query": ""}, {"query": "   "}, {"doc_type": "board"},
-    {"section": "s22"}, {"offset": 1}, {"revision": "a" * 64},
-    {"section_schema": PARSER_VERSION},
-])
-def test_passage_scope_rejects_conflicting_selection_before_io(article, selectors):
-    _, _, calls = article
-    result = notes.get_article_detail.invoke(
-        {"article_id": ARTICLE, "view": "passages", "query": QUERY, **selectors})
-    assert result.kind == "invalid_args" and not calls
-
-
-def test_passage_scope_reads_only_verified_source_ranges(article):
-    document, _, calls = article
-    args = {"article_id": ARTICLE, "view": "passages", "query": QUERY}
-    result = notes.get_article_detail.invoke(args)
-    evidence = ArticleEvidence()
-    evidence.observe("get_article_detail", args, result)
-    assert result.kind == "ok" and list(evidence.documents) == [ARTICLE]
-    assert sum(r["visible_chars"] for r in evidence.read_ranges[ARTICLE]) < 2000
-    assert all(r["revision"] == document["revision"] for r in evidence.read_ranges[ARTICLE])
-    assert len(calls) == 1 and calls[0].url.path == "/api/public/documents/validate"
-    assert evidence.bind_read_args(args) == args
-
-
-def test_passage_budget_does_not_promote_unseen_text(article):
-    result = notes.get_article_detail.invoke(
-        {"article_id": ARTICLE, "view": "passages", "query": QUERY, "max_chars": 1})
-    evidence = ArticleEvidence()
-    evidence.observe("get_article_detail", {"view": "passages"}, result)
-    assert result.kind == "unavailable" and result.data is None and evidence.failed
-    assert not evidence.documents and not evidence.candidates
-
-
-def test_passage_outage_has_no_implicit_whole_body_fallback(article, monkeypatch):
-    _, _, calls = article
-    monkeypatch.setattr(search, "search", lambda *args, **kwargs: None)
-    result = notes.get_article_detail.invoke(
-        {"article_id": ARTICLE, "view": "passages", "query": QUERY})
-    assert result.kind == "unavailable" and result.data is None and not calls
 
 
 def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(article, monkeypatch):

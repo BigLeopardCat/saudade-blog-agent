@@ -30,7 +30,8 @@ def test_remembering_order_takes_one_call_and_the_next_turn_can_read_the_second_
     with backend([{"id": 22, "title": "第一篇"}, {"id": 23, "title": "第二篇"}]) as host, \
             model_replies(
                 {"content": acknowledgement},
-                {"tool_calls": [call("get_article_detail", "read-second", article_id=23)]},
+                {"tool_calls": [call("get_article_detail", "read-second",
+                                     article_id=23, view="body")]},
                 {"content": "第二篇介绍编程实践。[来源](/article/23)"},
             ) as (model, calls):
         runtime = selected(model, saver)

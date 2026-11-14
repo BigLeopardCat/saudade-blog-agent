@@ -88,7 +88,9 @@ def _navigation_outcome(payload, receipts, path, config, preview):
                                  meta={"reason": "preview_denied"})
         else:
             from agent.domains.public_activity import page_preview
+            from agent.runtime.control import check_active
 
+            check_active()
             result = page_preview(path)
         observation = {"kind": result.kind, "data": result.data, "meta": result.meta}
         if result.kind != "ok":

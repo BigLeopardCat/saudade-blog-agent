@@ -91,7 +91,8 @@ def test_rag_correct_answer_still_fails_for_duplicate_or_excess_body_reads(sdk, 
     with contracts.article_backend() as state:
         hit = state["index"]._lexical_ranked(contracts.QUERY, 1, article_id=contracts.ARTICLE_ID)[0]
     match = next(row for row in hit["matches"] if row["section_id"] == "s2")
-    args = {"article_id": contracts.ARTICLE_ID, "section": "s2", "offset": match["offset"],
+    args = {"article_id": contracts.ARTICLE_ID, "view": "body",
+            "section": "s2", "offset": match["offset"],
             "max_chars": match["end"] - match["offset"],
             "revision": hit["document_revision"], "section_schema": hit["section_schema"]}
     if mode == "duplicate_http":

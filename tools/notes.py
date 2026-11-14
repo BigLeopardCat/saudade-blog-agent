@@ -12,7 +12,7 @@ from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
-from rag.reading import render_search_result, search_frame, search_text
+from rag.reading import search_frame, search_text
 from rag.source import MAX_DOCUMENT_CHARS
 from tools import base as _base
 from tools.result import (
@@ -136,7 +136,7 @@ _ARTICLE_SCHEMA_DESC = "Sections/continuations: copy sectionSchema, also set rev
 @tool
 def get_article_detail(
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
-    view: Literal["passages", "body", "outline", "metadata"],
+    view: Literal["body", "outline", "metadata"],
     doc_type: Literal["note", "talk", "board", "announcement"] = "note",
     section: Annotated[str, Field(max_length=1024)] = "",
     offset: Annotated[
@@ -146,12 +146,11 @@ def get_article_detail(
                                          description=_ARTICLE_LIMIT_DESC)] = MAX_DOCUMENT_CHARS,
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
-    query: Annotated[str, Field(max_length=500)] = "",
 ) -> str | ToolResult:
-    """Read a known public document. Choose passages with query for a specific
-    question, body for original full text, outline for structure, metadata for
-    author/title/tags. Passages are current version-verified source text.
-    Exact section/continuation reads need revision and section_schema. Copy returned
+    """Read original text of a known public document for an overview or full analysis.
+    Choose body (includes outline/revision), outline for structure only, metadata
+    for author/title/tags. Targeted fact finding uses rag_search(article_id=...).
+    Exact sections/continuations need revision and section_schema. Copy returned
     cursors; section end is not document end. Private/drafts use read_current_article;
     counters use get_article_stats.
     """
@@ -160,16 +159,6 @@ def get_article_detail(
     from agent.domains.articles.reading import project
     from tools.result import invalid_args
 
-    if view == "passages":
-        if (not query.strip() or doc_type != "note"
-                or section or offset or revision or section_schema):
-            return invalid_args(
-                "Passages require an article query without range/version selectors.")
-        result = _article_body_search(query.strip(), 1, article_id)
-        return (render_search_result(result.data, result.meta, max_chars)
-                if result.kind == "ok" else result)
-    if query:
-        return invalid_args("Query applies only to view=passages.")
     if (offset or section.startswith("s") and section[1:].isdigit()) and (
         not revision or not section_schema
     ):
@@ -255,11 +244,6 @@ def rag_search(
     the current task binds known versions at execution. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
-    return _article_body_search(query, top_k, article_id)
-
-
-def _article_body_search(query: str, top_k: int, article_id: int | None) -> ToolResult:
-    """Use one verified retrieval implementation for discovery and scoped reading."""
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
 
