@@ -8,7 +8,9 @@ from urllib.parse import urlsplit
 
 from langchain_core.messages import ToolMessage
 
-from agent.domains.articles.reading import body_continuation
+from agent.domains.articles.reading import body_continuation, directory_targets
+from rag.reading import read_requests
+from rag.source import BodyPassage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
 CATALOG_TOOLS = frozenset({"list_notes", "get_top_notes", "list_admin_notes"})
@@ -103,6 +105,7 @@ class ArticleEvidence:
         self.documents: dict[int, str] = {}
         self.read_ranges: dict[int, list[dict]] = {}
         self.continuations: dict[int, dict] = {}
+        self.read_targets: list[dict] = []
         self.candidates: dict[int, str] = {}
         self.references: set[tuple[str, int]] = set()
         self.catalog_references: set[tuple[str, int]] = set()
@@ -116,6 +119,7 @@ class ArticleEvidence:
                 ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()
             },
             "continuations": {ident: dict(cursor) for ident, cursor in self.continuations.items()},
+            "read_targets": [dict(target) for target in self.read_targets],
         }
 
     @classmethod
@@ -132,6 +136,7 @@ class ArticleEvidence:
         evidence.continuations = {
             int(ident): dict(cursor) for ident, cursor in state.get("continuations", {}).items()
         }
+        evidence.read_targets = [dict(target) for target in state.get("read_targets", [])]
         evidence.references = {tuple(row) for row in state["references"]}
         evidence.catalog_references = {tuple(row) for row in state.get("catalog_references", [])}
         return evidence
@@ -173,22 +178,63 @@ class ArticleEvidence:
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")
             self.found |= kind == "ok" and bool(text.strip())
+            meta = ((value.artifact or {}).get("meta", {}) if isinstance(value, ToolMessage)
+                    else getattr(value, "meta", {}) or {})
+            if (kind == "ok" and isinstance(rows, list)
+                    and (meta.get("body_evidence") or {}).get("verified") is True):
+                for row in rows:
+                    if row.get("type") != "note":
+                        continue
+                    for target in read_requests(row):
+                        request = target["request"]
+                        self._remember_target(request)
+                        self._remember_target({**request, "offset": 0})
+                    for item in row.get("passages", []):
+                        passage = BodyPassage.model_validate(item)
+                        if passage.source.type == "note" and passage.source.id == row["id"]:
+                            self._observe_detail(row["id"], {
+                                "noteTitle": row["title"], "sectionText": passage.text,
+                                "source": passage.source.model_dump()})
         elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
               and type(args.get("article_id")) is int):
             self.continuations.pop(args["article_id"], None)
             if kind == "ok":
                 self._observe_detail(args.get("article_id"), payload(value))
+            else:
+                self.read_targets = [target for target in self.read_targets
+                                     if target["article_id"] != args["article_id"]]
 
-    def continuation_args(self, args):
-        """Bind only the observed next body page; explicit conflicting guards stay intact."""
+    def _remember_target(self, target):
+        selected = {key: target[key] for key in ("article_id", "revision", "section_schema")}
+        selected.update(doc_type=target.get("doc_type", "note"), view=target.get("view", "body"),
+                        section=target.get("section", ""), offset=target.get("offset", 0))
+        if selected not in self.read_targets:
+            self.read_targets.append(selected)
+
+    def bind_read_args(self, args):
+        """Bind verified coordinates, without choosing a document, section or action."""
         if type(args.get("article_id")) is not int:
             return args
         cursor = self.continuations.get(args.get("article_id"))
-        if (not cursor or args.get("doc_type", "note") != "note"
-                or args.get("view", "body") != "body" or args.get("section")
-                or type(args.get("offset")) is not int or args["offset"] != cursor["offset"]
-                or any(args.get(key) and args[key] != cursor[key]
-                       for key in ("revision", "section_schema"))):
+        if (cursor and args.get("doc_type", "note") == "note"
+                and args.get("view", "body") == "body" and not args.get("section")
+                and type(args.get("offset")) is int and args["offset"] == cursor["offset"]):
+            candidates = [cursor]
+        else:
+            selector = {"article_id": args["article_id"], "doc_type": args.get("doc_type", "note"),
+                        "view": args.get("view", "body"), "section": args.get("section", ""),
+                        "offset": args.get("offset", 0)}
+            if type(selector["offset"]) is not int:
+                return args
+            candidates = [target for target in self.read_targets
+                          if all(target[key] == value for key, value in selector.items())]
+        guards = {(row["revision"], row["section_schema"]) for row in candidates}
+        if len(guards) != 1:
+            return args
+        revision, schema = guards.pop()
+        cursor = {"revision": revision, "section_schema": schema}
+        if any(args.get(key) and args[key] != cursor[key]
+               for key in ("revision", "section_schema")):
             return args
         return {**args, **{key: cursor[key] for key in ("revision", "section_schema")
                           if not args.get(key)}}
@@ -196,6 +242,8 @@ class ArticleEvidence:
     def _observe_detail(self, ident, data):
         if not isinstance(data, dict) or type(ident) is not int or ident <= 0:
             return
+        for target in directory_targets(data, ident):
+            self._remember_target(target)
         body = body_text(data)
         if not body.strip():
             self._observe_metadata(ident, data)

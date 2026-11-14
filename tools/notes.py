@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """Public article, taxonomy and activity reads with bounded source evidence."""
 
 import json
@@ -13,7 +12,7 @@ from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
-from rag.reading import candidate_text, search_text
+from rag.reading import search_frame, search_text
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -24,7 +23,6 @@ from tools.result import (
     unavailable,
 )
 
-# Public exports; helper names stay private to their modules.
 __all__ = [
     "logger",
     "search_notes",
@@ -39,7 +37,6 @@ __all__ = [
 logger = logging.getLogger(__name__)
 
 
-# Resolve shared transports after module initialization.
 def _get(
     path: str, *, not_found_text: str = "", payload: dict | None = None
 ) -> dict | list | ToolResult:
@@ -143,7 +140,7 @@ def get_article_detail(
     offset: Annotated[
         StrictInt, Field(ge=0, le=2_147_483_647, description=_ARTICLE_OFFSET_DESC)
     ] = 0,
-    max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 12000,
+    max_chars: Annotated[StrictInt, Field(ge=1, le=24000, description=_ARTICLE_LIMIT_DESC)] = 24000,
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
     view: Literal["body", "outline", "metadata"] = "body",
@@ -242,8 +239,9 @@ def rag_search(
 ) -> str | ToolResult:
     """Locate evidence when the user requests answers based on this blog or an article.
     General knowledge without a blog/source requirement needs no retrieval.
-    Set article_id for a known source; results contain version-bound section and character
-    ranges for get_article_detail. Candidates are not body reads. For title/tag discovery
+    Set article_id for a known source. Verified passages are current public body evidence;
+    metadata-only candidates are not. Read more with the returned get_article_detail requests
+    only when the visible passages are insufficient. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
     from agent.runtime.budget import BudgetExceeded
@@ -297,13 +295,12 @@ def rag_search(
             except (InputProfileError, ValueError, KeyError) as error:
                 meta["context"] = {"mode": settings.rag_context_mode, "applied": False,
                                    "reason": type(error).__name__}
-        text = "\n".join(candidate_text(i + 1, hit) for i, hit in enumerate(hits))
-        if corpus["stale"]:
-            text += (
-                "\n注：语料刷新未完成，本次候选使用最近一次完整索引；正文读取仍核对当前公开版本。"
-            )
+        hits = get_index().read_passages(hits)
+        meta["body_evidence"] = {"verified": True, "scope": "returned_passages",
+                                 "returned_chars": sum(len(p["text"]) for hit in hits
+                                                       for p in hit["passages"])}
         return ok(
-            search_text(meta, text),
+            search_frame(hits, meta),
             data=hits,
             meta={
                 **meta,

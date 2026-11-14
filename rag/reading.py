@@ -1,9 +1,11 @@
 """Budget validated article frames without losing visible read cursors."""
 
 import json
-import math
 
-from rag.ranking import MATCH_FIELDS, source_excerpt
+from rag.context_windows import merge_read_windows
+from rag.ranking import source_excerpt
+from rag.sections import PARSER_VERSION
+from rag.source import BodyPassage, DocumentReference, SourceRange
 
 
 def article_frame_text(data):
@@ -14,103 +16,159 @@ def article_frame_text(data):
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
-def _source_hint(hit, label, ident, match):
-    path = match.get("section_path")
-    if isinstance(path, list) and path and all(isinstance(item, str) for item in path):
-        label = " > ".join(path)
-    label = str(label)[:180].replace("\n", " ").replace("\r", " ")
-    hint = f"命中节={label}"
-    if not ident or not hit.get("document_revision"):
-        return hint
-    hint += f" section={ident}"
-    offset, end = match.get("offset"), match.get("end")
-    window = match.get("read_window")
-    if (isinstance(window, dict) and type(offset) is int and type(end) is int
-            and type(window.get("offset")) is int and type(window.get("end")) is int
-            and 0 <= window["offset"] <= offset < end <= window["end"]
-            and window["end"] - window["offset"] <= 24000):
-        hint += f" index_range=[{offset}:{end}]"
-        offset, end = window["offset"], window["end"]
-    if type(offset) is int and offset >= 0:
-        hint += f" offset={offset}"
-        if type(end) is int and end > offset:
-            hint += f" max_chars={min(24000, end - offset)}"
-    scores = match.get("retrieval_scores") or {}
-    for method in ("bm25", "vector"):
-        score = scores.get(method)
-        if type(score) in (int, float) and math.isfinite(score):
-            hint += f" {method}={score:.6g}"
-    if "matched_fields" in match:
-        fields = [name for name in MATCH_FIELDS if name in match["matched_fields"]]
-        hint += " match_fields=" + (",".join(fields) or "none")
-    if excerpt := source_excerpt(match):
-        hint += (f" index_excerpt[{excerpt['offset']}:{excerpt['end']}]="
-                 + json.dumps(excerpt["text"], ensure_ascii=False))
-    return hint
+def read_requests(hit):
+    """The same complete read requests are used for presentation and guard binding."""
+    reads = []
+    try:
+        reference = DocumentReference(
+            type=hit["type"],
+            id=hit["id"],
+            revision=hit["document_revision"],
+            section_schema=hit["section_schema"],
+        )
+    except (KeyError, TypeError, ValueError):
+        return reads
+    if reference.section_schema != PARSER_VERSION:
+        return reads
+    matches = hit.get("matches") or []
+    for window in merge_read_windows(matches):
+        section = window["section_id"]
+        match = matches[window["priority"]]
+        source = SourceRange(
+            type=hit["type"],
+            id=hit["id"],
+            revision=hit["document_revision"],
+            section_schema=hit["section_schema"],
+            section_id=section,
+            offset=window["offset"],
+            end=window["end"],
+        )
+        if source.section_schema != PARSER_VERSION or source.end == source.offset:
+            raise ValueError("unsupported retrieval source coordinates")
+        args = {
+            "article_id": hit["id"],
+            "doc_type": hit["type"],
+            "section": section,
+            "offset": window["offset"],
+            "max_chars": min(24000, window["end"] - window["offset"]),
+            "revision": hit.get("document_revision"),
+            "section_schema": hit.get("section_schema"),
+        }
+        if args["revision"] and args["section_schema"]:
+            reads.append({"path": match.get("section_path", []), "request": args})
+    return reads
+
+
+def candidate_view(index, hit):
+    """Model-facing JSON uses executable read coordinates and verified body passages."""
+    reads = read_requests(hit)
+    passages = []
+    for value in hit.get("passages", []):
+        passage = BodyPassage.model_validate(value)
+        if (passage.source.type, passage.source.id, passage.source.revision) != (
+            hit["type"],
+            hit["id"],
+            hit.get("document_revision"),
+        ):
+            raise ValueError("passage does not belong to the candidate")
+        passages.append(passage.model_dump())
+    candidate = {
+        "rank": index,
+        "type": hit["type"],
+        "id": hit["id"],
+        "title": hit["title"][:255],
+        "titleTruncated": len(hit["title"]) > 255,
+        "passages": passages,
+        "read_requests": reads,
+    }
+    if not passages:
+        candidate["index_matches"] = [
+            {
+                **{
+                    key: match[key]
+                    for key in ("section_id", "section_path", "matched_fields", "retrieval_scores")
+                    if key in match
+                },
+                **({"index_excerpt": excerpt} if (excerpt := source_excerpt(match)) else {}),
+            }
+            for match in hit.get("matches", [])
+        ]
+    return candidate
 
 
 def candidate_text(index, hit):
-    title = hit["title"][:24].replace("\n", " ").replace("\r", " ")
-    text = f"{index}. type={hit['type']} id={hit['id']} rank={index} title={title}"
-    # One document version applies to every locator in this complete candidate entry.
-    if hit.get("document_revision"):
-        text += f" revision={hit['document_revision']}"
-        if hit.get("section_schema"):
-            text += f" section_schema={hit['section_schema']}"
-    identifiers = hit.get("section_ids") or []
-    sections = list(zip(hit.get("sections") or [], identifiers))
-    matches = hit.get("matches") or []
-    chosen = []
-    for label, ident in sections:
-        match = next((m for m in matches if m.get("section_id") == ident), {})
-        chosen.append((label, ident, match))
-    for match in matches:
-        label = next((label for label, ident in sections if ident == match.get("section_id")), None)
-        row = (label, match.get("section_id"), match)
-        if label is not None and row not in chosen and len(chosen) < max(3, len(sections)):
-            chosen.append(row)
-    if any(match.get("read_window") for match in matches):
-        from rag.context_windows import merge_read_windows
+    return json.dumps(candidate_view(index, hit), ensure_ascii=False, separators=(",", ":"))
 
-        chosen = [(next((label for label, ident in sections if ident == plan["section_id"]),
-                        plan["section_id"]), plan["section_id"],
-                   {**matches[plan["priority"]], "read_window": plan})
-                  for plan in merge_read_windows(matches)]
-    hints = [_source_hint(hit, *row) for row in chosen]
-    return text + ("\n  - " + "\n  - ".join(hints) if hints else "")
+
+def _search_fields(meta):
+    return {
+        key: meta[key]
+        for key in ("retrieval", "presentation", "context", "body_evidence")
+        if key in meta
+    }
+
+
+def search_frame(data, meta):
+    return json.dumps(
+        {
+            **_search_fields(meta),
+            "documents": [candidate_view(i + 1, hit) for i, hit in enumerate(data)],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
 
 
 def search_text(meta, text):
-    fields = {"retrieval": meta["retrieval"]}
-    if "presentation" in meta:
-        fields["presentation"] = meta["presentation"]
-    if "context" in meta:
-        fields["context"] = meta["context"]
-    coverage = json.dumps(fields,
-                          ensure_ascii=False, separators=(",", ":"))
-    return coverage + "\n" + text
+    return json.dumps(
+        {**_search_fields(meta), "message": text}, ensure_ascii=False, separators=(",", ":")
+    )
 
 
-def render_search_result(data, text, meta, cap):
-    """Keep complete candidate entries and expose only their visible data to the agent."""
+def render_search_result(data, meta, cap):
+    """Retain complete ranked sources; unshown passages never establish read evidence."""
     from tools.result import ok, unavailable
 
-    if len(text) <= cap:
-        return ok(text, meta=meta, data=data)
+    def present(rows):
+        visible_meta = dict(meta)
+        if len(rows) < len(data):
+            visible_meta["presentation"] = {
+                "shown_candidates": len(rows),
+                "omitted_candidates": len(data) - len(rows),
+            }
+        if "body_evidence" in meta:
+            visible_meta["body_evidence"] = {
+                **meta["body_evidence"],
+                "returned_chars": sum(
+                    len(p["text"]) for row in rows for p in row.get("passages", [])
+                ),
+            }
+        body = search_frame(rows, visible_meta)
+        return ok(body, meta=visible_meta, data=rows) if len(body) <= cap else None
+
     try:
-        entries = [candidate_text(i + 1, row) for i, row in enumerate(data)]
-    except (KeyError, TypeError):
-        return unavailable("Invalid retrieval source representation."[:cap],
-                           meta={**meta, "reason": "invalid_retrieval_data"})
-    for size in range(len(entries) - 1, 0, -1):
-        visible_meta = {**meta, "presentation": {
-            "shown_candidates": size, "omitted_candidates": len(entries) - size}}
-        body = search_text(visible_meta, "\n".join(entries[:size]))
-        if len(body) <= cap:
-            return ok(body, meta=visible_meta, data=data[:size])
-    return unavailable("本轮剩余上下文不足以展示完整检索定位，请缩小范围后重试。"[:cap],
-                       meta={**meta, "reason": "presentation_budget", "presentation": {
-                           "shown_candidates": 0, "omitted_candidates": len(data)}})
+        for size in range(len(data), 0, -1):
+            if result := present(data[:size]):
+                return result
+        if data:
+            first = {**data[0], "passages": list(data[0].get("passages", []))}
+            while first["passages"]:
+                first["passages"].pop()
+                if result := present([first]):
+                    return result
+    except (KeyError, TypeError, ValueError):
+        return unavailable(
+            "Invalid retrieval source representation."[:cap],
+            meta={**meta, "reason": "invalid_retrieval_data"},
+        )
+    return unavailable(
+        "本轮剩余上下文不足以展示完整检索定位，请缩小范围后重试。"[:cap],
+        meta={
+            **meta,
+            "reason": "presentation_budget",
+            "presentation": {"shown_candidates": 0, "omitted_candidates": len(data)},
+        },
+    )
 
 
 def _outline_frame(data, cap):

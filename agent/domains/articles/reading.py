@@ -15,27 +15,15 @@ from pydantic import (
 
 from agent.domains.article_metadata import tag_references
 from rag import sections
+from rag.source import Digest, DocumentReference, Kind, SourceRange
 
-Kind = Literal["note", "talk", "board", "announcement"]
 Count = Annotated[StrictInt, Field(ge=0)]
-Digest = Annotated[StrictStr, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class Section(BaseModel):
     id: Annotated[StrictStr, Field(pattern=r"^s[1-9][0-9]*$")]
     title: Annotated[StrictStr, Field(max_length=200)]
     path: Annotated[list[Annotated[StrictStr, Field(max_length=200)]], Field(max_length=6)]
-
-
-class Source(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    type: Kind
-    id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)]
-    revision: Digest
-    section_schema: StrictStr
-    section_id: Annotated[StrictStr, Field(pattern=r"^(?:s[1-9][0-9]*)?$")]
-    offset: Count
-    end: Count
 
 
 class DisplayMetadata(BaseModel):
@@ -92,7 +80,7 @@ class Page(BaseModel):
     sectionCount: Count
     sectionsOffset: Count
     nextSectionsOffset: Count | None
-    source: Source | None
+    source: SourceRange | None
     metadata: dict = Field(default_factory=dict)
     readSection: StrictStr | None = None
     note: StrictStr | None = None
@@ -174,7 +162,7 @@ def _article_metadata(metadata):
 def body_continuation(data, identifier):
     """Extract a cursor only from the validated body range actually shown to the model."""
     try:
-        source = Source.model_validate(data.get("source"))
+        source = SourceRange.model_validate(data.get("source"))
     except ValueError:
         return None
     body = data.get("noteContent")
@@ -190,6 +178,32 @@ def body_continuation(data, identifier):
         return None
     return {"offset": source.end, "revision": source.revision,
             "section_schema": source.section_schema}
+
+
+def directory_targets(data, identifier):
+    """Bind only sections and directory cursors actually visible in a validated page."""
+    if data.get("noteId") != identifier or data.get("view") not in {"body", "outline"}:
+        return []
+    try:
+        reference = DocumentReference(type="note", id=identifier,
+                                      revision=data["contentRevision"],
+                                      section_schema=data["sectionSchema"])
+        rows = [Section.model_validate(row) for row in data["sections"]]
+        start, count = data["sectionsOffset"], data["sectionCount"]
+        if (reference.section_schema != sections.PARSER_VERSION
+                or type(start) is not int or type(count) is not int
+                or not 0 <= start <= start + len(rows) <= count):
+            return []
+    except (KeyError, TypeError, ValueError):
+        return []
+    base = {"article_id": identifier, "doc_type": "note",
+            "revision": reference.revision, "section_schema": reference.section_schema}
+    targets = [{**base, "view": "body", "section": row.id, "offset": 0} for row in rows]
+    next_offset = data.get("nextSectionsOffset")
+    if (type(next_offset) is int and rows and next_offset == start + len(rows)
+            and next_offset < count):
+        targets.append({**base, "view": "outline", "section": "", "offset": next_offset})
+    return targets
 
 
 def project(value, kind, identifier, section, offset, limit, revision, section_schema, view="body"):

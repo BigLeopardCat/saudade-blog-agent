@@ -70,7 +70,8 @@ def coverage(result):
 
 @pytest.mark.parametrize("changed_snapshot", [False, True])
 def test_context_expansion_uses_verified_snapshot_without_extra_http(
-        retrieval, monkeypatch, changed_snapshot):
+    retrieval, monkeypatch, changed_snapshot
+):
     index, requests = retrieval
     hit = index._lexical_ranked("needle", 8)[0]
     hit["matches"] = [{"section_id": "s1", "offset": 0, "end": 6}]
@@ -80,21 +81,31 @@ def test_context_expansion_uses_verified_snapshot_without_extra_http(
     if changed_snapshot:
         monkeypatch.setattr(index, "_revision", "different-snapshot")
     result = notes.rag_search.invoke({"query": "needle"})
-    assert len(requests) == 1 and result.kind == "ok"
+    assert len(requests) == 1
+    if changed_snapshot:
+        assert result.kind == "unavailable" and result.data is None
+        return
+    assert result.kind == "ok"
     assert "read_window" not in hit["matches"][0]
     header = json.loads(str(result).partition("\n")[0])
     assert header["context"]["applied"] is not changed_snapshot
-    if changed_snapshot:
-        assert "read_window" not in result.data[0]["matches"][0]
-    else:
-        match = result.data[0]["matches"][0]
-        assert match["end"] == 6 and match["read_window"]["end"] == 15
-        assert "index_range=[0:6] offset=0 max_chars=15" in str(result)
+    match = result.data[0]["matches"][0]
+    assert match["end"] == 6 and match["read_window"]["end"] == 15
+    assert result.data[0]["passages"][0]["text"] == "needle evidence"
+    assert json.loads(str(result))["documents"][0]["read_requests"][0]["request"]["max_chars"] == 15
 
 
 @pytest.mark.parametrize(
-    "reason", ["query_embed_failed", "warming", "stale_view", "corpus_changed",
-               "missing_vector_database", "vector_database_unavailable", "vector_dimension_changed"]
+    "reason",
+    [
+        "query_embed_failed",
+        "warming",
+        "stale_view",
+        "corpus_changed",
+        "missing_vector_database",
+        "vector_database_unavailable",
+        "vector_dimension_changed",
+    ],
 )
 @pytest.mark.parametrize("query,kind", [("unseen-term", "unavailable"), ("needle", "ok")])
 def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negative(
@@ -108,8 +119,10 @@ def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negati
     assert state["mode"] == "degraded" and state["semantic"] == "incomplete"
     if kind == "ok":
         expected = index._lexical_ranked(query, 8)
-        assert result.data == expected and result.data[0]["matches"]
-        assert "section=s1 " in str(result) and "revision=" in str(result)
+        assert [{k: v for k, v in r.items() if k != "passages"} for r in result.data] == expected
+        assert result.data[0]["matches"] and result.data[0]["passages"]
+        read = json.loads(str(result))["documents"][0]["read_requests"][0]["request"]
+        assert read["section"] == "s1" and read["revision"] == expected[0]["document_revision"]
         assert len(requests) == 1
     else:
         assert not result.data and not requests
@@ -262,6 +275,7 @@ def test_embedding_503_coverage_survives_the_actual_model_sdk_wire(
     assert state["mode"] == "degraded" and state["semantic"] == "incomplete"
     assert state["scope"] == "public_article_body_index"
     if query == "needle":
-        assert len(visibility_requests) == 1 and "type=note id=1" in observed["content"]
+        assert len(visibility_requests) == 1
+        assert json.loads(observed["content"])["documents"][0]["id"] == 1
     else:
         assert not visibility_requests and "不能据此判断无相关文章" in observed["content"]

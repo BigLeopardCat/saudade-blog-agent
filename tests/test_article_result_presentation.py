@@ -10,7 +10,8 @@ from langchain_core.messages import ToolMessage
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime import tool_execution
 from agent.runtime.session import ToolSession
-from rag.reading import candidate_text, render_search_result, search_text
+from rag.reading import candidate_text, render_search_result, search_frame
+from rag.sections import PARSER_VERSION
 from rag.vector_index import rrf_fuse
 from tools.notes import rag_search
 
@@ -21,7 +22,7 @@ def hit(ident=1, sections=("s1",), ranges=None):
         "id": ident,
         "title": "Synthetic source",
         "document_revision": "a" * 64,
-        "section_schema": "test-schema",
+        "section_schema": PARSER_VERSION,
         "sections": ["重复标题"] * len(sections),
         "section_ids": list(sections),
         "matches": ranges
@@ -34,7 +35,9 @@ def test_section_rrf_does_not_let_three_lexical_sections_hide_the_dense_target()
     assert row["section_ids"] == ["s1", "s22", "s2", "s3"]
     assert len(row["matches"]) == 4
     wire = candidate_text(1, row)
-    assert all(f"section={section} " in wire for section in row["section_ids"])
+    assert {r["request"]["section"] for r in json.loads(wire)["read_requests"]} == set(
+        row["section_ids"]
+    )
 
 
 def test_ranked_union_retains_the_second_dense_section_and_its_readable_range():
@@ -45,16 +48,18 @@ def test_ranked_union_retains_the_second_dense_section_and_its_readable_range():
     assert set(row["section_ids"]) == {"s2", "s3", "s6", "s19", "s22"}
     assert {match["section_id"] for match in row["matches"]} == set(row["section_ids"])
     wire = candidate_text(1, row)
-    assert "section=s22 " in wire and "offset=0 max_chars=40" in wire
-    assert f"revision={row['document_revision']}" in wire
+    reads = [item["request"] for item in json.loads(wire)["read_requests"]]
+    assert any(r["section"] == "s22" and r["offset"] == 0 and r["max_chars"] == 40 for r in reads)
+    assert all(r["revision"] == row["document_revision"] for r in reads)
 
 
 def test_disjoint_retrievers_keep_all_six_bounded_sections_visible():
-    row = rrf_fuse([hit(sections=("s1", "s2", "s3"))],
-                   [hit(sections=("s4", "s5", "s6"))], 60, 1)[0]
+    row = rrf_fuse([hit(sections=("s1", "s2", "s3"))], [hit(sections=("s4", "s5", "s6"))], 60, 1)[0]
     assert len(row["section_ids"]) == len(row["matches"]) == 6
     wire = candidate_text(1, row)
-    assert all(f"section=s{number} " in wire for number in range(1, 7))
+    assert {r["request"]["section"] for r in json.loads(wire)["read_requests"]} == {
+        f"s{n}" for n in range(1, 7)
+    }
 
 
 def test_range_rrf_keeps_a_deep_dense_match_within_one_long_section():
@@ -62,7 +67,10 @@ def test_range_rrf_keeps_a_deep_dense_match_within_one_long_section():
     dense = hit(ranges=[{"section_id": "s1", "offset": 30000, "end": 30040}])
     row = rrf_fuse([lexical], [dense], 60, 1)[0]
     assert [match["offset"] for match in row["matches"]] == [0, 30000, 500]
-    assert "offset=30000 max_chars=40" in candidate_text(1, row)
+    assert any(
+        r["request"]["offset"] == 30000 and r["request"]["max_chars"] == 40
+        for r in json.loads(candidate_text(1, row))["read_requests"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -80,15 +88,15 @@ def test_rrf_never_reuses_invalid_character_coordinates():
     ]
     row = rrf_fuse([hit(ranges=invalid)], [hit()], 60, 1)[0]
     assert row["matches"] == [{"section_id": "s1", "offset": 0, "end": 40}]
-    assert "offset=0 max_chars=40" in candidate_text(1, row)
+    assert json.loads(candidate_text(1, row))["read_requests"][0]["request"]["offset"] == 0
 
 
 def test_candidate_budget_keeps_whole_visible_entries_and_their_evidence():
     rows = [hit(1), hit(2), hit(3)]
     meta = {"retrieval": {"route": "hybrid"}}
-    text = search_text(meta, "\n".join(candidate_text(i + 1, row) for i, row in enumerate(rows)))
+    text = search_frame(rows, meta)
     cap = len(text) - 100
-    presented = render_search_result(rows, text, meta, cap)
+    presented = render_search_result(rows, meta, cap)
     assert presented.kind == "ok" and 0 < len(presented.data) < len(rows)
     assert len(presented.text) <= cap
     assert presented.meta["presentation"] == {
@@ -97,8 +105,9 @@ def test_candidate_budget_keeps_whole_visible_entries_and_their_evidence():
     }
     for index, row in enumerate(presented.data):
         assert candidate_text(index + 1, row) in presented.text
-    for row in rows[len(presented.data) :]:
-        assert f"id={row['id']} " not in presented.text
+    assert [r["id"] for r in json.loads(presented.text)["documents"]] == [
+        r["id"] for r in presented.data
+    ]
 
 
 def execute(monkeypatch, source, limit, *, upgrade=False):

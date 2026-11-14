@@ -1,5 +1,6 @@
 """Candidates distinguish source fields while preserving every ranked read locator."""
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -15,7 +16,7 @@ from rag import search
 from rag.chunks import split
 from rag.corpus import content_revision
 from rag.ranking import EXCERPT_CHARS, documents, source_excerpt
-from rag.reading import candidate_text, render_search_result, search_text
+from rag.reading import candidate_text, render_search_result, search_frame
 from rag.sections import outline
 from rag.tokenization import tokenize
 from rag.vector_index import rrf_fuse
@@ -44,29 +45,33 @@ def test_title_only_background_is_retained_but_not_presented_as_a_body_match():
     assert len(hit["matches"]) == 3 and len(weak) == 2
     assert len({match["section_id"] for match in hit["matches"]}) == 3
     assert strong["retrieval_scores"]["bm25"] > max(
-        match["retrieval_scores"]["bm25"] for match in weak)
+        match["retrieval_scores"]["bm25"] for match in weak
+    )
     assert FACT in strong["excerpt"]["text"]
     sections = {row["section_id"]: row["text"] for row in outline(body)}
     for match in hit["matches"]:
         excerpt = source_excerpt(match)
         assert excerpt and len(excerpt["text"]) <= EXCERPT_CHARS
-        assert sections[match["section_id"]][excerpt["offset"]:excerpt["end"]] == excerpt["text"]
+        assert sections[match["section_id"]][excerpt["offset"] : excerpt["end"]] == excerpt["text"]
         assert "_source_index" not in match
     wire = candidate_text(1, hit)
-    assert "match_fields=title,body" in wire and "match_fields=title index_excerpt" in wire
-    assert "bm25=" in wire and FACT in wire
-    assert all(f"section={match['section_id']} " in wire for match in hit["matches"])
+    projected = json.loads(wire)["index_matches"]
+    assert [m["matched_fields"] for m in projected] == [m["matched_fields"] for m in hit["matches"]]
+    assert all("bm25" in m["retrieval_scores"] for m in projected) and FACT in wire
+    assert {m["section_id"] for m in projected} == set(hit["section_ids"])
 
 
 def test_different_chapters_keep_their_own_relevant_excerpts_and_locations():
     body = "## 租约取消\n运行时通过取消信号释放租约。\n## 回执幂等\n业务执行账保存回执并去重。\n"
     hit = index_for(body, "运行材料")._lexical_ranked("租约取消 回执幂等", 1)[0]
     assert set(hit["section_ids"]) == {"s1", "s2"}
-    assert all("body" in match["matched_fields"] or "heading" in match["matched_fields"]
-               for match in hit["matches"])
+    assert all(
+        "body" in match["matched_fields"] or "heading" in match["matched_fields"]
+        for match in hit["matches"]
+    )
     wire = candidate_text(1, hit)
     assert "运行时通过取消信号释放租约" in wire and "业务执行账保存回执并去重" in wire
-    assert "section=s1 " in wire and "section=s2 " in wire
+    assert {m["section_id"] for m in json.loads(wire)["index_matches"]} == {"s1", "s2"}
 
 
 def test_candidate_versions_stay_with_their_document_and_do_not_mutate_evidence():
@@ -75,11 +80,12 @@ def test_candidate_versions_stay_with_their_document_and_do_not_mutate_evidence(
     second = {**deepcopy(first), "id": 2, "document_revision": "b" * 64}
     before = deepcopy([first, second])
     meta = {"retrieval": {"route": "lexical"}}
-    text = search_text(meta, candidate_text(1, first) + "\n" + candidate_text(2, second))
-    shown = render_search_result([first, second], text, meta, len(text) - 1)
+    text = search_frame([first, second], meta)
+    shown = render_search_result([first, second], meta, len(text) - 1)
     assert shown.kind == "ok" and shown.data == [first]
-    assert "revision=" + "a" * 64 in shown.text
-    assert "revision=" + "b" * 64 not in shown.text
+    reads = json.loads(shown.text)["documents"][0]["read_requests"]
+    assert reads and all(r["request"]["revision"] == "a" * 64 for r in reads)
+    assert len(json.loads(shown.text)["documents"]) == 1
     assert [first, second] == before
 
 
@@ -114,7 +120,10 @@ def test_fusion_merges_same_location_scores_without_mutation_or_mixing_score_sca
     assert len(result["matches"]) == 1
     assert match["retrieval_scores"] == {"bm25": 4.5, "vector": 0.7}
     assert source_excerpt(match) == source_excerpt(lexical["matches"][0])
-    assert "bm25=4.5 vector=0.7" in candidate_text(1, result)
+    assert json.loads(candidate_text(1, result))["index_matches"][0]["retrieval_scores"] == {
+        "bm25": 4.5,
+        "vector": 0.7,
+    }
     assert "score" not in result and (lexical, dense) == before
 
 
@@ -129,7 +138,10 @@ def test_dense_location_and_its_excerpt_survive_three_lexical_locations():
     match = next(row for row in result["matches"] if row["section_id"] == "s22")
     assert match["offset"] == 30000 and source_excerpt(match) == dense["matches"][0]["excerpt"]
     wire = candidate_text(1, result)
-    assert "section=s22 " in wire and "index_excerpt[30000:" in wire
+    assert any(
+        m["section_id"] == "s22" and m["index_excerpt"]["offset"] == 30000
+        for m in json.loads(wire)["index_matches"]
+    )
 
 
 def test_fusion_rejects_conflicting_source_text_for_one_version_and_range():
@@ -141,13 +153,24 @@ def test_fusion_rejects_conflicting_source_text_for_one_version_and_range():
 
 def test_semantic_locator_without_literal_overlap_stays_visible():
     text = "调度器在退出时释放许可。"
-    chunk = {"type": "note", "id": 1, "title": "材料", "section": "机制", "section_id": "s1",
-             "text": text, "start": 0, "end": len(text), "revision": "a" * 64}
-    hit = documents([chunk], {0: 0.8}, "corpus", retriever="vector",
-                    query_terms=tokenize("worker cancellation"))[0]
+    chunk = {
+        "type": "note",
+        "id": 1,
+        "title": "材料",
+        "section": "机制",
+        "section_id": "s1",
+        "text": text,
+        "start": 0,
+        "end": len(text),
+        "revision": "a" * 64,
+    }
+    hit = documents(
+        [chunk], {0: 0.8}, "corpus", retriever="vector", query_terms=tokenize("worker cancellation")
+    )[0]
     assert hit["matches"][0]["matched_fields"] == []
     wire = candidate_text(1, hit)
-    assert "vector=0.8 match_fields=none" in wire and chunk["text"] in wire
+    assert json.loads(wire)["index_matches"][0]["retrieval_scores"] == {"vector": 0.8}
+    assert json.loads(wire)["index_matches"][0]["matched_fields"] == [] and chunk["text"] in wire
 
 
 def test_index_excerpt_does_not_become_live_body_read_evidence():
@@ -160,54 +183,80 @@ def test_index_excerpt_does_not_become_live_body_read_evidence():
     assert evidence.documents == {} and evidence.read_ranges == {}
 
 
-@pytest.mark.parametrize("excerpt", [
-    {"offset": None, "end": 2, "text": "ab"},
-    {"offset": 0, "end": None, "text": "ab"},
-    {"offset": True, "end": 2, "text": "ab"},
-    {"offset": -1, "end": 1, "text": "ab"},
-    {"offset": 0, "end": 1, "text": "ab"},
-    {"offset": 0, "end": EXCERPT_CHARS + 1, "text": "x" * (EXCERPT_CHARS + 1)},
-    {"offset": 500, "end": 502, "text": "ab"},
-])
+@pytest.mark.parametrize(
+    "excerpt",
+    [
+        {"offset": None, "end": 2, "text": "ab"},
+        {"offset": 0, "end": None, "text": "ab"},
+        {"offset": True, "end": 2, "text": "ab"},
+        {"offset": -1, "end": 1, "text": "ab"},
+        {"offset": 0, "end": 1, "text": "ab"},
+        {"offset": 0, "end": EXCERPT_CHARS + 1, "text": "x" * (EXCERPT_CHARS + 1)},
+        {"offset": 500, "end": 502, "text": "ab"},
+    ],
+)
 def test_invalid_excerpt_coordinates_are_never_upgraded_to_visible_source_evidence(excerpt):
     hit = ranked("bm25")
     match = hit["matches"][0]
     match["excerpt"] = excerpt
     assert source_excerpt(match) is None
-    assert "index_excerpt[" not in candidate_text(1, hit)
+    assert "index_excerpt" not in json.loads(candidate_text(1, hit))["index_matches"][0]
 
 
 def test_bad_chunk_ranges_do_not_create_an_excerpt_and_budgeting_keeps_whole_candidates():
-    chunk = {"type": "note", "id": 1, "title": "材料", "section": "配置",
-             "text": "body", "start": 0, "end": 999}
+    chunk = {
+        "type": "note",
+        "id": 1,
+        "title": "材料",
+        "section": "配置",
+        "text": "body",
+        "start": 0,
+        "end": 999,
+    }
     invalid = documents([chunk], {0: 1}, "corpus", query_terms=["body"])[0]
     assert "excerpt" not in invalid["matches"][0]
     first = ranked("bm25")
     second = {**ranked("vector"), "id": 2}
     meta = {"retrieval": {"mode": "hybrid"}}
-    text = search_text(meta, candidate_text(1, first) + "\n" + candidate_text(2, second))
-    shown = render_search_result([first, second], text, meta, len(text) - 1)
+    text = search_frame([first, second], meta)
+    shown = render_search_result([first, second], meta, len(text) - 1)
     assert shown.kind == "ok" and shown.data == [first]
-    assert candidate_text(1, first) in shown.text and "id=2 " not in shown.text
+    assert candidate_text(1, first) in shown.text and len(json.loads(shown.text)["documents"]) == 1
 
 
 @pytest.mark.parametrize("token_limit", [None, 4096])
 def test_full_tool_frame_keeps_multiple_documents_or_reports_exact_omissions(
-        monkeypatch, token_limit):
+    monkeypatch, token_limit
+):
     chunks = []
     for ident in range(1, 9):
         title = "公开技术材料" + str(ident)
-        body = "".join(f"## 章节{n}\n{QUERY}：{FACT}\n" + "其他证据背景。" * 100 + "\n"
-                       for n in range(1, 4))
-        chunks.extend({**chunk, "type": "note", "id": ident, "title": title,
-                       "revision": content_revision(title, body)} for chunk in split(title, body))
-    hits = documents(chunks, {index: 1.0 for index in range(len(chunks))}, "corpus",
-                     query_terms=tokenize(QUERY), limit=8)
+        body = "".join(
+            f"## 章节{n}\n{QUERY}：{FACT}\n" + "其他证据背景。" * 100 + "\n" for n in range(1, 4)
+        )
+        chunks.extend(
+            {
+                **chunk,
+                "type": "note",
+                "id": ident,
+                "title": title,
+                "revision": content_revision(title, body),
+            }
+            for chunk in split(title, body)
+        )
+    hits = documents(
+        chunks,
+        {index: 1.0 for index in range(len(chunks))},
+        "corpus",
+        query_terms=tokenize(QUERY),
+        limit=8,
+    )
     assert len(hits) == 8 and all(len(hit["matches"]) == 3 for hit in hits)
     meta = {"retrieval": {"mode": "lexical", "limit": 8}}
-    text = search_text(meta, "\n".join(candidate_text(i + 1, hit) for i, hit in enumerate(hits)))
-    message = ToolMessage(content=text, tool_call_id="search", artifact={
-        "kind": "ok", "data": hits, "meta": meta})
+    text = search_frame(hits, meta)
+    message = ToolMessage(
+        content=text, tool_call_id="search", artifact={"kind": "ok", "data": hits, "meta": meta}
+    )
     if token_limit is not None:
         monkeypatch.setattr(settings, "agent_tool_result_tokens", token_limit)
     session = ToolSession(Capture(), config(), {"rag_search": rag_search}, {})
@@ -216,7 +265,10 @@ def test_full_tool_frame_keeps_multiple_documents_or_reports_exact_omissions(
     shown = middleware.render_result({"name": "rag_search", "args": {"query": QUERY}}, message, cap)
     visible = shown.artifact["data"]
     assert shown.status == "success" and shown.artifact["kind"] == "ok"
-    assert len(shown.content) <= cap and shown.content.count("index_excerpt[") == 3 * len(visible)
+    assert len(shown.content) <= cap
+    assert sum(len(d["index_matches"]) for d in json.loads(shown.content)["documents"]) == 3 * len(
+        visible
+    )
     assert set(middleware.evidence.candidates) == {hit["id"] for hit in visible}
     assert middleware.evidence.documents == {} and middleware.evidence.read_ranges == {}
     for i, hit in enumerate(visible):
@@ -228,4 +280,6 @@ def test_full_tool_frame_keeps_multiple_documents_or_reports_exact_omissions(
         expected = {"shown_candidates": len(visible), "omitted_candidates": 8 - len(visible)}
         assert shown.artifact["meta"]["presentation"] == expected
         assert '"presentation":' in shown.content
-        assert all(f"id={hit['id']} " not in shown.content for hit in hits[len(visible):])
+        assert {d["id"] for d in json.loads(shown.content)["documents"]} == {
+            h["id"] for h in visible
+        }

@@ -226,6 +226,17 @@ class RagIndex:
         with self._lock:
             return list(self._docs)
 
+    def read_passages(self, hits):
+        """Resolve ranges against one immutable snapshot, without another body fetch."""
+        from rag.passages import attach_passages
+
+        wanted = {(hit["type"], hit["id"]) for hit in hits}
+        with self._lock:
+            revision = self._revision
+            sources = {(row["type"], row["id"]): row for row in self._docs
+                       if (row["type"], row["id"]) in wanted}
+        return attach_passages(hits, sources, revision)
+
     def read_context(self, hits, *, mode="parent", max_tokens=1024):
         """Expand only locators tied to this complete snapshot, without another source fetch."""
         from rag.context_windows import expand_context
