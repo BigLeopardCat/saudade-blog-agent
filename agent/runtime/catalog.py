@@ -14,11 +14,8 @@ def capability_overview(initial, domains):
         return {
             "coverage": "current_tool_catalog",
             "grants_authorization": False,
-            "initial_tools": [{"name": name, "summary": tool.description.split("\n", 1)[0]}
-                              for name, tool in initial.items()],
-            "domains": [{"name": name, "tools": {
-                tool_name: tool.description.split("\n", 1)[0]
-                for tool_name, tool in tools.items()}}
+            "initial_tools": list(initial),
+            "domains": [{"name": name, "tools": list(tools)}
                         for name, tools in domains.items() if tools],
         }
 

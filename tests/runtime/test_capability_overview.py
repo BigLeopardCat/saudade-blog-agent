@@ -31,9 +31,6 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
     assert overview["grants_authorization"] is False
     assert {row["name"]: list(row["tools"]) for row in overview["domains"]} == {
         name: list(tools) for name, tools in domains.items() if tools}
-    for row in overview["domains"]:
-        for name, summary in row["tools"].items():
-            assert summary == domains[row["name"]][name].description.split("\n", 1)[0]
     shown = {name for row in overview["domains"] for name in row["tools"]}
     assert ("prepare_user_notice" in shown) == (role == "admin" and available)
     assert ("get_moderation_status" in shown) == (role == "admin")
@@ -53,6 +50,10 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
     assert overview_size < schema_size / 4
     schema = convert_to_openai_tool(initial["get_agent_capabilities"])
     assert not schema["function"]["parameters"].get("properties")
+    detailed = [{name: tool.description for name, tool in tools.items()}
+                for tools in domains.values()]
+    assert len(text) < len(json.dumps(detailed, ensure_ascii=False)) / 2
+
 
 
 def test_real_sdk_answers_from_one_catalog_read_without_loading_or_executing_domains():
