@@ -138,3 +138,12 @@ def test_model_projection_shares_one_version_without_losing_readable_coordinates
         args = request["request"]
         assert args["article_id"] == doc["source"]["id"]
         assert args["doc_type"] == doc["source"]["type"]
+
+
+def test_presentation_rejects_a_parser_identity_disagreement(source):
+    _, index, hits = source
+    rows = index.read_passages(hits)
+    rows[0]["section_schema"] = "different-parser"
+    result = render_search_result(rows, {"body_evidence": {"verified": True}}, 24000)
+    assert result.kind == "unavailable" and result.data is None
+    assert result.meta["reason"] == "invalid_retrieval_data"

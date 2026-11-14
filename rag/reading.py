@@ -65,10 +65,12 @@ def candidate_view(index, hit):
     passages = []
     for value in hit.get("passages", []):
         passage = BodyPassage.model_validate(value)
-        if (passage.source.type, passage.source.id, passage.source.revision) != (
+        if (passage.source.type, passage.source.id, passage.source.revision,
+                passage.source.section_schema) != (
             hit["type"],
             hit["id"],
             hit.get("document_revision"),
+            hit.get("section_schema"),
         ):
             raise ValueError("passage does not belong to the candidate")
         passages.append(
