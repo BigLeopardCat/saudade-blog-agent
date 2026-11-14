@@ -2,7 +2,9 @@
 
 面向博客的工具助手「泠月喵」：查找和解读文章、页面操作、管理员协作编辑，以及经过人工确认的业务写入。使用 FastAPI、LangChain `create_agent`、LangGraph 和 PostgreSQL；后台计划使用 DBOS。
 
-项目当前为 **0.2 Beta**。发布目标与已取得的成绩分别管理，见[发布验收](docs/release-acceptance.md)。
+正式版本为 **0.2.0**。验证范围、已知限制及冻结结果见
+[版本发布](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.2.0)；
+评测标准见[发布验收](docs/release-acceptance.md)。
 
 ## 能力
 

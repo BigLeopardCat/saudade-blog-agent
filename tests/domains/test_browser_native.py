@@ -478,7 +478,8 @@ def test_bound_navigation_schema_preserves_the_tool_applicability_contract():
 
     bound = convert_to_openai_tool(browser.tools(_config())["navigate_page"])["function"]
     assert bound["description"].startswith(browser.navigate_page.description)
-    assert "read-only tasks" in bound["description"]
+    assert "read_public_page" in bound["description"]
+    assert "preview" not in bound["parameters"]["properties"]
     assert "/guestbook" in bound["description"] and "/dashboard" not in bound["description"]
 
 

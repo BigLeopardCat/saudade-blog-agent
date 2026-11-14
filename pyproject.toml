@@ -9,7 +9,7 @@ license = "MIT"
 authors = [{ name = "BigLeopardCat", email = "132721665+BigLeopardCat@users.noreply.github.com" }]
 keywords = ["llm", "agent", "langgraph", "rag", "chatbot", "fastapi"]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",

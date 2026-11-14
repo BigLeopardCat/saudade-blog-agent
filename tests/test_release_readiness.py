@@ -148,11 +148,49 @@ def test_evidence_faults_never_pass(tmp_path, fault):
 
 def test_efficiency_regression_blocks_despite_good_semantic_results(tmp_path):
     report, profile, semantic, trace = fixture(tmp_path)
+    policy = json.loads(profile.read_bytes())
+    policy.update(version=1, diagnostic_metrics=[])
+    profile.write_text(json.dumps(policy))
     doc = json.loads(trace.read_bytes())
     doc["events"][-1]["input"] = 9000
     trace.write_text(json.dumps(doc))
+    source = json.loads(report.read_bytes())
+    source["evaluator_sha256"]["release_profile.json"] = hashlib.sha256(
+        profile.read_bytes()).hexdigest()
+    for case in source["cases"]:
+        case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = hashlib.sha256(
+            trace.read_bytes()).hexdigest()
+    report.write_text(json.dumps(source))
+    write_review(report, semantic)
     got = assess(report, semantic_path=semantic, profile_path=profile)
     assert any(f["gate"] == "chat.in" for f in got["failures"])
+    assert not any(f["gate"] == "trace_integrity" for f in got["failures"])
+
+
+def test_current_profile_reports_input_cost_without_calling_it_a_quality_failure(tmp_path):
+    report, profile, semantic, trace = fixture(tmp_path)
+    doc = json.loads(trace.read_bytes())
+    doc["events"][-1]["input"] = 9000
+    trace.write_text(json.dumps(doc))
+    source = json.loads(report.read_bytes())
+    for case in source["cases"]:
+        case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = hashlib.sha256(
+            trace.read_bytes()).hexdigest()
+    report.write_text(json.dumps(source))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "http_checks_passed" and not got["failures"]
+    assert [finding["gate"] for finding in got["efficiency_findings"]] == ["chat.in"]
+
+
+@pytest.mark.parametrize("metrics", [["elapsed_s"], ["first_reply_s"], ["in", "in"], False])
+def test_diagnostic_policy_cannot_demote_latency_or_other_release_gates(tmp_path, metrics):
+    report, profile, semantic, _ = fixture(tmp_path)
+    policy = json.loads(profile.read_bytes())
+    policy["diagnostic_metrics"] = metrics
+    profile.write_text(json.dumps(policy))
+    with pytest.raises(ValueError, match="only model calls"):
+        assess(report, semantic_path=semantic, profile_path=profile)
 
 
 def test_missing_critical_cases_and_incomplete_runs_are_unverified(tmp_path):

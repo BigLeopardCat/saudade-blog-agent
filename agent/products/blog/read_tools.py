@@ -116,6 +116,7 @@ def public_domains() -> dict:
                                   public_catalog.list_categories, public_catalog.list_tags,
                                   get_article_stats),
               "public_activity": (activity_search.search_public_activity,
+                                   public_activity.read_public_page,
                                    public_activity.get_announcements,
                                    public_activity.list_guestbook,
                                    public_activity.list_talks),

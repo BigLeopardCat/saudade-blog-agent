@@ -6,13 +6,12 @@ from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import InjectedToolCallId, ToolException, tool
-from pydantic import Field, StrictBool, StrictStr
+from pydantic import Field, StrictStr
 
 from agent import action_text, authz
 from agent.runtime.access import scoped_reads_enabled
 from agent.runtime.client_actions import await_result as _await_browser
 from tools import site
-from tools.result import unavailable
 
 Path = Annotated[StrictStr, Field(min_length=1, max_length=512)]
 Mode = Literal["on", "off"]
@@ -76,41 +75,18 @@ def _sent_payload(command, receipts):
             "requested": command, "observed": None, "result": receipts[0]["result"]}
 
 
-def _navigation_outcome(payload, receipts, path, config, preview):
+def _navigation_outcome(payload, receipts):
     failed = payload["status"] not in {"sent", "completed"}
-    if preview:
-        principal = ((config or {}).get("configurable") or {}).get("principal")
-        if failed:
-            result = unavailable("Navigation did not complete; no page preview was read.",
-                                 meta={"reason": "navigation_incomplete"})
-        elif not authz.holds(principal, authz.SCOPE_READ_PUBLIC):
-            result = unavailable("Public reading is not authorized.",
-                                 meta={"reason": "preview_denied"})
-        else:
-            from agent.domains.public_activity import page_preview
-            from agent.runtime.control import check_active
-
-            check_active()
-            result = page_preview(path)
-        observation = {"kind": result.kind, "data": result.data, "meta": result.meta}
-        if result.kind != "ok":
-            observation["message"] = str(result)
-        payload = {**payload, "preview": observation}
-    text, artifact = _outcome(json.dumps(payload, ensure_ascii=False), receipts, failed=failed)
-    return text, {**artifact, **({"data": payload} if preview else {})}
+    return _outcome(json.dumps(payload, ensure_ascii=False), receipts, failed=failed)
 
 
 @tool(response_format="content_and_artifact")
 def navigate_page(
     path: Path, config: RunnableConfig, tool_call_id: Annotated[str, InjectedToolCallId],
-    preview: Annotated[StrictBool, Field(
-        description="Read recent approved activity at the destination in the same operation.")]
-    = False,
 ) -> object:
-    """Visit the requested page, optionally reading its public activity.
-    Opening a page to see or summarize its content is a combined navigation/read
-    operation: set preview=true. Location help, recommendations and listings without
-    a visit request are read-only tasks.
+    """Navigate the browser when a page visit is requested. This does not read content.
+    Read/summarize public activity with read_public_page; when both are requested,
+    issue both tools in the same batch. Location help needs no navigation.
     Copy exact known paths or source links. No approval card; await browser feedback
     or timeout. Only completed proves arrival.
     """
@@ -147,12 +123,12 @@ def navigate_page(
             {"status": status, "completion_confirmed": completed,
              "scope": "browser_navigation", "requested": path,
              "observed": result.get("path"), "result": reply},
-            [receipt], path, config, preview,
+            [receipt],
         )
     receipt = _receipt("navigate", "navigate_to", {"path": path, "confirm": False}, command)
     return _navigation_outcome(
         _sent_payload(command, [receipt]),
-        [receipt], path, config, preview)
+        [receipt])
 
 
 @tool(response_format="content_and_artifact")
