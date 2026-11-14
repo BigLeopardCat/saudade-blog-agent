@@ -9,7 +9,12 @@ from langgraph.types import Command
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
-from rag.reading import article_frame_text, render_article_result, render_search_result
+from rag.reading import (
+    article_frame_text,
+    read_observation,
+    render_article_result,
+    render_search_result,
+)
 from rag.reading_requests import document_args, is_question, tool_args
 from tools.base import SITE_BASE
 from utils.trace import record
@@ -123,6 +128,8 @@ class ArticleMiddleware(AgentMiddleware):
         else:
             value = self.render_default(call, value, limit)
         self.evidence.observe(call["name"], call["args"], value)
+        if observed := read_observation(call, value):
+            record("native", "article_observation", **observed)
         self._visibility()
         return value
 

@@ -262,7 +262,8 @@ def test_full_tool_frame_keeps_multiple_documents_or_reports_exact_omissions(
     session = ToolSession(Capture(), config(), {"rag_search": rag_search}, {})
     middleware = ArticleMiddleware(session)
     cap = result_limit(message)
-    shown = middleware.render_result({"name": "rag_search", "args": {"query": QUERY}}, message, cap)
+    shown = middleware.render_result(
+        {"name": "rag_search", "id": "search", "args": {"query": QUERY}}, message, cap)
     visible = shown.artifact["data"]
     assert shown.status == "success" and shown.artifact["kind"] == "ok"
     assert len(shown.content) <= cap

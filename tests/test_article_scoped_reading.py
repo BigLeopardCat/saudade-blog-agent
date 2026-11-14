@@ -349,8 +349,9 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
     assert frame["body_evidence"]["verified"] is True
     passages = frame["documents"][0]["passages"]
     assert FACT in "".join(p["text"] for p in passages)
-    assert any(r["request"]["selection"]["section"] == "s22"
-               for r in frame["documents"][0]["read_requests"])
+    assert any(p["range"]["section_id"] == "s22" and p["path"][-1] == "重复标题"
+               for p in passages)
+    assert frame["documents"][0]["read_requests"] == []
     if read_more:
         body = json.loads(
             next(

@@ -2,8 +2,64 @@
 
 from __future__ import annotations
 
+from collections import Counter, defaultdict
+
 from rag.corpus import content_revision
 from rag.sections import PARSER_VERSION, outline
+from rag.source import SourceRange
+
+
+def reading_usage(events):
+    """Measure visible range reuse, not whether an answer or follow-up was justified."""
+    requests = [e for e in events if e.get("event") == "tool_requested" and e.get("name") in {
+        "rag_search", "get_article_detail"}]
+    observations = [e for e in events if e.get("event") == "article_observation"]
+    complete = (bool(requests or observations)
+                and all(isinstance(e.get("name"), str) and isinstance(e.get("call_id"), str)
+                    and e["call_id"] for e in [*requests, *observations])
+                and Counter((e["name"], e["call_id"]) for e in requests)
+                == Counter((e["name"], e["call_id"]) for e in observations))
+    result: dict = {"requested": len(requests), "observed": len(observations),
+              "coverage_complete": complete,
+              "retrieved_chars": 0, "body_chars": 0, "repeated_chars": 0,
+              "body_calls_after_retrieval": 0, "model_calls_after_retrieval": 0}
+    seen: dict[tuple, list[tuple[int, int]]] = defaultdict(list)
+    retrieved = False
+    for event in events:
+        if event.get("event") == "llm_start":
+            result["model_calls_after_retrieval"] += retrieved
+        if event.get("event") != "article_observation":
+            continue
+        result["body_calls_after_retrieval"] += retrieved and event.get("operation") == "body"
+        ranges = event.get("ranges")
+        if not isinstance(ranges, list):
+            result["coverage_complete"] = False
+            continue
+        for value in ranges:
+            try:
+                source = SourceRange.model_validate(value)
+            except ValueError:
+                result["coverage_complete"] = False
+                continue
+            key = source.type, source.id, source.revision, source.section_schema, source.section_id
+            spans = seen[key]
+            start, end = source.offset, source.end
+            result["repeated_chars"] += sum(max(0, min(end, b) - max(start, a)) for a, b in spans)
+            field = "retrieved_chars" if event.get("operation") == "retrieval" else "body_chars"
+            result[field] += end - start
+            merged = []
+            for a, b in sorted([*spans, (start, end)]):
+                if merged and a <= merged[-1][1]:
+                    merged[-1] = merged[-1][0], max(b, merged[-1][1])
+                else:
+                    merged.append((a, b))
+            seen[key] = merged
+        retrieved |= event.get("operation") == "retrieval" and event.get("kind") == "ok"
+    if not result["coverage_complete"]:
+        for key in ("retrieved_chars", "body_chars", "repeated_chars",
+                    "body_calls_after_retrieval", "model_calls_after_retrieval"):
+            result[key] = None
+    return result
 
 
 def frozen_labels(data: dict) -> dict:
@@ -42,8 +98,7 @@ def _validate_span(span: dict, corpus: dict, positive: set[str]) -> None:
     section = next((row for row in outline(doc["text"], doc.get("title", ""))
                     if row["section_id"] == span.get("section_id")), None)
     start, end, quote = span.get("start"), span.get("end"), span.get("quote")
-    # Original fixtures specify a unique quote. Bind that existing label to the
-    # frozen source in memory; explicit coordinates are never silently replaced.
+    # Quote-only labels bind unique exact text; explicit coordinates stay unchanged.
     if ("start" not in span and "end" not in span and section is not None
             and isinstance(quote, str) and quote and section["text"].count(quote) == 1):
         start = section["text"].index(quote)

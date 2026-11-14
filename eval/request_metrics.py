@@ -4,7 +4,7 @@ import math
 from collections import Counter, defaultdict
 from statistics import median, quantiles
 
-from eval import action_metrics, latency_metrics, usage
+from eval import action_metrics, latency_metrics, retrieval_evidence, usage
 from utils.trace_io import load_trace
 
 
@@ -138,6 +138,7 @@ def summary(doc):
             "inactive_tool_requests": tool_errors["tool_not_loaded"],
             "unknown_tool_requests": tool_errors["unknown_tool"],
             "post_discovery_model_calls": followup_calls,
+            "article_usage": retrieval_evidence.reading_usage(events),
             **action_metrics.timings(events), **usage.totals(events)}
 
 

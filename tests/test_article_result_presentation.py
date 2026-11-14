@@ -194,9 +194,12 @@ def test_wire_json_budget_preserves_true_body_boundaries(monkeypatch, budget, co
     data = article_page({"noteTitle": "Source", "noteContent": body}, 1)
     source = ToolMessage(content=str(data), name="get_article_detail", tool_call_id="read",
                          artifact={"kind": "ok", "data": data})
+    records = []
+    monkeypatch.setattr("agent.products.blog.articles.record",
+                        lambda node, event, **fields: records.append((event, fields)))
     middleware = ArticleMiddleware(ToolSession(Capture(), config(), {}, {}))
     message = middleware.render_result(
-        {"name": "get_article_detail", "args": {"article_id": 1}}, source, 1)
+        {"name": "get_article_detail", "id": "read", "args": {"article_id": 1}}, source, 1)
     visible = message.artifact["data"]
     assert json.loads(message.content) == visible
     assert estimate_tokens([message]) <= budget
@@ -208,3 +211,6 @@ def test_wire_json_budget_preserves_true_body_boundaries(monkeypatch, budget, co
     else:
         assert 0 < visible["source"]["end"] < len(body)
     assert data["noteContent"] == body and data["readComplete"]
+    observed = next(fields for event, fields in records if event == "article_observation")
+    assert observed["returned_chars"] == len(visible["noteContent"])
+    assert observed["ranges"] == [visible["source"]]

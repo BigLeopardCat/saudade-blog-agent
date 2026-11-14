@@ -136,8 +136,10 @@ def get_article_detail(
     """Read a known public document. Select question for a specific fact/topic
     (returns verified passages), full_text for a document-level summary or analysis
     (returns original text), source_range for exact source coordinates, outline for
-    headings, metadata for author/title/tags. Copy returned coordinates and versions
-    for source_range. Private/drafts use read_current_article.
+    headings, metadata for author/title/tags. Source IDs or unique heading titles
+    select section subtrees. A known source version is bound
+    by the runtime; supplied versions stay checked. Independent sections can use
+    parallel tool calls. Private/drafts use read_current_article.
     """
     if isinstance(selection, ArticleQuestion):
         if doc_type != "note":
@@ -232,7 +234,7 @@ def _rag_meta(route, corpus, top_k, article_id=None):
 
 @tool
 def rag_search(
-    query: Annotated[str, "检索关键词（用户问题中希望从博客内容里找到答案的核心表述）"],
+    query: Annotated[str, "完整检索问题：包含主题和要回答的问题，支持中英文"],
     top_k: Annotated[
         StrictInt, Field(ge=1, le=MAX_TOP_K), "返回候选文档数量，默认 8"
     ] = DEFAULT_TOP_K,
