@@ -18,6 +18,7 @@ from tools import base
 
 @pytest.fixture
 def index(monkeypatch):
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 12000)
     state = {"rows": [], "requests": []}
 
     def handle(request):
