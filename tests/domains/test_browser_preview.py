@@ -151,3 +151,21 @@ def test_compound_acceptance_requires_both_effect_and_actual_content(navigate, r
                     "args": {"path": "/guestbook"}, "kind": "ok",
                     "result": json.dumps(content().data)}] if read else [])]}
     assert (not check_gold(case["gold"], result)) is (navigate and read)
+
+
+@pytest.mark.parametrize("source,navigated,valid", [
+    ("activity/guestbook", False, True), ("activity/talks", False, False),
+    ("activity/guestbook", True, False)])
+def test_guestbook_overview_accepts_source_evidence_without_allowing_navigation(
+    source, navigated, valid,
+):
+    from eval.golden_evaluation import check_gold
+    from eval.online_baseline import load_suite
+
+    case = next(c for c in load_suite() if c["id"] == "guestbook")
+    result = {"text": "Recent entries.", "commands": ["NAVIGATE:/guestbook"] if navigated else [],
+              "tool_calls": [], "exec_rows": [], "native_events": [{"node": "native",
+                  "event": "call", "name": "read_public_page", "kind": "ok",
+                  "args": {"path": "/guestbook"}, "result": json.dumps({
+                      "resource": source, "page": 1, "pageSize": 5})}]}
+    assert (not check_gold(case["gold"], result)) is valid
