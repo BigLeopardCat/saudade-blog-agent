@@ -9,8 +9,8 @@ from urllib.parse import urlsplit
 from langchain_core.messages import ToolMessage
 
 from agent.domains.articles.reading import body_continuation, directory_targets
-from agent.domains.articles.requests import is_question
 from rag.reading import read_requests
+from rag.reading_requests import is_question
 from rag.source import BodyPassage
 
 SEARCH_TOOLS = frozenset({"rag_search"})

@@ -2,9 +2,9 @@
 
 import json
 
-from agent.domains.articles.requests import tool_args
 from rag.context_windows import merge_read_windows
 from rag.ranking import source_excerpt
+from rag.reading_requests import tool_args
 from rag.sections import PARSER_VERSION
 from rag.source import BodyPassage, DocumentReference, SourceRange
 

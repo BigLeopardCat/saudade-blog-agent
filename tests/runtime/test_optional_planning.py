@@ -7,12 +7,12 @@ from _own_support import config
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import turn_phase
 from agent.runtime.service import AgentRuntime
 from eval.navigation_contracts import backend
+from rag.reading_requests import tool_args
 
 
 def selected(model, saver):

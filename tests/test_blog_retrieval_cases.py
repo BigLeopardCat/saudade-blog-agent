@@ -10,7 +10,6 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.articles.evidence import ArticleEvidence
-from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -20,6 +19,7 @@ from eval.fixtures.document_reads import DEFAULT_READ_CHARS, article_page, docum
 from eval.offline_rag_eval import bm25_run, evaluate
 from eval.rag_dataset import load
 from rag.corpus import content_revision
+from rag.reading_requests import tool_args
 from rag.search import RagIndex
 from rag.sections import PARSER_VERSION, outline
 from tools import base

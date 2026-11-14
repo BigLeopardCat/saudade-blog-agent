@@ -5,9 +5,9 @@ import json
 import pytest
 from langchain_core.messages import AIMessage
 
-from agent.domains.articles.requests import tool_args
 from eval import native_contracts
 from eval.native_contracts import golden_trace
+from rag.reading_requests import tool_args
 from tools.base import SITE_BASE
 
 

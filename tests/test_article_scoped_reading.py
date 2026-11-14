@@ -11,7 +11,6 @@ from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
 from agent.domains.articles.evidence import ArticleEvidence
-from agent.domains.articles.requests import document_args, tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -20,6 +19,7 @@ from models.llm import get_llm
 from rag import search
 from rag.corpus import content_revision
 from rag.reading import candidate_text, render_article_result
+from rag.reading_requests import document_args, tool_args
 from rag.sections import PARSER_VERSION
 from tools import base, notes
 

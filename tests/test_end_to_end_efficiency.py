@@ -9,11 +9,11 @@ import json
 import httpx
 import pytest
 
-from agent.domains.articles.requests import tool_args
 from eval import efficiency_contracts as contracts
 from eval import native_contracts
 from models.llm import get_llm
 from models.transport import ModelIO
+from rag.reading_requests import tool_args
 
 
 def call(name, **args):

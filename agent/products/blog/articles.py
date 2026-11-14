@@ -7,10 +7,10 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
-from agent.domains.articles.requests import document_args, is_question, tool_args
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
 from rag.reading import article_frame_text, render_article_result, render_search_result
+from rag.reading_requests import document_args, is_question, tool_args
 from tools.base import SITE_BASE
 from utils.trace import record
 

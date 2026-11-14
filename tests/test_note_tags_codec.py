@@ -5,8 +5,8 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from agent.domains.article_metadata import tag_references
-from agent.domains.articles.requests import tool_args
 from eval.fixtures.document_reads import document_page
+from rag.reading_requests import tool_args
 from tools import base
 from tools.notes import get_article_detail, search_notes
 from tools.result import unavailable

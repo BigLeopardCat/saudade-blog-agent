@@ -10,13 +10,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
 
-from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from eval.fixtures.document_reads import document_page
 from rag.corpus import content_revision
+from rag.reading_requests import tool_args
 from rag.sections import PARSER_VERSION, outline, reading_revision
 from tools import base
 from tools.notes import get_article_detail, get_article_stats

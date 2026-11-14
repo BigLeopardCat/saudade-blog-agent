@@ -6,11 +6,11 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage
 
 from agent.domains.articles.evidence import ArticleEvidence
-from agent.domains.articles.requests import tool_args
 from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
 from eval.fixtures.document_reads import article_page
 from rag.reading import render_article_result
+from rag.reading_requests import tool_args
 from tools.base import SITE_BASE, get_article_detail
 from tools.result import empty, ok, unavailable
 

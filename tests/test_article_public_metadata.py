@@ -9,7 +9,6 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.articles.evidence import ArticleEvidence
-from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -17,6 +16,7 @@ from agent.runtime.service import AgentRuntime
 from eval import native_assertions
 from eval.navigation_contracts import backend
 from rag.reading import render_article_result
+from rag.reading_requests import tool_args
 from rag.sections import slim_frame
 from tools.base import SITE_BASE
 from tools.notes import get_article_detail

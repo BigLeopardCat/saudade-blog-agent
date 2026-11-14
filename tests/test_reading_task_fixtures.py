@@ -2,11 +2,11 @@
 
 
 from agent.domains import moderation, public_activity
-from agent.domains.articles.requests import tool_args
 from agent.domains.own_reads import get_inbox_overview
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.read_tools import own_tools
 from eval.reading_task_fixtures import backend
+from rag.reading_requests import tool_args
 
 
 def config(role):

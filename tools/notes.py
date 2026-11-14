@@ -9,11 +9,11 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
-from agent.domains.articles.requests import ArticleQuestion, ReadSelection
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import search_frame, search_text
+from rag.reading_requests import ArticleQuestion, ReadSelection
 from tools import base as _base
 from tools.result import (
     ToolResult,
