@@ -273,7 +273,8 @@ def test_a_body_read_after_metadata_preserves_its_verified_visible_range():
         evidence.observe("get_article_detail", {"article_id": 23}, ok("read", data=data))
     assert evidence.candidates == evidence.documents == {23: "元信息文章"}
     assert evidence.read_ranges[23] == [{
-        "revision": data["contentRevision"], "section_id": "", "start": 0, "end": 1,
+        "revision": data["contentRevision"], "section_id": "", "selected_scope": "document",
+        "start": 0, "end": 1,
         "visible_chars": 1, "selected_total_chars": 3, "selected_range_reaches_end": False,
     }]
 

@@ -1,6 +1,7 @@
 """Behavioral regressions for the versioned RAG pipeline (no network/LLM)."""
 
 import copy
+import json
 import threading
 
 import pytest
@@ -127,7 +128,6 @@ def test_bm25_normalizes_using_total_token_length(monkeypatch):
     expected = reference.get_scores(["alpha"])
     actual = {row["id"]: row["score"] for row in ix._lexical_ranked("alpha", 10)}
     assert actual == pytest.approx({1: expected[0], 2: expected[1]}, abs=5e-5)
-
 
 
 @pytest.mark.parametrize("rows,expected", [
@@ -276,19 +276,25 @@ def test_rrf_preserves_revision_and_readable_ranges_from_both_arms():
 def test_ranked_candidates_expose_bounded_section_locators_without_guessing_offsets():
     from rag.reading import candidate_text
 
-    hit = {"title": "文档", "type": "note", "id": 46, "score": 0.9,
-           "sections": ["概述", "布局", "交互", "额外"],
-           "section_ids": ["s1", "s20", "s18", "s99"], "document_revision": "rev1",
-           "matches": [{"section_id": "s1", "offset": 0},
-                       {"section_id": "s1", "offset": 50},
-                       {"section_id": "s20", "offset": 96}]}
-    result = candidate_text(1, hit)
-    assert "rank=1" in result and "score=" not in result
-    assert result.count("revision=rev1") == 1
-    assert "section=s1 offset=0" in result
-    assert "section=s20 offset=96" in result
-    assert "section=s18" in result and "section=s18 offset=" not in result
-    assert "section=s99" in result and "section=s99 offset=" not in result
+    hit = {
+        "title": "文档",
+        "type": "note",
+        "id": 46,
+        "score": 0.9,
+        "sections": ["概述", "布局", "交互", "额外"],
+        "section_ids": ["s1", "s20", "s18", "s99"],
+        "document_revision": "rev1",
+        "matches": [
+            {"section_id": "s1", "offset": 0},
+            {"section_id": "s1", "offset": 50},
+            {"section_id": "s20", "offset": 96},
+        ],
+    }
+    result = json.loads(candidate_text(1, hit))
+    assert result["rank"] == 1 and "score" not in result
+    assert result["passages"] == [] and result["read_requests"] == []
+    assert [m["section_id"] for m in result["index_matches"]] == ["s1", "s1", "s20"]
+    assert all("offset" not in m and "index_excerpt" not in m for m in result["index_matches"])
 
 
 def test_candidate_preserves_source_hierarchy_for_direct_section_reading():
@@ -297,16 +303,19 @@ def test_candidate_preserves_source_hierarchy_for_direct_section_reading():
     from rag.reading import candidate_text
 
     content = "# Guide\n## Layout\nOverview.\n### Current\nneedle evidence"
-    chunks = [{**row, "type": "note", "id": 46, "title": "Guide",
-               "reading_revision": "revision"} for row in split("Guide", content)]
+    chunks = [
+        {**row, "type": "note", "id": 46, "title": "Guide", "reading_revision": "revision"}
+        for row in split("Guide", content)
+    ]
     index = next(i for i, row in enumerate(chunks) if row["section"] == "Current")
     hit = documents(chunks, {index: 1.0}, "corpus", query_terms=["needle"])[0]
     match = hit["matches"][0]
     assert match["section_path"] == ["Guide", "Layout", "Current"]
     assert (match["offset"], match["end"]) == (0, len("needle evidence"))
     wire = candidate_text(1, hit)
-    assert "\n  - 命中节=Guide > Layout > Current section=" in wire
-    assert wire.count("revision=revision") == 1
+    candidate = json.loads(wire)
+    assert candidate["index_matches"][0]["section_path"] == ["Guide", "Layout", "Current"]
+    assert candidate["read_requests"] == []  # Invalid revision cannot become an executable locator.
     assert "needle evidence" in wire
     match["section_path"].append("not a source heading")
     assert chunks[index]["section_path"] == ["Guide", "Layout", "Current"]

@@ -350,7 +350,9 @@ def test_navigation_fixture_supports_alternative_article_reads():
             result.kind == "ok" for result in (catalog, categories, searched, retrieved, detail)
         )
         assert json.loads(str(categories))["items"][0]["id"] == 11
-        assert "719" in str(searched) and "id=719" in str(retrieved)
+        assert "719" in str(searched)
+        assert json.loads(str(retrieved))["documents"][0]["id"] == 719
+        assert retrieved.data[0]["passages"][0]["text"] in str(detail)
         assert "Git 分支实践" in str(detail)
         assert not native_contracts._posts(state)
         assert not state["unsupported_reads"]

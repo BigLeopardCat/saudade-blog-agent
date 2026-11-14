@@ -1,12 +1,8 @@
-"""Shared golden request builders, multi-round driver and declared assertions.
+"""Shared golden builders, round handling and declared business assertions.
 
-The runner checks corpus provenance, uses the service producer, and validates
-replies, commands, confirmations and receipts against declared JSONL assertions.
-It requires backend access and model credentials; offline pytest tests its
-contracts with fixtures. Production writes require explicit opt-in.
-The production HTTP baseline is ``python -m eval.online_baseline``. Release
-decisions use ``python -m eval.release_readiness`` with frozen semantic evidence.
-This module provides shared assertions and round handling, not another CLI.
+Offline tests use fixtures. Live runs require backend/model credentials;
+production writes require explicit opt-in. HTTP collection and release decisions
+are owned by eval.online_baseline and eval.release_readiness.
 """
 import asyncio
 import json
@@ -828,7 +824,8 @@ def login_demand_hit(text: str) -> "re.Match | None":
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
     "max_model_calls", "max_tool_calls", "max_article_body_chars",
-    "require_observations", "require_observations_any", "require_todo_schedule",
+    "require_observations", "require_body_reads", "require_observations_any",
+    "require_todo_schedule",
     "require_automation_schedule", "require_confirm_intent",
     "require_confirm_specs", "require_confirm_preview", "forbid_runtime_stop",
     "forbid_business_write", "require_answer_value", "require_prepared_or_noop",

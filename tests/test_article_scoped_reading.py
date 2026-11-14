@@ -1,7 +1,6 @@
 """Known-document retrieval, complete outlines and original-source reading costs."""
 
 import json
-import re
 
 import httpx
 import pytest
@@ -120,7 +119,8 @@ def test_article_filter_precedes_the_global_document_window(article):
     result = notes.rag_search.invoke({"query": QUERY, "top_k": 1, "article_id": ARTICLE})
     assert result.kind == "ok" and [row["id"] for row in result.data] == [ARTICLE]
     coverage = json.loads(str(result).split("\n")[0])["retrieval"]
-    assert coverage["article_id"] == ARTICLE and "section=s22" in str(result)
+    assert coverage["article_id"] == ARTICLE
+    assert "s22" in {p["source"]["section_id"] for p in result.data[0]["passages"]}
     assert index._lexical_ranked(QUERY, 1, article_id=999) == []
 
 
@@ -130,8 +130,10 @@ def test_direct_locator_reads_the_deep_match_and_not_the_start_of_a_long_section
     arguments = locator(hit)
     assert arguments["offset"] > 24000 and arguments["max_chars"] < 2000
     wire = candidate_text(1, hit)
-    assert f"offset={arguments['offset']}" in wire
-    assert f"max_chars={arguments['max_chars']}" in wire
+    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    assert {**arguments, "doc_type": "note"} in [
+        {**r, **{k: json.loads(wire)["source"][k] for k in ("revision", "section_schema")}}
+        for r in reads]
     result = notes.get_article_detail.invoke(arguments)
     assert result.kind == "ok" and FACT in result.data["sectionText"]
     assert len(result.data["sectionText"]) == arguments["max_chars"]
@@ -142,22 +144,27 @@ def test_shared_candidate_version_can_read_every_visible_section(article):
     _, index, _ = article
     hit = index._lexical_ranked("青花瓷器图案", 1, article_id=ARTICLE)[0]
     wire = candidate_text(1, hit)
-    revision = re.findall(r"\brevision=(\S+)", wire)
-    schema = re.findall(r"\bsection_schema=(\S+)", wire)
-    assert revision == [hit["document_revision"]] and schema == [PARSER_VERSION]
-    ranges = re.findall(r"\bsection=(s\d+) offset=(\d+) max_chars=(\d+)", wire)
-    assert len(ranges) == len(hit["matches"]) > 1
-    for section, offset, length in ranges:
-        result = notes.get_article_detail.invoke({
-            "article_id": ARTICLE, "section": section, "offset": int(offset),
-            "max_chars": int(length), "revision": revision[0], "section_schema": schema[0],
-        })
+    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    assert len(reads) == len(hit["matches"]) > 1
+    for args in reads:
+        source = json.loads(wire)["source"]
+        assert source["revision"] == hit["document_revision"]
+        assert source["section_schema"] == PARSER_VERSION
+        args = {**args, **{k: source[k] for k in ("revision", "section_schema")}}
+        result = notes.get_article_detail.invoke(args)
         assert result.kind == "ok" and result.data["sectionText"]
-        assert result.data["source"]["offset"] == int(offset)
-        assert len(result.data["sectionText"]) == int(length)
+        assert result.data["source"]["offset"] == args["offset"]
+        assert len(result.data["sectionText"]) == args["max_chars"]
         assert result.data["omittedViews"] == ["metadata", "outline"]
-        assert not {"sections", "sectionCount", "sectionsOffset", "nextSectionsOffset",
-                    "authorName", "description", "tags"}.intersection(result.data)
+        assert not {
+            "sections",
+            "sectionCount",
+            "sectionsOffset",
+            "nextSectionsOffset",
+            "authorName",
+            "description",
+            "tags",
+        }.intersection(result.data)
 
 
 def test_every_directory_entry_can_be_traversed_without_claiming_body_reads(article):
@@ -244,14 +251,23 @@ def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entrie
     assert visible is None and len(text) <= 10
 
 
-def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(article, monkeypatch):
+@pytest.mark.parametrize("read_more", [False, True])
+def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
+    article, monkeypatch, read_more
+):
     _, index, calls = article
     arguments = locator(index._lexical_ranked(QUERY, 1, article_id=ARTICLE)[0])
     requests = []
     actions = [
         ("rag_search", {"query": QUERY, "top_k": 1, "article_id": ARTICLE}),
-        ("get_article_detail", arguments),
     ]
+    if read_more:
+        actions.append(
+            (
+                "get_article_detail",
+                {k: v for k, v in arguments.items() if k not in {"revision", "section_schema"}},
+            )
+        )
 
     def model(request):
         body = json.loads(request.content)
@@ -319,19 +335,26 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(articl
                 config(),
             )
         )[-1]
-    assert FACT in result.reply and len(requests) == 3 and len(calls) == 2
+    assert FACT in result.reply
+    assert len(requests) == (3 if read_more else 2) and len(calls) == (2 if read_more else 1)
     retrieval = next(
         message["content"] for message in requests[1]["messages"] if message["role"] == "tool"
     )
-    assert "section=s22" in retrieval and "max_chars=" in retrieval
-    body = json.loads(
-        next(
-            message["content"]
-            for message in requests[2]["messages"]
-            if message["role"] == "tool" and "sectionText" in message["content"]
+    frame = json.loads(retrieval)
+    assert frame["body_evidence"]["verified"] is True
+    passages = frame["documents"][0]["passages"]
+    assert FACT in "".join(p["text"] for p in passages)
+    assert any(r["request"]["section"] == "s22" for r in frame["documents"][0]["read_requests"])
+    if read_more:
+        body = json.loads(
+            next(
+                m["content"]
+                for m in requests[2]["messages"]
+                if m["role"] == "tool" and "sectionText" in m["content"]
+            )
         )
-    )
-    assert FACT in body["sectionText"] and len(body["sectionText"]) < 2000
+        assert FACT in body["sectionText"] and len(body["sectionText"]) < 2000
+        assert body["source"]["revision"] == arguments["revision"]
     parent = runtime.get_state(config(), subgraphs=True)
     assert parent.values["messages"][-1].content == result.reply
     checkpoints = [
@@ -339,11 +362,7 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(articl
         for saved in runtime.saver.list(config())
         if saved.config["configurable"].get("checkpoint_ns")
     ]
-    assert any(
-        ARTICLE in state.get("evidence", {}).get("candidates", {})
-        and not state["evidence"]["read_ranges"]
-        for state in checkpoints
-    )
+    assert any(ARTICLE in state.get("evidence", {}).get("candidates", {}) for state in checkpoints)
     native = [state for state in checkpoints if state.get("evidence", {}).get("read_ranges")]
     assert native, "native ArticleState must checkpoint visible source ranges"
     ranges = native[0]["evidence"]["read_ranges"][ARTICLE]
@@ -351,7 +370,8 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(articl
     observed = next(
         message
         for message in native[0]["messages"]
-        if message.type == "tool" and message.name == "get_article_detail"
+        if message.type == "tool"
+        and message.name == ("get_article_detail" if read_more else "rag_search")
     )
     assert observed.artifact["article_evidence"]["read_ranges"][ARTICLE] == ranges
 
@@ -402,19 +422,25 @@ def test_third_lexical_section_retains_a_revision_bound_executable_locator(monke
     hit = index._lexical_ranked("needle", 1, article_id=ARTICLE)[0]
     assert len(hit["sections"]) == len(hit["section_ids"]) == 3
     wire = candidate_text(1, hit)
-    for section in ("s1", "s2", "s3"):
-        assert f"section={section}" in wire
-    assert f"revision={hit['document_revision']}" in wire
-    assert f"section_schema={PARSER_VERSION}" in wire and "max_chars=" in wire
+    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    assert {r["section"] for r in reads} == {"s1", "s2", "s3"}
+    assert json.loads(wire)["source"]["revision"] == hit["document_revision"]
+    assert json.loads(wire)["source"]["section_schema"] == PARSER_VERSION
+    assert all(r["max_chars"] > 0 for r in reads)
 
 
 def test_a_revision_mismatch_during_fusion_keeps_scoped_lexical_results(article, monkeypatch):
     _, index, _ = article
     hit = index._lexical_ranked(QUERY, 1, article_id=ARTICLE)[0]
-    monkeypatch.setattr(index, "_vector_ranked", lambda *args, **kwargs: (
-        [{**hit, "document_revision": "0" * 64}], None, 0))
+    monkeypatch.setattr(
+        index,
+        "_vector_ranked",
+        lambda *args, **kwargs: ([{**hit, "document_revision": "0" * 64}], None, 0),
+    )
     result = notes.rag_search.invoke({"query": QUERY, "top_k": 1, "article_id": ARTICLE})
-    assert result.kind == "ok" and result.data == [hit]
+    assert result.kind == "ok"
+    assert [{k: v for k, v in r.items() if k != "passages"} for r in result.data] == [hit]
+    assert FACT in "".join(p["text"] for p in result.data[0]["passages"])
     assert result.meta["rag_reason"] == "corpus_changed"
     assert result.meta["retrieval"]["semantic"] == "incomplete"
     assert result.meta["retrieval"]["article_id"] == ARTICLE

@@ -11,6 +11,7 @@ from _rag_store import memory_store, memory_vectors  # noqa: F401
 
 from agent.runtime.control import AgentCancelled, RequestControl, request_scope
 from config import settings
+from rag import sections
 from rag import vector_index as vectors
 from rag.reading import candidate_text
 
@@ -135,21 +136,50 @@ def test_request_deadline_bounds_the_sdk_timeout_and_cancel_is_not_converted_to_
 
 
 def test_rrf_keeps_duplicate_heading_titles_bound_to_their_own_section_ranges():
-    common = {"type": "note", "id": 1, "title": "Synthetic", "document_revision": "rev"}
-    lexical = {**common, "sections": ["配置", "配置"], "section_ids": ["s1", "s2"],
-               "matches": [{"section_id": ident, "offset": offset, "end": offset + 10}
-                           for ident, offset in [("s1", 10), ("s2", 20)]]}
-    dense = {**common, "sections": ["后续"], "section_ids": ["s3"],
-             "matches": [{"section_id": "s3", "offset": 30, "end": 40}]}
+    common = {
+        "type": "note",
+        "id": 1,
+        "title": "Synthetic",
+        "document_revision": "a" * 64,
+        "section_schema": sections.PARSER_VERSION,
+    }
+    lexical = {
+        **common,
+        "sections": ["配置", "配置"],
+        "section_ids": ["s1", "s2"],
+        "matches": [
+            {"section_id": ident, "offset": offset, "end": offset + 10}
+            for ident, offset in [("s1", 10), ("s2", 20)]
+        ],
+    }
+    dense = {
+        **common,
+        "sections": ["后续"],
+        "section_ids": ["s3"],
+        "matches": [{"section_id": "s3", "offset": 30, "end": 40}],
+    }
     originals = copy.deepcopy((lexical, dense))
     result = vectors.rrf_fuse([lexical], [dense], 60, 3)[0]
     assert [(loc["section"], loc["section_id"]) for loc in result["locators"]] == [
-        ("配置", "s1"), ("后续", "s3"), ("配置", "s2")]
+        ("配置", "s1"),
+        ("后续", "s3"),
+        ("配置", "s2"),
+    ]
     assert list(zip(result["sections"], result["section_ids"])) == [
-        ("配置", "s1"), ("后续", "s3"), ("配置", "s2")]
+        ("配置", "s1"),
+        ("后续", "s3"),
+        ("配置", "s2"),
+    ]
     assert [(match["section_id"], match["offset"]) for match in result["matches"]] == [
-        ("s1", 10), ("s3", 30), ("s2", 20)]
+        ("s1", 10),
+        ("s3", 30),
+        ("s2", 20),
+    ]
     wire = candidate_text(1, result)
-    assert "后续 section=s3" in wire and "max_chars=10" in wire
-    assert "后续 section=s2" not in wire
+    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    assert [(r["section"], r["offset"], r["max_chars"]) for r in reads] == [
+        ("s1", 10, 10),
+        ("s3", 30, 10),
+        ("s2", 20, 10),
+    ]
     assert (lexical, dense) == originals

@@ -67,10 +67,11 @@ class ArticleMiddleware(AgentMiddleware):
         self._recover(request.state)
         call = request.tool_call
         if call["name"] == "get_article_detail":
-            args = self.evidence.continuation_args(call["args"])
+            args = self.evidence.bind_read_args(call["args"])
             if args != call["args"]:
-                record("native", "article_continuation_bound", call_id=call["id"],
-                       article_id=args["article_id"], offset=args["offset"],
+                record("native", "article_read_bound", call_id=call["id"],
+                       article_id=args["article_id"], offset=args.get("offset", 0),
+                       view=args.get("view", "body"), section=args.get("section", ""),
                        fields=[key for key in ("revision", "section_schema")
                                if not call["args"].get(key)])
                 request = request.override(tool_call={**call, "args": args})
@@ -109,7 +110,7 @@ class ArticleMiddleware(AgentMiddleware):
                                  **(artifact.get("meta") or {}), "reason": "presentation_budget"}}
                                 if failed else {})}})
         elif success and call["name"] == "rag_search" and isinstance(artifact.get("data"), list):
-            presented = render_search_result(artifact["data"], value.content,
+            presented = render_search_result(artifact["data"],
                                              artifact.get("meta") or {}, limit)
             value = value.model_copy(update={"content": presented.text,
                 "status": "error" if presented.kind != "ok" else value.status,

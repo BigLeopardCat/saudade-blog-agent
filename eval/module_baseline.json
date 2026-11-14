@@ -1,6 +1,6 @@
 {
   "eval/golden_evaluation.py": {
-    "lines": 1106,
+    "lines": 1103,
     "top_defs": 40
   },
   "tests/test_judge_offline.py": {

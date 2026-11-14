@@ -81,6 +81,16 @@ def _call_limits(gold, case_id):
         raise ValueError(f"invalid tool-call acceptance limit: {case_id}")
 
 
+def _body_requirements(gold, case_id):
+    required = gold.get("require_body_reads", [])
+    if (not isinstance(required, list) or any(
+            not isinstance(wanted, dict) or set(wanted) - {"article_id"}
+            or "article_id" in wanted and (type(wanted["article_id"]) is not int
+                                           or wanted["article_id"] <= 0)
+            for wanted in required)):
+        raise ValueError(f"invalid body-read requirement: {case_id}")
+
+
 def load_suite(path=SUITE):
     cases = [json.loads(line) for line in Path(path).read_text().splitlines() if line.strip()]
     ids = [c["id"] for c in cases]
@@ -104,6 +114,7 @@ def load_suite(path=SUITE):
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
             _call_limits(rnd["gold"], case["id"])
+            _body_requirements(rnd["gold"], case["id"])
             unknown = set(rnd["gold"]) - (golden.GOLD_ASSERT_KEYS | golden.GOLD_REQUEST_KEYS
                                           | golden.GOLD_COMMENT_KEYS | golden.GOLD_ROUND_KEYS)
             if unknown:
