@@ -84,6 +84,8 @@ def test_context_expansion_uses_verified_snapshot_without_extra_http(
     assert len(requests) == 1
     if changed_snapshot:
         assert result.kind == "unavailable" and result.data is None
+        assert result.meta["reason"] == "source_evidence_unavailable"
+        assert "body_evidence" not in result.meta
         return
     assert result.kind == "ok"
     assert "read_window" not in hit["matches"][0]
