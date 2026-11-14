@@ -162,7 +162,7 @@ def get_article_detail(
     if view == "full_text" and (section or offset):
         return invalid_args("Full text starts at the document beginning; "
                             "use source_range for locators.")
-    if view == "source_range" and not (section or offset):
+    if view == "source_range" and not (section or offset or revision and section_schema):
         return invalid_args("Copy a section or continuation offset from the preceding evidence.")
     wire_view = "body" if view in {"full_text", "source_range"} else view
     if (offset or section.startswith("s") and section[1:].isdigit()) and (

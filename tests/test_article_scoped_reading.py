@@ -404,6 +404,16 @@ def test_whole_document_scope_retains_the_original_host_view_and_complete_body(a
     assert not result.data["readComplete"] and result.data["nextOffset"] == 32768
 
 
+def test_revision_bound_range_can_begin_at_document_offset_zero(article):
+    document, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "view": "source_range",
+        "offset": 0, "max_chars": 100, "revision": document["revision"],
+        "section_schema": PARSER_VERSION})
+    assert result.kind == "ok" and len(calls) == 1
+    assert result.data["noteContent"] == document["content"][:100]
+    assert result.data["source"]["offset"] == 0 and result.data["source"]["end"] == 100
+
+
 def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(article, monkeypatch):
     document, _, _ = article
     from eval.fixtures.document_reads import document_page
