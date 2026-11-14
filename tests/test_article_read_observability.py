@@ -51,6 +51,12 @@ def test_missing_malformed_and_unmatched_observations_remain_unknown(changes):
     measured = reading_usage(events)
     assert not measured["coverage_complete"]
     assert measured["body_chars"] is measured["repeated_chars"] is None
+    assert measured["body_calls_after_retrieval"] is measured["model_calls_after_retrieval"] is None
+
+
+def test_absent_coverage_does_not_turn_an_old_trace_into_zero_reading_cost():
+    measured = reading_usage([])
+    assert not measured["coverage_complete"] and measured["repeated_chars"] is None
 
 
 def test_empty_and_failed_retrieval_do_not_claim_body_or_followup_evidence():

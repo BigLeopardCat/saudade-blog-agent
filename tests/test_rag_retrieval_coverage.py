@@ -94,8 +94,9 @@ def test_context_expansion_uses_verified_snapshot_without_extra_http(
     match = result.data[0]["matches"][0]
     assert match["end"] == 6 and match["read_window"]["end"] == 15
     assert result.data[0]["passages"][0]["text"] == "needle evidence"
-    request = json.loads(str(result))["documents"][0]["read_requests"][0]["request"]
-    assert request["selection"]["max_chars"] == 15
+    visible = json.loads(str(result))["documents"][0]
+    assert visible["read_requests"] == []
+    assert visible["passages"][0]["range"]["end"] == 15
 
 
 @pytest.mark.parametrize(
@@ -124,9 +125,11 @@ def test_degraded_route_preserves_candidates_but_never_reports_a_complete_negati
         expected = index._lexical_ranked(query, 8)
         assert [{k: v for k, v in r.items() if k != "passages"} for r in result.data] == expected
         assert result.data[0]["matches"] and result.data[0]["passages"]
-        read = json.loads(str(result))["documents"][0]["read_requests"][0]["request"]
-        assert read["selection"]["section"] == "s1"
-        source = json.loads(str(result))["documents"][0]["source"]
+        visible = json.loads(str(result))["documents"][0]
+        assert visible["read_requests"] == []
+        assert visible["passages"][0]["range"]["section_id"] == "s1"
+        assert visible["passages"][0]["text"] == result.data[0]["passages"][0]["text"]
+        source = visible["source"]
         assert source["revision"] == expected[0]["document_revision"]
         assert len(requests) == 1
     else:

@@ -136,8 +136,8 @@ def get_article_detail(
     """Read a known public document. Select question for a specific fact/topic
     (returns verified passages), full_text for a document-level summary or analysis
     (returns original text), source_range for exact source coordinates, outline for
-    headings, metadata for author/title/tags. Source IDs select exact sections;
-    a unique heading title selects its subtree. A known source version is bound
+    headings, metadata for author/title/tags. Source IDs or unique heading titles
+    select section subtrees. A known source version is bound
     by the runtime; supplied versions stay checked. Independent sections can use
     parallel tool calls. Private/drafts use read_current_article.
     """
