@@ -104,7 +104,7 @@ class Settings(BaseSettings):
     agent_output_tokens: int = Field(default=4096, ge=128)
     agent_extended_output_tokens: int = Field(default=8192, ge=128)
     agent_output_material_threshold: int = Field(default=4096, ge=128)
-    agent_tool_result_tokens: int = Field(default=12000, ge=128)
+    agent_tool_result_tokens: int = Field(default=24000, ge=128)
     # Additional domain schemas; fixed tools/discovery remain in the complete request budget.
     agent_tool_schema_tokens: int = Field(default=4096, ge=128)
     agent_summary_output_tokens: int = Field(default=4096, ge=128)
