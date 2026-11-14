@@ -30,10 +30,11 @@ def task_class(tags):
         ("conversation", {"memory", "multi_turn"}), ("prepare", {"write_prepare"}),
         ("browser", {"browser"}), ("article_read", {"body", "comparison", "dependency"}),
         ("read", {"read", "retrieval", "accounts", "capabilities"}),
+        ("control", {"security", "no_implicit_approval", "isolation"}),
     ):
         if tags & matches:
             return name
-    return "chat"
+    return "control" if {"identity", "negative"} <= tags else "chat"
 
 
 def distribution(values, minimum):
@@ -318,6 +319,7 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
     return {
         "scope": profile["scope"], "source_sha256": hashlib.sha256(source).hexdigest(),
         "profile_sha256": profile_digest,
+        "assessor_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "status": "failed" if failures else "unverified" if missing else "http_checks_passed",
         "failures": failures, "unverified": missing,
         "semantic_counts": dict(Counter(semantic.values())),
