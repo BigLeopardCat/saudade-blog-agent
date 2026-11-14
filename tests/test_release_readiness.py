@@ -244,7 +244,13 @@ def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["accounts", "moderation", "negative"]) == "read"
     assert task_class(["accounts", "write_prepare"]) == "prepare"
     assert task_class(["accounts", "memory"]) == "conversation"
-    assert task_class(["security", "negative"]) == "chat"
+    assert task_class(["security", "negative"]) == "control"
+    assert task_class(["identity", "negative"]) == "control"
+    assert task_class(["chat", "identity"]) == "chat"
+    assert task_class(["chat", "identity", "security"]) == "chat"
+    assert task_class(["security", "read"]) == "read"
+    assert task_class(["security", "browser"]) == "browser"
+    assert task_class(["security", "write_prepare"]) == "prepare"
     assert task_class(["identity", "capabilities"]) == "read"
     assert task_class(["capabilities", "negative"]) == "read"
     assert task_class(["capabilities", "write_prepare"]) == "prepare"
@@ -334,3 +340,17 @@ def test_registered_suite_can_measure_every_release_percentile_group():
     assert command_rounds >= minimum
     assert not audit(cases)["exact_duplicate_inputs"]
     assert audit(cases)["unannotated_text_decisions"] == 0
+
+
+def test_reassessment_records_its_own_code_identity(tmp_path):
+    from pathlib import Path
+
+    from eval import release_readiness
+
+    report, profile, semantic, _ = fixture(tmp_path)
+    original = report.read_bytes()
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["assessor_sha256"] == hashlib.sha256(
+        Path(release_readiness.__file__).read_bytes()).hexdigest()
+    assert got["source_sha256"] == hashlib.sha256(original).hexdigest()
+    assert report.read_bytes() == original
