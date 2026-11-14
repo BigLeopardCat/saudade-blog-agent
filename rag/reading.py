@@ -48,7 +48,7 @@ def read_requests(hit):
         args = {
             "article_id": hit["id"],
             "doc_type": hit["type"],
-            "view": "body",
+            "view": "source_range",
             "section": section,
             "offset": window["offset"],
             "max_chars": min(24000, window["end"] - window["offset"]),

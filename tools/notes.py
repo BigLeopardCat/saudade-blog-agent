@@ -136,7 +136,7 @@ _ARTICLE_SCHEMA_DESC = "Sections/continuations: copy sectionSchema, also set rev
 @tool
 def get_article_detail(
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
-    view: Literal["body", "outline", "metadata"],
+    view: Literal["full_text", "source_range", "outline", "metadata"],
     doc_type: Literal["note", "talk", "board", "announcement"] = "note",
     section: Annotated[str, Field(max_length=1024)] = "",
     offset: Annotated[
@@ -147,18 +147,24 @@ def get_article_detail(
     revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
     section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
 ) -> str | ToolResult:
-    """Read original text of a known public document for an overview or full analysis.
-    Choose body (includes outline/revision), outline for structure only, metadata
-    for author/title/tags. Targeted fact finding uses rag_search(article_id=...).
-    Exact sections/continuations need revision and section_schema. Copy returned
-    cursors; section end is not document end. Private/drafts use read_current_article;
-    counters use get_article_stats.
+    """Read a public document as a whole or read an exact source range.
+    For an overview or detailed analysis of the document choose full_text.
+    For a question about one topic/fact, use rag_search with article_id instead;
+    it already returns verified original passages. Outline is structure only;
+    metadata is author/title/tags only. For source_range copy section/offset,
+    revision and section_schema from prior evidence. Private/drafts use read_current_article.
     """
     from urllib.parse import urlencode
 
     from agent.domains.articles.reading import project
     from tools.result import invalid_args
 
+    if view == "full_text" and (section or offset):
+        return invalid_args("Full text starts at the document beginning; "
+                            "use source_range for locators.")
+    if view == "source_range" and not (section or offset):
+        return invalid_args("Copy a section or continuation offset from the preceding evidence.")
+    wire_view = "body" if view in {"full_text", "source_range"} else view
     if (offset or section.startswith("s") and section[1:].isdigit()) and (
         not revision or not section_schema
     ):
@@ -169,9 +175,9 @@ def get_article_detail(
     if view == "outline" and section:
         return invalid_args("Outline view cannot select a body section.")
     params = {
-        "view": view,
+        "view": wire_view,
         "offset": offset,
-        **({"limit": max_chars} if view == "body" else {}),
+        **({"limit": max_chars} if wire_view == "body" else {}),
         **({"section": section} if section else {}),
         **({"revision": revision} if revision else {}),
         **({"section_schema": section_schema} if section_schema else {}),
@@ -187,7 +193,7 @@ def get_article_detail(
         return _shape(
             project(
                 data, doc_type, article_id, section, offset, max_chars,
-                revision, section_schema, view
+                revision, section_schema, wire_view
             )
         )
     except (ValueError, TypeError, KeyError):

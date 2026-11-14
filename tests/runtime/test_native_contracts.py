@@ -345,7 +345,7 @@ def test_navigation_fixture_supports_alternative_article_reads():
         categories = public_catalog.list_categories.invoke({})
         searched = notes.search_notes.invoke({"keyword": "Git"})
         retrieved = notes.rag_search.invoke({"query": "Git"})
-        detail = notes.get_article_detail.invoke({"view": "body", "article_id": 719})
+        detail = notes.get_article_detail.invoke({"view": "full_text", "article_id": 719})
         assert all(
             result.kind == "ok" for result in (catalog, categories, searched, retrieved, detail)
         )

@@ -80,7 +80,7 @@ def test_all_source_types_roundtrip_long_original_text_with_one_bounded_get_per_
     backend, kind, identifier
 ):
     documents, calls, _ = backend
-    params = {"article_id": identifier, "view": "body", "doc_type": kind, "max_chars": 997}
+    params = {"article_id": identifier, "view": "full_text", "doc_type": kind, "max_chars": 997}
     joined = []
     while True:
         before = len(calls)
@@ -95,6 +95,7 @@ def test_all_source_types_roundtrip_long_original_text_with_one_bounded_get_per_
             assert data["readComplete"]
             break
         params.update(
+            view="source_range",
             offset=data["nextOffset"],
             revision=data["contentRevision"],
             section_schema=data["sectionSchema"],
@@ -106,8 +107,9 @@ def test_all_source_types_roundtrip_long_original_text_with_one_bounded_get_per_
 def test_body_continuation_omits_repeated_views_without_losing_exact_source(backend):
     documents, calls, changes = backend
     changes["metadata"] = {"description": "公开摘要" * 100, "tags": [], "tagsTruncated": False}
-    first = get_article_detail.invoke({"view": "body", "article_id": 19, "max_chars": 997}).data
-    continued = get_article_detail.invoke({"view": "body", "article_id": 19,
+    first = get_article_detail.invoke(
+        {"view": "full_text", "article_id": 19, "max_chars": 997}).data
+    continued = get_article_detail.invoke({"view": "source_range", "article_id": 19,
         "offset": first["nextOffset"],
         "max_chars": 997, "revision": first["contentRevision"],
         "section_schema": first["sectionSchema"]}).data
@@ -156,7 +158,7 @@ def test_stats_is_an_independent_read_without_body_or_view_reporting(backend):
 def test_wrong_identity_range_or_parser_metadata_never_records_body_evidence(backend, patch):
     _, _, changes = backend
     changes.update(patch)
-    value = get_article_detail.invoke({"view": "body", "article_id": 19, "max_chars": 5})
+    value = get_article_detail.invoke({"view": "full_text", "article_id": 19, "max_chars": 5})
     assert value.kind == "unavailable" and value.data is None
 
 
@@ -166,7 +168,7 @@ def test_wrong_identity_range_or_parser_metadata_never_records_body_evidence(bac
 def test_invalid_typed_ids_and_ranges_do_not_make_http_requests(backend, args):
     _, calls, _ = backend
     with pytest.raises(ValidationError):
-        get_article_detail.invoke({"view": "body", **args})
+        get_article_detail.invoke({"view": "full_text", **args})
     assert not calls
 
 
@@ -175,15 +177,15 @@ def test_stale_revision_and_view_are_explicit_and_missing_locator_has_zero_io(ba
     invalidated = []
     monkeypatch.setattr("rag.search.invalidate_document", lambda *args: invalidated.append(args))
     assert get_article_detail.invoke(
-        {"view": "body", "article_id": 19, "offset": 5}).kind == "invalid_args"
+        {"view": "source_range", "article_id": 19, "offset": 5}).kind == "invalid_args"
     assert not calls
     changed = get_article_detail.invoke(
-        {"view": "body", "article_id": 19, "offset": 5, "revision": "a" * 64,
+        {"view": "source_range", "article_id": 19, "offset": 5, "revision": "a" * 64,
          "section_schema": PARSER_VERSION}
     )
     assert changed.kind == "unavailable" and changed.meta["status"] == 409
     assert invalidated == [(19, "a" * 64)]
-    assert get_article_detail.invoke({"view": "body", "article_id": 999}).kind == "not_found"
+    assert get_article_detail.invoke({"view": "full_text", "article_id": 999}).kind == "not_found"
 
 
 def test_framework_reads_verified_http_ranges_before_answering_without_hidden_stats(backend):
@@ -196,7 +198,7 @@ def test_framework_reads_verified_http_ranges_before_answering_without_hidden_st
                 {
                     "name": "get_article_detail",
                     "id": "first",
-                    "args": {"article_id": 19, "view": "body", "max_chars": 5},
+                    "args": {"article_id": 19, "view": "full_text", "max_chars": 5},
                 }
             ],
         ),
@@ -208,7 +210,7 @@ def test_framework_reads_verified_http_ranges_before_answering_without_hidden_st
                     "id": "next",
                     "args": {
                         "article_id": 19,
-                        "view": "body",
+                        "view": "source_range",
                         "offset": 5,
                         "revision": revision,
                         "section_schema": PARSER_VERSION,
@@ -258,7 +260,7 @@ def test_shared_host_commonmark_fixture_matches_python_rag_source_locations():
 def test_budget_excerpt_preserves_document_and_section_view_for_continuation(backend):
     from rag.reading import render_article_result
 
-    value = get_article_detail.invoke({"view": "body", "article_id": 19, "max_chars": 12000})
+    value = get_article_detail.invoke({"view": "full_text", "article_id": 19, "max_chars": 12000})
     text, visible = render_article_result(value.data, str(value), 1000)
     assert len(text) <= 1000 and visible["nextOffset"] is not None
     assert visible["contentRevision"] == value.data["contentRevision"]

@@ -208,7 +208,9 @@ class ArticleEvidence:
 
     def _remember_target(self, target):
         selected = {key: target[key] for key in ("article_id", "revision", "section_schema")}
-        selected.update(doc_type=target.get("doc_type", "note"), view=target.get("view", "body"),
+        view = target.get("view", "body")
+        selected.update(doc_type=target.get("doc_type", "note"),
+                        view="body" if view in {"full_text", "source_range"} else view,
                         section=target.get("section", ""), offset=target.get("offset", 0))
         if selected not in self.read_targets:
             self.read_targets.append(selected)
@@ -217,14 +219,17 @@ class ArticleEvidence:
         """Bind verified coordinates, without choosing a document, section or action."""
         if type(args.get("article_id")) is not int:
             return args
+        view = args.get("view", "body")
+        if view in {"full_text", "source_range"}:
+            view = "body"
         cursor = self.continuations.get(args.get("article_id"))
         if (cursor and args.get("doc_type", "note") == "note"
-                and args.get("view", "body") == "body" and not args.get("section")
+                and view == "body" and not args.get("section")
                 and type(args.get("offset")) is int and args["offset"] == cursor["offset"]):
             candidates = [cursor]
         else:
             selector = {"article_id": args["article_id"], "doc_type": args.get("doc_type", "note"),
-                        "view": args.get("view", "body"), "section": args.get("section", ""),
+                        "view": view, "section": args.get("section", ""),
                         "offset": args.get("offset", 0)}
             if type(selector["offset"]) is not int:
                 return args

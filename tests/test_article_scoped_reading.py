@@ -103,7 +103,7 @@ def locator(hit):
     match = next(row for row in hit["matches"] if row["section_id"] == "s22")
     return {
         "article_id": ARTICLE,
-        "view": "body",
+        "view": "source_range",
         "section": "s22",
         "offset": match["offset"],
         "max_chars": match["end"] - match["offset"],
@@ -382,6 +382,26 @@ def test_read_scope_is_required_before_any_body_fetch(article):
     with pytest.raises(ValidationError, match="view"):
         notes.get_article_detail.invoke({"article_id": ARTICLE})
     assert calls == []
+
+
+@pytest.mark.parametrize("arguments", [
+    {"view": "full_text", "section": "s22"},
+    {"view": "full_text", "offset": 100},
+    {"view": "source_range"},
+])
+def test_read_scope_rejects_conflicting_or_missing_locators_before_http(article, arguments):
+    _, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, **arguments})
+    assert result.kind == "invalid_args" and calls == []
+
+
+def test_whole_document_scope_retains_the_original_host_view_and_complete_body(article):
+    document, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "view": "full_text"})
+    assert result.kind == "ok" and calls[-1].url.params["view"] == "body"
+    assert result.data["noteContent"] == document["content"][:32768]
+    assert result.data["source"]["end"] == len(result.data["noteContent"])
+    assert not result.data["readComplete"] and result.data["nextOffset"] == 32768
 
 
 def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(article, monkeypatch):

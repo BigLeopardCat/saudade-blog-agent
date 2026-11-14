@@ -39,7 +39,8 @@ def test_bounded_public_detail_is_authorized_without_publisher_identity():
     from tools.notes import get_article_detail
 
     with backend("superadmin") as state:
-        result = get_article_detail.invoke({"view": "body", "article_id": 45, "doc_type": "board"})
+        result = get_article_detail.invoke(
+            {"view": "full_text", "article_id": 45, "doc_type": "board"})
         assert result.kind == "ok" and "这个合成看板娘好笨啊" in str(result)
         assert "synthetic_author_20" not in str(result) and not state["unsupported_reads"]
 
