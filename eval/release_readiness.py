@@ -30,6 +30,7 @@ def task_class(tags):
         ("conversation", {"memory", "multi_turn"}), ("prepare", {"write_prepare"}),
         ("browser", {"browser"}), ("article_read", {"body", "comparison", "dependency"}),
         ("read", {"read", "retrieval", "accounts", "capabilities"}),
+        ("chat", {"chat"}),
         ("control", {"security", "no_implicit_approval", "isolation"}),
     ):
         if tags & matches:

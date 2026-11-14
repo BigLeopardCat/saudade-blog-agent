@@ -247,6 +247,7 @@ def test_task_classes_handle_overlapping_suite_tags():
     assert task_class(["security", "negative"]) == "control"
     assert task_class(["identity", "negative"]) == "control"
     assert task_class(["chat", "identity"]) == "chat"
+    assert task_class(["chat", "identity", "security"]) == "chat"
     assert task_class(["security", "read"]) == "read"
     assert task_class(["security", "browser"]) == "browser"
     assert task_class(["security", "write_prepare"]) == "prepare"
