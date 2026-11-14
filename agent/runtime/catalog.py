@@ -5,20 +5,21 @@ from langchain_core.tools import StructuredTool
 
 def capability_overview(initial, domains):
     """Project the application's current menu without loading execution schemas."""
-    def get_agent_capabilities() -> dict:
-        """Describe available features when asked what this assistant can do.
+    def get_agent_capabilities(domain: str = "") -> dict:
+        """List the caller's available tool names; request one domain for descriptions.
 
         Explicit caller permission limits need no catalog lookup before refusing an action.
         Each tool has its own targets and actions, even within the same domain.
         """
+        context = {"coverage": "current_tool_catalog", "grants_authorization": False}
+        if domain:
+            selected = domains.get(domain) or {}
+            return {**context, "domain": domain, "available": bool(selected),
+                    "tools": {name: tool.description for name, tool in selected.items()}}
         return {
-            "coverage": "current_tool_catalog",
-            "grants_authorization": False,
-            "initial_tools": [{"name": name, "summary": tool.description.split("\n", 1)[0]}
-                              for name, tool in initial.items()],
-            "domains": [{"name": name, "tools": {
-                tool_name: tool.description.split("\n", 1)[0]
-                for tool_name, tool in tools.items()}}
+            **context,
+            "initial_tools": list(initial),
+            "domains": [{"name": name, "tools": list(tools)}
                         for name, tools in domains.items() if tools],
         }
 
