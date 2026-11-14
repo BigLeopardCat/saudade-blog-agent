@@ -46,7 +46,7 @@ def test_read_hint_expands_only_the_read_locator_and_keeps_rank_score_and_excerp
     assert hit == saved and expanded[0]["score"] == .8
     assert expanded[0]["matches"][0]["offset"] == 7
     hint = candidate_text(1, expanded[0])
-    request = json.loads(hint)["read_requests"][0]["request"]
+    request = json.loads(hint)["read_requests"][0]["request"]["selection"]
     assert expanded[0]["matches"][0]["end"] == 13
     assert request["offset"] == 0 and request["max_chars"] == len(text)
     source = json.loads(hint)["source"]

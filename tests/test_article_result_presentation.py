@@ -35,7 +35,7 @@ def test_section_rrf_does_not_let_three_lexical_sections_hide_the_dense_target()
     assert row["section_ids"] == ["s1", "s22", "s2", "s3"]
     assert len(row["matches"]) == 4
     wire = candidate_text(1, row)
-    assert {r["request"]["section"] for r in json.loads(wire)["read_requests"]} == set(
+    assert {r["request"]["selection"]["section"] for r in json.loads(wire)["read_requests"]} == set(
         row["section_ids"]
     )
 
@@ -48,7 +48,7 @@ def test_ranked_union_retains_the_second_dense_section_and_its_readable_range():
     assert set(row["section_ids"]) == {"s2", "s3", "s6", "s19", "s22"}
     assert {match["section_id"] for match in row["matches"]} == set(row["section_ids"])
     wire = candidate_text(1, row)
-    reads = [item["request"] for item in json.loads(wire)["read_requests"]]
+    reads = [item["request"]["selection"] for item in json.loads(wire)["read_requests"]]
     assert any(r["section"] == "s22" and r["offset"] == 0 and r["max_chars"] == 40 for r in reads)
     assert json.loads(wire)["source"]["revision"] == row["document_revision"]
 
@@ -57,7 +57,7 @@ def test_disjoint_retrievers_keep_all_six_bounded_sections_visible():
     row = rrf_fuse([hit(sections=("s1", "s2", "s3"))], [hit(sections=("s4", "s5", "s6"))], 60, 1)[0]
     assert len(row["section_ids"]) == len(row["matches"]) == 6
     wire = candidate_text(1, row)
-    assert {r["request"]["section"] for r in json.loads(wire)["read_requests"]} == {
+    assert {r["request"]["selection"]["section"] for r in json.loads(wire)["read_requests"]} == {
         f"s{n}" for n in range(1, 7)
     }
 
@@ -68,7 +68,8 @@ def test_range_rrf_keeps_a_deep_dense_match_within_one_long_section():
     row = rrf_fuse([lexical], [dense], 60, 1)[0]
     assert [match["offset"] for match in row["matches"]] == [0, 30000, 500]
     assert any(
-        r["request"]["offset"] == 30000 and r["request"]["max_chars"] == 40
+        r["request"]["selection"]["offset"] == 30000
+        and r["request"]["selection"]["max_chars"] == 40
         for r in json.loads(candidate_text(1, row))["read_requests"]
     )
 
@@ -88,7 +89,8 @@ def test_rrf_never_reuses_invalid_character_coordinates():
     ]
     row = rrf_fuse([hit(ranges=invalid)], [hit()], 60, 1)[0]
     assert row["matches"] == [{"section_id": "s1", "offset": 0, "end": 40}]
-    assert json.loads(candidate_text(1, row))["read_requests"][0]["request"]["offset"] == 0
+    request = json.loads(candidate_text(1, row))["read_requests"][0]["request"]
+    assert request["selection"]["offset"] == 0
 
 
 def test_candidate_budget_keeps_whole_visible_entries_and_their_evidence():

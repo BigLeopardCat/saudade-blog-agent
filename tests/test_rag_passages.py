@@ -136,6 +136,8 @@ def test_model_projection_shares_one_version_without_losing_readable_coordinates
     for request in doc["read_requests"]:
         assert "revision" not in request["request"]
         args = request["request"]
+        assert "revision" not in args["selection"]
+        assert args["selection"]["kind"] == "source_range"
         assert args["article_id"] == doc["source"]["id"]
         assert args["doc_type"] == doc["source"]["type"]
 
