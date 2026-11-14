@@ -242,6 +242,8 @@ def project(value, kind, identifier, section, offset, limit, revision, section_s
             data["omittedViews"] = ["metadata", "outline"]
         else:
             data.update(_article_metadata(page.metadata))
+        if view == "body" and page.source is not None:
+            data["selectedScope"] = "section_subtree" if page.source.section_id else "document"
         data.update(
             noteId=page.id,
             noteTitle=page.title,

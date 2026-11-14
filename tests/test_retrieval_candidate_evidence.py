@@ -84,7 +84,7 @@ def test_candidate_versions_stay_with_their_document_and_do_not_mutate_evidence(
     shown = render_search_result([first, second], meta, len(text) - 1)
     assert shown.kind == "ok" and shown.data == [first]
     reads = json.loads(shown.text)["documents"][0]["read_requests"]
-    assert reads and all(r["request"]["revision"] == "a" * 64 for r in reads)
+    assert reads and json.loads(shown.text)["documents"][0]["source"]["revision"] == "a" * 64
     assert len(json.loads(shown.text)["documents"]) == 1
     assert [first, second] == before
 

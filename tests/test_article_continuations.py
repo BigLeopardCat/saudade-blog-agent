@@ -223,3 +223,19 @@ def test_default_body_page_uses_the_host_limit_and_keeps_a_verified_continuation
                                                                   "offset": 24000}))
     assert second.kind == "ok" and second.data["noteContent"] == body[24000:]
     assert second.data["readComplete"] and second.data["nextOffset"] is None
+
+
+def test_selected_section_reports_that_complete_subtree_includes_children(monkeypatch):
+    body = "## Parent\nparent body\n### Child\nchild body\n## Sibling\nsibling body\n"
+
+    def read(path, **kwargs):
+        params = {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
+        return document_page("note", ARTICLE, "Source", body, params)
+
+    monkeypatch.setattr(notes, "_get", read)
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "section": "Parent"})
+    assert result.kind == "ok" and result.data["selectedScope"] == "section_subtree"
+    assert result.data["readComplete"] and "child body" in result.data["sectionText"]
+    assert "sibling body" not in result.data["sectionText"]
+    _, visible = render_article_result(result.data, result.text, 700)
+    assert visible["selectedScope"] == "section_subtree"

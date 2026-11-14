@@ -67,6 +67,7 @@ def _read_range(data, article_id):
     return {
         "revision": source.get("revision") if located else None,
         "section_id": source.get("section_id") if located else None,
+        "selected_scope": data.get("selectedScope") if located else None,
         "start": start if located else None,
         "end": end if located else None,
         "visible_chars": len(body),
@@ -194,6 +195,7 @@ class ArticleEvidence:
                         if passage.source.type == "note" and passage.source.id == row["id"]:
                             self._observe_detail(row["id"], {
                                 "noteTitle": row["title"], "sectionText": passage.text,
+                                "selectedScope": "section_range",
                                 "source": passage.source.model_dump()})
         elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
               and type(args.get("article_id")) is int):

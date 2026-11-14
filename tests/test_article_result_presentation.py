@@ -50,7 +50,7 @@ def test_ranked_union_retains_the_second_dense_section_and_its_readable_range():
     wire = candidate_text(1, row)
     reads = [item["request"] for item in json.loads(wire)["read_requests"]]
     assert any(r["section"] == "s22" and r["offset"] == 0 and r["max_chars"] == 40 for r in reads)
-    assert all(r["revision"] == row["document_revision"] for r in reads)
+    assert json.loads(wire)["source"]["revision"] == row["document_revision"]
 
 
 def test_disjoint_retrievers_keep_all_six_bounded_sections_visible():

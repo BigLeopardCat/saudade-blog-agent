@@ -131,7 +131,9 @@ def test_direct_locator_reads_the_deep_match_and_not_the_start_of_a_long_section
     assert arguments["offset"] > 24000 and arguments["max_chars"] < 2000
     wire = candidate_text(1, hit)
     reads = [r["request"] for r in json.loads(wire)["read_requests"]]
-    assert {**arguments, "doc_type": "note"} in reads
+    assert {**arguments, "doc_type": "note"} in [
+        {**r, **{k: json.loads(wire)["source"][k] for k in ("revision", "section_schema")}}
+        for r in reads]
     result = notes.get_article_detail.invoke(arguments)
     assert result.kind == "ok" and FACT in result.data["sectionText"]
     assert len(result.data["sectionText"]) == arguments["max_chars"]
@@ -145,10 +147,10 @@ def test_shared_candidate_version_can_read_every_visible_section(article):
     reads = [r["request"] for r in json.loads(wire)["read_requests"]]
     assert len(reads) == len(hit["matches"]) > 1
     for args in reads:
-        assert (
-            args["revision"] == hit["document_revision"]
-            and args["section_schema"] == PARSER_VERSION
-        )
+        source = json.loads(wire)["source"]
+        assert source["revision"] == hit["document_revision"]
+        assert source["section_schema"] == PARSER_VERSION
+        args = {**args, **{k: source[k] for k in ("revision", "section_schema")}}
         result = notes.get_article_detail.invoke(args)
         assert result.kind == "ok" and result.data["sectionText"]
         assert result.data["source"]["offset"] == args["offset"]
@@ -422,12 +424,9 @@ def test_third_lexical_section_retains_a_revision_bound_executable_locator(monke
     wire = candidate_text(1, hit)
     reads = [r["request"] for r in json.loads(wire)["read_requests"]]
     assert {r["section"] for r in reads} == {"s1", "s2", "s3"}
-    assert all(
-        r["revision"] == hit["document_revision"]
-        and r["section_schema"] == PARSER_VERSION
-        and r["max_chars"] > 0
-        for r in reads
-    )
+    assert json.loads(wire)["source"]["revision"] == hit["document_revision"]
+    assert json.loads(wire)["source"]["section_schema"] == PARSER_VERSION
+    assert all(r["max_chars"] > 0 for r in reads)
 
 
 def test_a_revision_mismatch_during_fusion_keeps_scoped_lexical_results(article, monkeypatch):

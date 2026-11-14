@@ -43,7 +43,7 @@ def test_read_range_uses_the_visible_excerpt_not_the_full_backend_result():
     visible = observe(evidence, raw, limit=1800)
     observed = evidence.provenance(SITE_BASE)["body_reads"][0]["ranges"][0]
     assert observed == {
-        "revision": raw["contentRevision"], "section_id": "", "start": 0,
+        "revision": raw["contentRevision"], "section_id": "", "selected_scope": None, "start": 0,
         "end": visible["nextOffset"], "visible_chars": len(visible["noteContent"]),
         "selected_total_chars": 10000, "selected_range_reaches_end": False}
     assert observed["end"] < raw["source"]["end"]
@@ -82,7 +82,7 @@ def test_unlocated_body_and_failed_read_never_invent_revision_or_range():
     evidence.observe("get_article_detail", {"article_id": 2}, unavailable("failed", data=data))
     reads = evidence.provenance(SITE_BASE)["body_reads"]
     assert len(reads) == 1 and reads[0]["id"] == 1
-    assert reads[0]["ranges"] == [{"revision": None, "section_id": None,
+    assert reads[0]["ranges"] == [{"revision": None, "section_id": None, "selected_scope": None,
         "start": None, "end": None, "visible_chars": 12,
         "selected_total_chars": None, "selected_range_reaches_end": None}]
 

@@ -141,7 +141,8 @@ BM25S 的文章段落语料和 PG 距离查询的 WHERE 中生效，先限定再
 每个不可变词法快照使用标准 LRU 缓存最多 32 个限定索引，更新快照后不复用旧索引。
 跨文章搜索仍按完整语料评分。检索文字按完整
 候选条目缩页，结构化 evidence 只登记模型看见的候选；一个条目也放不下时返回 unavailable。
-模型可见 JSON 与 evidence 使用同一批正文片段和完整坐标；预算裁剪未呈现的片段不会登记已读。
+模型可见 JSON 与 evidence 使用同一批正文片段和完整坐标；文档级 source 共享版本与解析器，
+每个片段仅保留相对范围，不重复长 hash。预算裁剪未呈现的片段不会登记已读。
 索引刷新导致候选与快照版本不一致时返回 unavailable，不拼接不同版本的正文。
 工具 schema 与检索入口共用 top_k 上限 50，越界输入在参数校验时拒绝。
 
@@ -153,7 +154,8 @@ revision 与 section_schema，仅限同一文章、无小节选择且 offset 精
 nextOffset。显式冲突值不覆盖；读取失败清除对应游标，新任务不继承旧任务游标。
 已显示的 RAG 读取坐标、目录中的小节及其 nextSectionsOffset 也可绑定相应版本。
 不猜测未显示的游标；多个来源版本冲突时不自动绑定。宿主仍校验版本，正文修改后返回冲突。
-按标题/编号只接受唯一匹配；父节读取包括子节。
+按标题/编号只接受唯一匹配；selectedScope 明确区分 document 与 section_subtree，
+父节读取包括子节，readComplete 只描述该选定范围。
 contentRevision 与语料传输使用相同的标题、原文 canonical hash；解析器身份单独由
 sectionSchema 传递。检索候选 document_revision 使用相同内容版本，客户端只需原样回传。
 解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。

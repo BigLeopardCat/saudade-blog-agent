@@ -71,7 +71,12 @@ def candidate_view(index, hit):
             hit.get("document_revision"),
         ):
             raise ValueError("passage does not belong to the candidate")
-        passages.append(passage.model_dump())
+        passages.append(
+            {
+                "range": passage.source.model_dump(include={"section_id", "offset", "end"}),
+                "text": passage.text,
+            }
+        )
     candidate = {
         "rank": index,
         "type": hit["type"],
@@ -79,8 +84,25 @@ def candidate_view(index, hit):
         "title": hit["title"][:255],
         "titleTruncated": len(hit["title"]) > 255,
         "passages": passages,
-        "read_requests": reads,
+        "read_requests": [
+            {
+                **read,
+                "request": {
+                    key: value
+                    for key, value in read["request"].items()
+                    if key not in {"revision", "section_schema"}
+                },
+            }
+            for read in reads
+        ],
     }
+    if reads or passages:
+        candidate["source"] = DocumentReference(
+            type=hit["type"],
+            id=hit["id"],
+            revision=hit["document_revision"],
+            section_schema=hit["section_schema"],
+        ).model_dump()
     if not passages:
         candidate["index_matches"] = [
             {
@@ -221,6 +243,7 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
         "noteKey",
         "noteTitle",
         "readSection",
+        "selectedScope",
         "view",
         "contentRevision",
         "sectionSchema",

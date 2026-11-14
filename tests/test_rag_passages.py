@@ -15,7 +15,7 @@ from tools.result import ok
 
 @pytest.fixture
 def source():
-    body = "## Intro\n背景。\n## Workers\n取消后等待工作线程退出，再归还许可。\n"
+    body = "## Intro\n背景。\n## Workers\n" + "取消后等待工作线程退出，再归还许可。" * 30
     document = {"type": "note", "id": 41, "title": "Task lifecycle", "content": body}
     document["revision"] = content_revision(document["title"], body)
     index = RagIndex(corpus_loader=lambda: [document], vector_warmer=lambda _: None)
@@ -119,3 +119,22 @@ def test_body_passage_rejects_mismatched_text_length_and_unknown_parser(source):
         BodyPassage.model_validate(
             {**passage, "source": {**passage["source"], "section_schema": "unsupported"}}
         )
+
+
+def test_model_projection_shares_one_version_without_losing_readable_coordinates(source):
+    import json
+
+    _, index, hits = source
+    rows = index.read_passages(hits)
+    wire = search_frame(rows, {"body_evidence": {"verified": True}})
+    doc = json.loads(wire)["documents"][0]
+    assert wire.count(hits[0]["document_revision"]) == 1
+    assert doc["source"]["revision"] == hits[0]["document_revision"]
+    for passage, raw in zip(doc["passages"], rows[0]["passages"]):
+        assert passage["text"] == raw["text"]
+        assert {**doc["source"], **passage["range"]} == raw["source"]
+    for request in doc["read_requests"]:
+        assert "revision" not in request["request"]
+        args = request["request"]
+        assert args["article_id"] == doc["source"]["id"]
+        assert args["doc_type"] == doc["source"]["type"]

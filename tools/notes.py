@@ -240,8 +240,9 @@ def rag_search(
     """Locate evidence when the user requests answers based on this blog or an article.
     General knowledge without a blog/source requirement needs no retrieval.
     Set article_id for a known source. Verified passages are current public body evidence;
-    metadata-only candidates are not. Read more with the returned get_article_detail requests
-    only when the visible passages are insufficient. For title/tag discovery
+    metadata-only candidates are not. Document source holds the shared revision/parser;
+    passages hold exact ranges. Read more with returned locations only when insufficient;
+    the current task binds known versions at execution. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
     from agent.runtime.budget import BudgetExceeded
