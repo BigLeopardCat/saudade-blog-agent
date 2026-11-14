@@ -4,6 +4,7 @@ import json
 
 from rag.context_windows import merge_read_windows
 from rag.ranking import source_excerpt
+from rag.reading_requests import tool_args
 from rag.sections import PARSER_VERSION
 from rag.source import BodyPassage, DocumentReference, SourceRange
 
@@ -48,6 +49,7 @@ def read_requests(hit):
         args = {
             "article_id": hit["id"],
             "doc_type": hit["type"],
+            "view": "source_range",
             "section": section,
             "offset": window["offset"],
             "max_chars": min(24000, window["end"] - window["offset"]),
@@ -89,11 +91,8 @@ def candidate_view(index, hit):
         "read_requests": [
             {
                 **read,
-                "request": {
-                    key: value
-                    for key, value in read["request"].items()
-                    if key not in {"revision", "section_schema"}
-                },
+                "request": tool_args({key: value for key, value in read["request"].items()
+                                      if key not in {"revision", "section_schema"}}),
             }
             for read in reads
         ],

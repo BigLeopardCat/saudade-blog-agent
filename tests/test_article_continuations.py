@@ -13,6 +13,7 @@ from agent.products.blog.articles import ArticleMiddleware
 from agent.runtime.session import ToolSession
 from eval.fixtures.document_reads import RevisionChanged, article_page, document_page
 from rag.reading import render_article_result
+from rag.reading_requests import tool_args
 from tools import notes
 from tools.result import ok, unavailable
 
@@ -109,7 +110,9 @@ def test_framework_binds_next_page_but_host_still_rejects_changed_body(monkeypat
             position = len(messages) - 1
             if position < 2:
                 return AIMessage(content="", tool_calls=[{"name": "get_article_detail",
-                    "args": {"article_id": ARTICLE, "offset": position * 20, "max_chars": 20},
+                    "args": tool_args({"article_id": ARTICLE,
+                             "view": "full_text" if position == 0 else "source_range",
+                             "offset": position * 20, "max_chars": 20}),
                     "id": f"read-{position}"}])
             return AIMessage(content="The article changed." if changed else "Read the next page.")
 
@@ -192,7 +195,8 @@ def test_framework_binds_the_observed_directory_cursor_before_host_validation(mo
             count = sum(getattr(m, "type", None) == "tool" for m in messages)
             if count < 2:
                 return AIMessage(content="", tool_calls=[{"name": "get_article_detail",
-                    "args": {"article_id": ARTICLE, "view": "outline", "offset": count * 12},
+                    "args": tool_args(
+                        {"article_id": ARTICLE, "view": "outline", "offset": count * 12}),
                     "id": f"directory-{count}"}])
             return AIMessage(content="Directory pages are available.")
 
@@ -204,7 +208,7 @@ def test_framework_binds_the_observed_directory_cursor_before_host_validation(mo
     assert len(requests[1]["revision"]) == 64 and requests[1]["section_schema"]
 
 
-def test_default_body_page_uses_the_host_limit_and_keeps_a_verified_continuation(monkeypatch):
+def test_body_page_uses_the_host_limit_and_keeps_a_verified_continuation(monkeypatch):
     body = "source text " * 4000
     requests = []
 
@@ -214,13 +218,14 @@ def test_default_body_page_uses_the_host_limit_and_keeps_a_verified_continuation
         return document_page("note", ARTICLE, "Source", body, params)
 
     monkeypatch.setattr(notes, "_get", read)
-    first = notes.get_article_detail.invoke({"article_id": ARTICLE})
+    first = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, "view": "full_text"}))
     assert requests[0]["limit"] == "32768"
     assert first.data["noteContent"] == body[:32768] and first.data["nextOffset"] == 32768
     state = ArticleEvidence()
     state.observe("get_article_detail", {"article_id": ARTICLE}, first)
-    second = notes.get_article_detail.invoke(state.bind_read_args({"article_id": ARTICLE,
-                                                                  "offset": 32768}))
+    second = notes.get_article_detail.invoke(tool_args(state.bind_read_args({"article_id": ARTICLE,
+                                                                  "view": "source_range",
+                                                                  "offset": 32768})))
     assert second.kind == "ok" and second.data["noteContent"] == body[32768:]
     assert second.data["readComplete"] and second.data["nextOffset"] is None
 
@@ -233,7 +238,8 @@ def test_selected_section_reports_that_complete_subtree_includes_children(monkey
         return document_page("note", ARTICLE, "Source", body, params)
 
     monkeypatch.setattr(notes, "_get", read)
-    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "section": "Parent"})
+    result = notes.get_article_detail.invoke(
+        tool_args({"article_id": ARTICLE, "view": "source_range", "section": "Parent"}))
     assert result.kind == "ok" and result.data["selectedScope"] == "section_subtree"
     assert result.data["readComplete"] and "child body" in result.data["sectionText"]
     assert "sibling body" not in result.data["sectionText"]

@@ -19,6 +19,7 @@ from eval.fixtures.document_reads import DEFAULT_READ_CHARS, article_page, docum
 from eval.offline_rag_eval import bm25_run, evaluate
 from eval.rag_dataset import load
 from rag.corpus import content_revision
+from rag.reading_requests import tool_args
 from rag.search import RagIndex
 from rag.sections import PARSER_VERSION, outline
 from tools import base
@@ -114,11 +115,11 @@ def test_real_framework_retrieval_locator_reads_the_labelled_original_body(corpu
     canonical = content_revision(source["title"], source["content"])
     assert hit["document_revision"] == hit["content_revision"] == canonical
     assert hit["section_schema"] == PARSER_VERSION
-    args = {"article_id": source["id"], "section": expected["section_id"],
+    args = {"article_id": source["id"], "view": "source_range", "section": expected["section_id"],
             "revision": hit["document_revision"], "section_schema": hit["section_schema"],
             "max_chars": 1024}
     model = Capture(AIMessage(content="", tool_calls=[{
-        "name": "get_article_detail", "id": "located-read", "args": args}]),
+        "name": "get_article_detail", "id": "located-read", "args": tool_args(args)}]),
         AIMessage(content="正文中的原话是：" + expected["quote"]
                   + f"。[来源](/article/{source['id']})"))
     runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
@@ -151,11 +152,12 @@ def test_duplicate_headings_and_first_window_require_explicit_location(corpus, b
     documents, _ = backend
     source = documents["runtime"]
     expected = data["queries"]["long_tail"]["evidence_spans"][0]
-    ambiguous = get_article_detail.invoke({"article_id": source["id"], "section": "故障恢复"})
+    ambiguous = get_article_detail.invoke(
+        tool_args({"view": "source_range", "article_id": source["id"], "section": "故障恢复"}))
     assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
     assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
-    first = get_article_detail.invoke({"article_id": source["id"],
-                                       "max_chars": DEFAULT_READ_CHARS})
+    first = get_article_detail.invoke(tool_args({"view": "full_text", "article_id": source["id"],
+                                       "max_chars": DEFAULT_READ_CHARS}))
     assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
 
@@ -172,10 +174,10 @@ def test_search_locator_cannot_read_edited_content_or_another_section_view(
         source["content"] = source["content"].replace("工作线程实际退出时", "工作线程启动时")
     invalidations = []
     monkeypatch.setattr("rag.search.invalidate_document", lambda *args: invalidations.append(args))
-    result = get_article_detail.invoke({
+    result = get_article_detail.invoke(tool_args({"view": "source_range",
         "article_id": source["id"], "section": "s4", "revision": hit["document_revision"],
         "section_schema": ("obsolete-parser" if change == "section_schema"
-                           else hit["section_schema"])})
+                           else hit["section_schema"])}))
     assert result.kind == "unavailable" and result.data is None and result.meta["status"] == 409
     assert invalidations == [(source["id"], hit["document_revision"])] and len(calls) == 1
 
@@ -188,9 +190,9 @@ def test_withdrawn_document_cannot_be_read_and_disappears_after_index_rebuild(co
     previous = selected._lexical_ranked(query, 3)
     removed = public.pop("runtime")
     assert previous[0]["id"] == removed["id"]
-    refused = get_article_detail.invoke({
+    refused = get_article_detail.invoke(tool_args({"view": "source_range",
         "article_id": removed["id"], "section": "s4", "revision": previous[0]["document_revision"],
-        "section_schema": previous[0]["section_schema"]})
+        "section_schema": previous[0]["section_schema"]}))
     assert refused.kind == "not_found" and refused.data is None and len(calls) == 1
     selected.build()
     assert removed["id"] not in {hit["id"] for hit in selected._lexical_ranked(query, 3)}

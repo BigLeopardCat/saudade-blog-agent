@@ -10,6 +10,7 @@ from langchain_core.messages import ToolMessage
 
 from agent.domains.articles.reading import body_continuation, directory_targets
 from rag.reading import read_requests
+from rag.reading_requests import is_question
 from rag.source import BodyPassage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
@@ -153,7 +154,9 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
-        if name in SEARCH_TOOLS or name == "search_notes" or name in CATALOG_TOOLS:
+        search_operation = (name in SEARCH_TOOLS
+                            or name == "get_article_detail" and is_question(args))
+        if search_operation or name == "search_notes" or name in CATALOG_TOOLS:
             rows = payload(value)
             if name in CATALOG_TOOLS or name == "search_notes" and isinstance(rows, dict):
                 rows = (
@@ -174,7 +177,7 @@ class ArticleEvidence:
                             if url := catalog_source_url(row):
                                 self.catalog_references.add(
                                     (urlsplit(url).netloc.casefold(), ident))
-        if name in SEARCH_TOOLS:
+        if search_operation:
             self.searched = True
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")
@@ -208,7 +211,9 @@ class ArticleEvidence:
 
     def _remember_target(self, target):
         selected = {key: target[key] for key in ("article_id", "revision", "section_schema")}
-        selected.update(doc_type=target.get("doc_type", "note"), view=target.get("view", "body"),
+        view = target.get("view", "body")
+        selected.update(doc_type=target.get("doc_type", "note"),
+                        view="body" if view in {"full_text", "source_range"} else view,
                         section=target.get("section", ""), offset=target.get("offset", 0))
         if selected not in self.read_targets:
             self.read_targets.append(selected)
@@ -217,14 +222,17 @@ class ArticleEvidence:
         """Bind verified coordinates, without choosing a document, section or action."""
         if type(args.get("article_id")) is not int:
             return args
+        view = args.get("view", "body")
+        if view in {"full_text", "source_range"}:
+            view = "body"
         cursor = self.continuations.get(args.get("article_id"))
         if (cursor and args.get("doc_type", "note") == "note"
-                and args.get("view", "body") == "body" and not args.get("section")
+                and view == "body" and not args.get("section")
                 and type(args.get("offset")) is int and args["offset"] == cursor["offset"]):
             candidates = [cursor]
         else:
             selector = {"article_id": args["article_id"], "doc_type": args.get("doc_type", "note"),
-                        "view": args.get("view", "body"), "section": args.get("section", ""),
+                        "view": view, "section": args.get("section", ""),
                         "offset": args.get("offset", 0)}
             if type(selector["offset"]) is not int:
                 return args

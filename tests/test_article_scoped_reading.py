@@ -8,6 +8,7 @@ from _memory_support import config
 from _rag_store import memory_vectors  # noqa: F401
 from langchain_core.messages import HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
+from pydantic import ValidationError
 
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.application import BlogApplication
@@ -18,6 +19,7 @@ from models.llm import get_llm
 from rag import search
 from rag.corpus import content_revision
 from rag.reading import candidate_text, render_article_result
+from rag.reading_requests import document_args, tool_args
 from rag.sections import PARSER_VERSION
 from tools import base, notes
 
@@ -102,6 +104,7 @@ def locator(hit):
     match = next(row for row in hit["matches"] if row["section_id"] == "s22")
     return {
         "article_id": ARTICLE,
+        "view": "source_range",
         "section": "s22",
         "offset": match["offset"],
         "max_chars": match["end"] - match["offset"],
@@ -130,11 +133,11 @@ def test_direct_locator_reads_the_deep_match_and_not_the_start_of_a_long_section
     arguments = locator(hit)
     assert arguments["offset"] > 24000 and arguments["max_chars"] < 2000
     wire = candidate_text(1, hit)
-    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    reads = [document_args(r["request"]) for r in json.loads(wire)["read_requests"]]
     assert {**arguments, "doc_type": "note"} in [
         {**r, **{k: json.loads(wire)["source"][k] for k in ("revision", "section_schema")}}
         for r in reads]
-    result = notes.get_article_detail.invoke(arguments)
+    result = notes.get_article_detail.invoke(tool_args(arguments))
     assert result.kind == "ok" and FACT in result.data["sectionText"]
     assert len(result.data["sectionText"]) == arguments["max_chars"]
     assert result.data["source"]["offset"] == arguments["offset"]
@@ -144,14 +147,14 @@ def test_shared_candidate_version_can_read_every_visible_section(article):
     _, index, _ = article
     hit = index._lexical_ranked("青花瓷器图案", 1, article_id=ARTICLE)[0]
     wire = candidate_text(1, hit)
-    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    reads = [document_args(r["request"]) for r in json.loads(wire)["read_requests"]]
     assert len(reads) == len(hit["matches"]) > 1
     for args in reads:
         source = json.loads(wire)["source"]
         assert source["revision"] == hit["document_revision"]
         assert source["section_schema"] == PARSER_VERSION
         args = {**args, **{k: source[k] for k in ("revision", "section_schema")}}
-        result = notes.get_article_detail.invoke(args)
+        result = notes.get_article_detail.invoke(tool_args(args))
         assert result.kind == "ok" and result.data["sectionText"]
         assert result.data["source"]["offset"] == args["offset"]
         assert len(result.data["sectionText"]) == args["max_chars"]
@@ -174,7 +177,7 @@ def test_every_directory_entry_can_be_traversed_without_claiming_body_reads(arti
         args = {"article_id": ARTICLE, "view": "outline", "offset": offset}
         if revision:
             args.update(revision=revision, section_schema=PARSER_VERSION)
-        result = notes.get_article_detail.invoke(args)
+        result = notes.get_article_detail.invoke(tool_args(args))
         assert result.kind == "ok"
         data = result.data
         assert data["view"] == "outline" and data["source"] is None
@@ -195,42 +198,42 @@ def test_outline_cursors_require_the_view_and_matching_version(article):
     document, _, calls = article
     assert (
         notes.get_article_detail.invoke(
-            {"article_id": ARTICLE, "view": "outline", "offset": 12}
+            tool_args({"article_id": ARTICLE, "view": "outline", "offset": 12})
         ).kind
         == "invalid_args"
     )
     assert calls == []
     assert (
         notes.get_article_detail.invoke(
-            {"article_id": ARTICLE, "view": "outline", "section": "s22"}
+            tool_args({"article_id": ARTICLE, "view": "outline", "section": "s22"})
         ).kind
         == "invalid_args"
     )
     stale = notes.get_article_detail.invoke(
-        {
+        tool_args({
             "article_id": ARTICLE,
             "view": "outline",
             "offset": 12,
             "revision": "0" * 64,
             "section_schema": PARSER_VERSION,
-        }
+        })
     )
     assert stale.kind == "unavailable" and stale.meta["status"] == 409
     wrong_cursor = notes.get_article_detail.invoke(
-        {
+        tool_args({
             "article_id": ARTICLE,
             "view": "outline",
             "offset": 12000,
             "revision": document["revision"],
             "section_schema": PARSER_VERSION,
-        }
+        })
     )
     assert wrong_cursor.kind == "invalid_args"
 
 
 def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entries(article):
     _, _, _ = article
-    raw = notes.get_article_detail.invoke({"article_id": ARTICLE, "view": "outline"})
+    raw = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, "view": "outline"}))
     cap = len(str(raw)) - 150
     text, visible = render_article_result(raw.data, str(raw), cap)
     assert visible == json.loads(text) and len(text) <= cap
@@ -238,13 +241,13 @@ def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entrie
     assert visible["nextSectionsOffset"] == len(visible["sections"])
     assert visible["noteId"] == ARTICLE
     following = notes.get_article_detail.invoke(
-        {
+        tool_args({
             "article_id": ARTICLE,
             "view": "outline",
             "offset": visible["nextSectionsOffset"],
             "revision": visible["contentRevision"],
             "section_schema": visible["sectionSchema"],
-        }
+        })
     )
     assert following.data["sections"][0]["id"] == f"s{len(visible['sections']) + 1}"
     text, visible = render_article_result(raw.data, str(raw), 10)
@@ -252,20 +255,22 @@ def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entrie
 
 
 @pytest.mark.parametrize("read_more", [False, True])
+@pytest.mark.parametrize("entry", ["rag_search", "get_article_detail"])
 def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
-    article, monkeypatch, read_more
+    article, monkeypatch, read_more, entry
 ):
     _, index, calls = article
     arguments = locator(index._lexical_ranked(QUERY, 1, article_id=ARTICLE)[0])
     requests = []
-    actions = [
-        ("rag_search", {"query": QUERY, "top_k": 1, "article_id": ARTICLE}),
-    ]
+    initial = ({"query": QUERY, "article_id": ARTICLE, "top_k": 1} if entry == "rag_search"
+               else {"article_id": ARTICLE, "selection": {"kind": "question", "query": QUERY}})
+    actions = [(entry, initial)]
     if read_more:
         actions.append(
             (
                 "get_article_detail",
-                {k: v for k, v in arguments.items() if k not in {"revision", "section_schema"}},
+                tool_args({k: v for k, v in arguments.items()
+                           if k not in {"revision", "section_schema"}}),
             )
         )
 
@@ -344,7 +349,8 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
     assert frame["body_evidence"]["verified"] is True
     passages = frame["documents"][0]["passages"]
     assert FACT in "".join(p["text"] for p in passages)
-    assert any(r["request"]["section"] == "s22" for r in frame["documents"][0]["read_requests"])
+    assert any(r["request"]["selection"]["section"] == "s22"
+               for r in frame["documents"][0]["read_requests"])
     if read_more:
         body = json.loads(
             next(
@@ -371,9 +377,69 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
         message
         for message in native[0]["messages"]
         if message.type == "tool"
-        and message.name == ("get_article_detail" if read_more else "rag_search")
+        and message.name == ("get_article_detail" if read_more else entry)
+        and message.tool_call_id == f"call{len(actions) - 1}"
     )
     assert observed.artifact["article_evidence"]["read_ranges"][ARTICLE] == ranges
+
+
+def test_read_scope_is_required_before_any_body_fetch(article):
+    _, _, calls = article
+    with pytest.raises(ValidationError, match="selection"):
+        notes.get_article_detail.invoke({"article_id": ARTICLE})
+    assert calls == []
+
+
+@pytest.mark.parametrize("selection", [
+    {"kind": "question", "query": ""},
+    {"kind": "question", "query": "  "},
+    {"kind": "question", "query": QUERY, "offset": 1},
+    {"kind": "question", "query": QUERY, "kind_typo": "full_text"},
+])
+def test_question_scope_requires_a_real_query_and_forbids_document_options(article, selection):
+    _, _, calls = article
+    with pytest.raises(ValidationError):
+        notes.get_article_detail.invoke({"article_id": ARTICLE, "selection": selection})
+    assert calls == []
+
+
+def test_question_scope_does_not_search_a_different_resource_kind(article):
+    _, _, calls = article
+    result = notes.get_article_detail.invoke({"article_id": ARTICLE, "doc_type": "board",
+        "selection": {"kind": "question", "query": QUERY}})
+    assert result.kind == "invalid_args" and calls == []
+
+
+@pytest.mark.parametrize("arguments", [
+    {"view": "full_text", "section": "s22"},
+    {"view": "full_text", "offset": 100},
+    {"view": "source_range"},
+])
+def test_read_scope_rejects_conflicting_or_missing_locators_before_http(article, arguments):
+    _, _, calls = article
+    result = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, **arguments}))
+    assert result.kind == "invalid_args" and calls == []
+
+
+def test_whole_document_scope_retains_the_original_host_view_and_complete_body(article):
+    document, _, calls = article
+    result = notes.get_article_detail.invoke(tool_args(
+        {"article_id": ARTICLE, "view": "full_text"}))
+    assert result.kind == "ok" and calls[-1].url.params["view"] == "body"
+    assert result.data["noteContent"] == document["content"][:32768]
+    assert result.data["source"]["end"] == len(result.data["noteContent"])
+    assert not result.data["readComplete"] and result.data["nextOffset"] == 32768
+
+
+def test_revision_bound_range_can_begin_at_document_offset_zero(article):
+    document, _, calls = article
+    result = notes.get_article_detail.invoke(tool_args(
+        {"article_id": ARTICLE, "view": "source_range",
+        "offset": 0, "max_chars": 100, "revision": document["revision"],
+        "section_schema": PARSER_VERSION}))
+    assert result.kind == "ok" and len(calls) == 1
+    assert result.data["noteContent"] == document["content"][:100]
+    assert result.data["source"]["offset"] == 0 and result.data["source"]["end"] == 100
 
 
 def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(article, monkeypatch):
@@ -390,7 +456,8 @@ def test_body_outline_mismatch_and_broken_directory_cursors_are_unavailable(arti
         {"sectionsOffset": 12},
     ):
         monkeypatch.setattr(notes, "_get", lambda *args, **kwargs: {**raw, **malformed})
-        result = notes.get_article_detail.invoke({"article_id": ARTICLE, "view": "outline"})
+        result = notes.get_article_detail.invoke(tool_args(
+            {"article_id": ARTICLE, "view": "outline"}))
         assert result.kind == "unavailable" and result.data is None
 
 
@@ -422,7 +489,7 @@ def test_third_lexical_section_retains_a_revision_bound_executable_locator(monke
     hit = index._lexical_ranked("needle", 1, article_id=ARTICLE)[0]
     assert len(hit["sections"]) == len(hit["section_ids"]) == 3
     wire = candidate_text(1, hit)
-    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    reads = [document_args(r["request"]) for r in json.loads(wire)["read_requests"]]
     assert {r["section"] for r in reads} == {"s1", "s2", "s3"}
     assert json.loads(wire)["source"]["revision"] == hit["document_revision"]
     assert json.loads(wire)["source"]["section_schema"] == PARSER_VERSION

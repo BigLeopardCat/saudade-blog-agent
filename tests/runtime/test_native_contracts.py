@@ -7,6 +7,7 @@ from langchain_core.messages import AIMessage
 
 from eval import native_contracts
 from eval.native_contracts import golden_trace
+from rag.reading_requests import tool_args
 from tools.base import SITE_BASE
 
 
@@ -345,7 +346,8 @@ def test_navigation_fixture_supports_alternative_article_reads():
         categories = public_catalog.list_categories.invoke({})
         searched = notes.search_notes.invoke({"keyword": "Git"})
         retrieved = notes.rag_search.invoke({"query": "Git"})
-        detail = notes.get_article_detail.invoke({"article_id": 719})
+        detail = notes.get_article_detail.invoke(tool_args(
+            {"view": "full_text", "article_id": 719}))
         assert all(
             result.kind == "ok" for result in (catalog, categories, searched, retrieved, detail)
         )

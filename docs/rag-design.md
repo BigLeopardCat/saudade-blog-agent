@@ -146,8 +146,11 @@ BM25S 的文章段落语料和 PG 距离查询的 WHERE 中生效，先限定再
 索引刷新导致候选与快照版本不一致时返回 unavailable，不拼接不同版本的正文。
 工具 schema 与检索入口共用 top_k 上限 50，越界输入在参数校验时拒绝。
 
-get_article_detail 默认 `view=body`、单页最多 32768 字符，使用 offset、max_chars、revision，返回 contentRevision、
-readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
+`get_article_detail` 必须显式提供 `selection.kind`：`question` 携带 query，复用现有文章检索；
+`full_text` 从文首读取原文，`source_range` 按已知小节或续读坐标读取。单页最多 32768 字符，使用 offset、max_chars、revision，
+返回 contentRevision、readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
+工具将两种正文范围映射到宿主的 `view=body`；question 与 `rag_search(article_id=...)` 共用检索、版本验证和正文证据，
+不因文章编号已知而默认取整篇。已绑定版本的来源范围可以从文档偏移 0 开始。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
 同一任务顺序读取整篇正文时，文章中间件可从已呈现的可信范围补齐下一页缺失的
 revision 与 section_schema，仅限同一文章、无小节选择且 offset 精确等于已返回的
@@ -160,10 +163,10 @@ contentRevision 与语料传输使用相同的标题、原文 canonical hash；�
 sectionSchema 传递。检索候选 document_revision 使用相同内容版本，客户端只需原样回传。
 解析策略变化会明确拒绝旧 sN/续读版本；首次全文读取可取得当前版本与目录。
 
-`view=metadata` 只返回已存在的公开元信息（作者、摘要及展示字段），不返回正文、目录数量
+`selection.kind=metadata` 只返回已存在的公开元信息（作者、摘要及展示字段），不返回正文、目录数量
 或正文读取凭证；不能据此总结正文。已知编号可直接读取，无需检索定位，缺失字段保持未知。
 
-`view=outline` 仅分页读取目录，不登记正文已读。每页最多 12 项，offset 是目录条目下标，
+`selection.kind=outline` 仅分页读取目录，不登记正文已读。每页最多 12 项，offset 是目录条目下标，
 从 nextSectionsOffset 续页；正文的 offset 则从 nextOffset 续读。两类续页都须回传
 contentRevision 与 sectionSchema。sectionsOffset、sectionCount 和 nextSectionsOffset
 使长文完整目录可遍历；预算不足时仅缩短完整目录项并同步续页，不截断定位 JSON。

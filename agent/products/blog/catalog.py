@@ -22,8 +22,9 @@ DOMAIN_DESCRIPTIONS = {
     "and in-place publication.",
     "admin_automations": "Persistent reminders, scheduled read-only reports and announcements. "
     "Other scheduled writes use their domain.",
-    "public_activity": "Search public announcements, guestbook (河灯留言) and talks; read latest "
-    "entries. Talks are admin-published; display names are not account identities.",
+    "public_activity": "Read/search public announcements, guestbook (河灯留言) and talks without "
+    "changing pages. Guestbook/talk visits: navigate_page(preview=true). "
+    "Talks are admin-published; display names are not account identities.",
     "utilities": "Read the current time.",
     "task_planning": "Agent内部执行清单，不是用户待办或提醒。仅用于复杂任务（3步以上）"
     "或用户明确要求的执行计划。",

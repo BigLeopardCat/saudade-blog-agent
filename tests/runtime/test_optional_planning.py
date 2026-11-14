@@ -12,6 +12,7 @@ from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import turn_phase
 from agent.runtime.service import AgentRuntime
 from eval.navigation_contracts import backend
+from rag.reading_requests import tool_args
 
 
 def selected(model, saver):
@@ -30,7 +31,8 @@ def test_remembering_order_takes_one_call_and_the_next_turn_can_read_the_second_
     with backend([{"id": 22, "title": "第一篇"}, {"id": 23, "title": "第二篇"}]) as host, \
             model_replies(
                 {"content": acknowledgement},
-                {"tool_calls": [call("get_article_detail", "read-second", article_id=23)]},
+                {"tool_calls": [call("get_article_detail", "read-second",
+                                     **tool_args({"article_id": 23, "view": "full_text"}))]},
                 {"content": "第二篇介绍编程实践。[来源](/article/23)"},
             ) as (model, calls):
         runtime = selected(model, saver)

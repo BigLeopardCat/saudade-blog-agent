@@ -176,7 +176,7 @@ def test_rrf_keeps_duplicate_heading_titles_bound_to_their_own_section_ranges():
         ("s2", 20),
     ]
     wire = candidate_text(1, result)
-    reads = [r["request"] for r in json.loads(wire)["read_requests"]]
+    reads = [r["request"]["selection"] for r in json.loads(wire)["read_requests"]]
     assert [(r["section"], r["offset"], r["max_chars"]) for r in reads] == [
         ("s1", 10, 10),
         ("s3", 30, 10),

@@ -13,7 +13,7 @@ from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import search_frame, search_text
-from rag.source import MAX_DOCUMENT_CHARS
+from rag.reading_requests import ArticleQuestion, ReadSelection
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -127,41 +127,40 @@ DOC_TYPE_CN = {
 }
 
 
-_ARTICLE_OFFSET_DESC = "Body character offset or outline index; copy the next cursor."
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数"
-_ARTICLE_REVISION_DESC = "Sections/continuations: copy contentRevision, also set section_schema."
-_ARTICLE_SCHEMA_DESC = "Sections/continuations: copy sectionSchema, also set revision."
-
-
 @tool
 def get_article_detail(
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
+    selection: ReadSelection,
     doc_type: Literal["note", "talk", "board", "announcement"] = "note",
-    section: Annotated[str, Field(max_length=1024)] = "",
-    offset: Annotated[
-        StrictInt, Field(ge=0, le=2_147_483_647, description=_ARTICLE_OFFSET_DESC)
-    ] = 0,
-    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS,
-                                         description=_ARTICLE_LIMIT_DESC)] = MAX_DOCUMENT_CHARS,
-    revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
-    section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
-    view: Literal["body", "outline", "metadata"] = "body",
 ) -> str | ToolResult:
-    """Read public body, outline or metadata; not discovery.
-    Author/display facts: metadata; missing stays unknown.
-    Specific body facts: rag_search(article_id=...) or known version-bound sections;
-    copy returned coordinates, do not locate twice.
-    Whole summaries: start view=body without section; it includes outline/revision.
-    Continue via nextOffset as needed; outline-only paging uses nextSectionsOffset.
-    Section end is not document end; conclusions cover read text only. Images stay Markdown.
-    source is a body range, not URL; link by ID. Private/drafts: read_current_article;
-    counters: get_article_stats.
+    """Read a known public document. Select question for a specific fact/topic
+    (returns verified passages), full_text for a document-level summary or analysis
+    (returns original text), source_range for exact source coordinates, outline for
+    headings, metadata for author/title/tags. Copy returned coordinates and versions
+    for source_range. Private/drafts use read_current_article.
     """
+    if isinstance(selection, ArticleQuestion):
+        if doc_type != "note":
+            return invalid_args("Question retrieval covers public articles; "
+                                "use the activity reader.")
+        return _search_article_passages(selection.query, DEFAULT_TOP_K, article_id)
+    return _read_document(article_id, doc_type=doc_type,
+                          view=selection.kind, **selection.model_dump(exclude={"kind"}))
+
+
+def _read_document(article_id, *, view, doc_type, section, offset, max_chars,
+                   revision, section_schema):
     from urllib.parse import urlencode
 
     from agent.domains.articles.reading import project
     from tools.result import invalid_args
 
+    if view == "full_text" and (section or offset):
+        return invalid_args("Full text starts at the document beginning; "
+                            "use source_range for locators.")
+    if view == "source_range" and not (section or offset or revision and section_schema):
+        return invalid_args("Copy a section or continuation offset from the preceding evidence.")
+    wire_view = "body" if view in {"full_text", "source_range"} else view
     if (offset or section.startswith("s") and section[1:].isdigit()) and (
         not revision or not section_schema
     ):
@@ -172,9 +171,9 @@ def get_article_detail(
     if view == "outline" and section:
         return invalid_args("Outline view cannot select a body section.")
     params = {
-        "view": view,
+        "view": wire_view,
         "offset": offset,
-        **({"limit": max_chars} if view == "body" else {}),
+        **({"limit": max_chars} if wire_view == "body" else {}),
         **({"section": section} if section else {}),
         **({"revision": revision} if revision else {}),
         **({"section_schema": section_schema} if section_schema else {}),
@@ -190,7 +189,7 @@ def get_article_detail(
         return _shape(
             project(
                 data, doc_type, article_id, section, offset, max_chars,
-                revision, section_schema, view
+                revision, section_schema, wire_view
             )
         )
     except (ValueError, TypeError, KeyError):
@@ -247,6 +246,10 @@ def rag_search(
     the current task binds known versions at execution. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
+    return _search_article_passages(query, top_k, article_id)
+
+
+def _search_article_passages(query, top_k, article_id):
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
 
@@ -318,7 +321,7 @@ def rag_search(
     except (AgentCancelled, BudgetExceeded, TimeoutError):
         raise
     except Exception as exc:
-        logger.error("rag_search failed: %s", exc)
+        logger.error("Article body retrieval failed: %s", exc)
         return unavailable(f"检索服务不可用（{type(exc).__name__}）")
 
 
