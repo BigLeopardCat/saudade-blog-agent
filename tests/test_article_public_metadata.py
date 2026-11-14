@@ -9,6 +9,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -83,7 +84,7 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
                 {
                     "name": "get_article_detail",
                     "id": "read",
-                    "args": {"article_id": 23, "max_chars": 1, "view": view},
+                    "args": tool_args({"article_id": 23, "max_chars": 1, "view": view}),
                 }
             ],
         ),
@@ -150,7 +151,7 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
 
 def test_excerpt_keeps_metadata_and_does_not_drop_a_summary_identical_to_the_body():
     with backend(rows(description="这是一篇编程实践文章，介绍 元信息文章。")):
-        data = get_article_detail.invoke({"article_id": 23, "view": "full_text"}).data
+        data = get_article_detail.invoke(tool_args({"article_id": 23, "view": "full_text"})).data
     assert data["description"] == data["noteContent"]
     assert "description" in slim_frame(data)
     data["noteContent"] = "正文" * 1000
@@ -183,7 +184,7 @@ def test_excerpt_keeps_metadata_and_does_not_drop_a_summary_identical_to_the_bod
 @pytest.mark.parametrize("view", ["full_text", "metadata"])
 def test_unverified_display_metadata_never_reaches_the_model(fields, view):
     with backend(rows(**fields)):
-        result = get_article_detail.invoke({"article_id": 23, "view": view})
+        result = get_article_detail.invoke(tool_args({"article_id": 23, "view": view}))
     assert result.kind == "unavailable" and result.data is None
 
 
@@ -221,7 +222,8 @@ def test_json_answer_is_compared_with_dynamic_tool_facts_not_a_fixed_author(auth
 @pytest.mark.parametrize("url", ["/article/99", "https://foreign.invalid/article/23"])
 def test_json_citations_keep_the_same_article_and_origin_checks(url):
     with backend(rows()):
-        value = get_article_detail.invoke({"article_id": 23, "view": "full_text", "max_chars": 1})
+        value = get_article_detail.invoke(tool_args(
+            {"article_id": 23, "view": "full_text", "max_chars": 1}))
     evidence = ArticleEvidence()
     evidence.observe("get_article_detail", {"article_id": 23}, ok(str(value), data=value.data))
     assert evidence.issue(json.dumps({"source": url}), SITE_BASE) == "unread_article_reference"
@@ -281,7 +283,8 @@ def test_a_body_read_after_metadata_preserves_its_verified_visible_range():
 
 def test_fenced_json_example_does_not_become_a_live_source_or_body_read():
     with backend(rows()):
-        value = get_article_detail.invoke({"article_id": 23, "view": "full_text", "max_chars": 1})
+        value = get_article_detail.invoke(tool_args(
+            {"article_id": 23, "view": "full_text", "max_chars": 1}))
     evidence = ArticleEvidence()
     evidence.observe("get_article_detail", {"article_id": 23}, value)
     before = evidence.snapshot()

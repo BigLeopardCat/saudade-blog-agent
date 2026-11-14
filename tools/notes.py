@@ -9,11 +9,11 @@ from langchain_core.tools import tool
 from pydantic import Field, StrictInt
 
 from agent.domains.article_metadata import tag_references
+from agent.domains.articles.requests import ArticleQuestion, ReadSelection
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import search_frame, search_text
-from rag.source import MAX_DOCUMENT_CHARS
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -127,33 +127,29 @@ DOC_TYPE_CN = {
 }
 
 
-_ARTICLE_OFFSET_DESC = "Body character offset or outline index; copy the next cursor."
-_ARTICLE_LIMIT_DESC = "本次最多读取字符数"
-_ARTICLE_REVISION_DESC = "Sections/continuations: copy contentRevision, also set section_schema."
-_ARTICLE_SCHEMA_DESC = "Sections/continuations: copy sectionSchema, also set revision."
-
-
 @tool
 def get_article_detail(
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
-    view: Literal["full_text", "source_range", "outline", "metadata"],
+    selection: ReadSelection,
     doc_type: Literal["note", "talk", "board", "announcement"] = "note",
-    section: Annotated[str, Field(max_length=1024)] = "",
-    offset: Annotated[
-        StrictInt, Field(ge=0, le=2_147_483_647, description=_ARTICLE_OFFSET_DESC)
-    ] = 0,
-    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS,
-                                         description=_ARTICLE_LIMIT_DESC)] = MAX_DOCUMENT_CHARS,
-    revision: Annotated[str, Field(max_length=64, description=_ARTICLE_REVISION_DESC)] = "",
-    section_schema: Annotated[str, Field(max_length=128, description=_ARTICLE_SCHEMA_DESC)] = "",
 ) -> str | ToolResult:
-    """Read a public document as a whole or read an exact source range.
-    For an overview or detailed analysis of the document choose full_text.
-    For a question about one topic/fact, use rag_search with article_id instead;
-    it already returns verified original passages. Outline is structure only;
-    metadata is author/title/tags only. For source_range copy section/offset,
-    revision and section_schema from prior evidence. Private/drafts use read_current_article.
+    """Read a known public document. Select question for a specific fact/topic
+    (returns verified passages), full_text for a document-level summary or analysis
+    (returns original text), source_range for exact source coordinates, outline for
+    headings, metadata for author/title/tags. Copy returned coordinates and versions
+    for source_range. Private/drafts use read_current_article.
     """
+    if isinstance(selection, ArticleQuestion):
+        if doc_type != "note":
+            return invalid_args("Question retrieval covers public articles; "
+                                "use the activity reader.")
+        return _search_article_passages(selection.query, DEFAULT_TOP_K, article_id)
+    return _read_document(article_id, doc_type=doc_type,
+                          view=selection.kind, **selection.model_dump(exclude={"kind"}))
+
+
+def _read_document(article_id, *, view, doc_type, section, offset, max_chars,
+                   revision, section_schema):
     from urllib.parse import urlencode
 
     from agent.domains.articles.reading import project
@@ -250,6 +246,10 @@ def rag_search(
     the current task binds known versions at execution. For title/tag discovery
     use search_notes; announcements, guestbook and talks use public_activity.
     """
+    return _search_article_passages(query, top_k, article_id)
+
+
+def _search_article_passages(query, top_k, article_id):
     from agent.runtime.budget import BudgetExceeded
     from agent.runtime.control import AgentCancelled
 

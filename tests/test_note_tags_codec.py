@@ -5,6 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from agent.domains.article_metadata import tag_references
+from agent.domains.articles.requests import tool_args
 from eval.fixtures.document_reads import document_page
 from tools import base
 from tools.notes import get_article_detail, search_notes
@@ -49,7 +50,7 @@ def test_search_preserves_same_id_in_both_levels_without_directory_requests(monk
 
 def test_detail_uses_host_refs_without_duplicate_raw_tags_or_directory_requests(monkeypatch):
     calls = _transport(monkeypatch, _source(COLLIDING_REFS))
-    result = get_article_detail.invoke({"view": "full_text", "article_id": 19})
+    result = get_article_detail.invoke(tool_args({"view": "full_text", "article_id": 19}))
     assert result.kind == "ok" and result.data["tags"] == EXPECTED
     assert "noteTagRefs" not in result.data and "noteTags" not in result.data
     assert [path.split("?")[0] for path, _ in calls] == ["/documents/note/19/read"]
@@ -61,7 +62,7 @@ def test_detail_uses_host_refs_without_duplicate_raw_tags_or_directory_requests(
                                   [COLLIDING_REFS[0], COLLIDING_REFS[0]]])
 def test_malformed_refs_remain_unknown_without_raw_id_guessing(monkeypatch, refs):
     calls = _transport(monkeypatch, _source(refs))
-    result = get_article_detail.invoke({"view": "full_text", "article_id": 19})
+    result = get_article_detail.invoke(tool_args({"view": "full_text", "article_id": 19}))
     assert result.kind == "ok" and result.data["tags"] is None
     assert result.data["noteContent"] == "body"
     assert len(calls) == 1
@@ -78,7 +79,7 @@ def test_missing_refs_do_not_claim_no_tags(monkeypatch):
 
 def test_empty_refs_are_observed_no_tags(monkeypatch):
     _transport(monkeypatch, _source([]))
-    result = get_article_detail.invoke({"view": "full_text", "article_id": 19})
+    result = get_article_detail.invoke(tool_args({"view": "full_text", "article_id": 19}))
     assert result.data["tags"] == [] and result.data["tagsTruncated"] is False
 
 

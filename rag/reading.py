@@ -2,6 +2,7 @@
 
 import json
 
+from agent.domains.articles.requests import tool_args
 from rag.context_windows import merge_read_windows
 from rag.ranking import source_excerpt
 from rag.sections import PARSER_VERSION
@@ -90,11 +91,8 @@ def candidate_view(index, hit):
         "read_requests": [
             {
                 **read,
-                "request": {
-                    key: value
-                    for key, value in read["request"].items()
-                    if key not in {"revision", "section_schema"}
-                },
+                "request": tool_args({key: value for key, value in read["request"].items()
+                                      if key not in {"revision", "section_schema"}}),
             }
             for read in reads
         ],

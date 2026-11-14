@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from langchain_core.messages import ToolMessage
 
 from agent.domains.articles.reading import body_continuation, directory_targets
+from agent.domains.articles.requests import is_question
 from rag.reading import read_requests
 from rag.source import BodyPassage
 
@@ -153,7 +154,9 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
-        if name in SEARCH_TOOLS or name == "search_notes" or name in CATALOG_TOOLS:
+        search_operation = (name in SEARCH_TOOLS
+                            or name == "get_article_detail" and is_question(args))
+        if search_operation or name == "search_notes" or name in CATALOG_TOOLS:
             rows = payload(value)
             if name in CATALOG_TOOLS or name == "search_notes" and isinstance(rows, dict):
                 rows = (
@@ -174,7 +177,7 @@ class ArticleEvidence:
                             if url := catalog_source_url(row):
                                 self.catalog_references.add(
                                     (urlsplit(url).netloc.casefold(), ident))
-        if name in SEARCH_TOOLS:
+        if search_operation:
             self.searched = True
             self.empty |= kind == "empty"
             self.failed |= kind in ("unavailable", "not_found", "invalid_args", "error")

@@ -2,6 +2,7 @@
 
 
 from agent.domains import moderation, public_activity
+from agent.domains.articles.requests import tool_args
 from agent.domains.own_reads import get_inbox_overview
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.read_tools import own_tools
@@ -40,7 +41,7 @@ def test_bounded_public_detail_is_authorized_without_publisher_identity():
 
     with backend("superadmin") as state:
         result = get_article_detail.invoke(
-            {"view": "full_text", "article_id": 45, "doc_type": "board"})
+            tool_args({"view": "full_text", "article_id": 45, "doc_type": "board"}))
         assert result.kind == "ok" and "这个合成看板娘好笨啊" in str(result)
         assert "synthetic_author_20" not in str(result) and not state["unsupported_reads"]
 

@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.domains.articles.requests import document_args, is_question, tool_args
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
 from rag.reading import article_frame_text, render_article_result, render_search_result
@@ -66,15 +67,16 @@ class ArticleMiddleware(AgentMiddleware):
     def wrap_tool_call(self, request, handler):
         self._recover(request.state)
         call = request.tool_call
-        if call["name"] == "get_article_detail":
-            args = self.evidence.bind_read_args(call["args"])
-            if args != call["args"]:
+        selected = document_args(call["args"]) if call["name"] == "get_article_detail" else None
+        if selected is not None:
+            args = self.evidence.bind_read_args(selected)
+            if args != selected:
                 record("native", "article_read_bound", call_id=call["id"],
                        article_id=args["article_id"], offset=args.get("offset", 0),
-                       view=args.get("view", "body"), section=args.get("section", ""),
+                       view=args["view"], section=args.get("section", ""),
                        fields=[key for key in ("revision", "section_schema")
-                               if not call["args"].get(key)])
-                request = request.override(tool_call={**call, "args": args})
+                               if not selected.get(key)])
+                request = request.override(tool_call={**call, "args": tool_args(args)})
         result = handler(request)
         if not (self.evidence.searched or self.evidence.documents or self.evidence.candidates):
             return result
@@ -97,7 +99,8 @@ class ArticleMiddleware(AgentMiddleware):
             artifact = {**artifact, "kind": "error"}
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"
-        if success and call["name"] == "get_article_detail":
+        question = call["name"] == "get_article_detail" and is_question(call["args"])
+        if success and call["name"] == "get_article_detail" and not question:
             data = artifact.get("data")
             if isinstance(data, dict):
                 limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}))
@@ -109,7 +112,8 @@ class ArticleMiddleware(AgentMiddleware):
                              **({"kind": "unavailable", "meta": {
                                  **(artifact.get("meta") or {}), "reason": "presentation_budget"}}
                                 if failed else {})}})
-        elif success and call["name"] == "rag_search" and isinstance(artifact.get("data"), list):
+        elif (success and (call["name"] == "rag_search" or question)
+              and isinstance(artifact.get("data"), list)):
             presented = render_search_result(artifact["data"],
                                              artifact.get("meta") or {}, limit)
             value = value.model_copy(update={"content": presented.text,

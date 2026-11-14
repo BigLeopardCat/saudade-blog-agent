@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -152,11 +153,11 @@ def test_duplicate_headings_and_first_window_require_explicit_location(corpus, b
     source = documents["runtime"]
     expected = data["queries"]["long_tail"]["evidence_spans"][0]
     ambiguous = get_article_detail.invoke(
-        {"view": "source_range", "article_id": source["id"], "section": "故障恢复"})
+        tool_args({"view": "source_range", "article_id": source["id"], "section": "故障恢复"}))
     assert ambiguous.kind == "ok" and ambiguous.data["sectionText"] == ""
     assert ambiguous.data["source"] is None and len(ambiguous.data["sections"]) >= 4
-    first = get_article_detail.invoke({"view": "full_text", "article_id": source["id"],
-                                       "max_chars": DEFAULT_READ_CHARS})
+    first = get_article_detail.invoke(tool_args({"view": "full_text", "article_id": source["id"],
+                                       "max_chars": DEFAULT_READ_CHARS}))
     assert not first.data["readComplete"] and expected["quote"] not in first.data["noteContent"]
 
 
@@ -173,10 +174,10 @@ def test_search_locator_cannot_read_edited_content_or_another_section_view(
         source["content"] = source["content"].replace("工作线程实际退出时", "工作线程启动时")
     invalidations = []
     monkeypatch.setattr("rag.search.invalidate_document", lambda *args: invalidations.append(args))
-    result = get_article_detail.invoke({"view": "source_range",
+    result = get_article_detail.invoke(tool_args({"view": "source_range",
         "article_id": source["id"], "section": "s4", "revision": hit["document_revision"],
         "section_schema": ("obsolete-parser" if change == "section_schema"
-                           else hit["section_schema"])})
+                           else hit["section_schema"])}))
     assert result.kind == "unavailable" and result.data is None and result.meta["status"] == 409
     assert invalidations == [(source["id"], hit["document_revision"])] and len(calls) == 1
 
@@ -189,9 +190,9 @@ def test_withdrawn_document_cannot_be_read_and_disappears_after_index_rebuild(co
     previous = selected._lexical_ranked(query, 3)
     removed = public.pop("runtime")
     assert previous[0]["id"] == removed["id"]
-    refused = get_article_detail.invoke({"view": "source_range",
+    refused = get_article_detail.invoke(tool_args({"view": "source_range",
         "article_id": removed["id"], "section": "s4", "revision": previous[0]["document_revision"],
-        "section_schema": previous[0]["section_schema"]})
+        "section_schema": previous[0]["section_schema"]}))
     assert refused.kind == "not_found" and refused.data is None and len(calls) == 1
     selected.build()
     assert removed["id"] not in {hit["id"] for hit in selected._lexical_ranked(query, 3)}

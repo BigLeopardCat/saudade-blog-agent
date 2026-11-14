@@ -7,6 +7,7 @@ from _own_support import config
 from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.domains.articles.requests import tool_args
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.results import turn_phase
@@ -31,7 +32,7 @@ def test_remembering_order_takes_one_call_and_the_next_turn_can_read_the_second_
             model_replies(
                 {"content": acknowledgement},
                 {"tool_calls": [call("get_article_detail", "read-second",
-                                     article_id=23, view="full_text")]},
+                                     **tool_args({"article_id": 23, "view": "full_text"}))]},
                 {"content": "第二篇介绍编程实践。[来源](/article/23)"},
             ) as (model, calls):
         runtime = selected(model, saver)

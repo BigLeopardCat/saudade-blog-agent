@@ -247,7 +247,7 @@ def outline_text(dropped: list[str]) -> str:
         lines.append(f"（另有 {len(dropped) - len(shown)} 节未列出）")
     lines.append(
         "（要读其中某一节：再调用一次 get_article_detail，带上本帧开头的 noteKey "
-        "与 view=\"source_range\"、section=\"<上面的小节名或编号>\"；"
+        "与 selection={kind=\"source_range\", section=\"<上面的小节名或编号>\"}；"
         "编号小节还须回传 contentRevision 与 sectionSchema。）")
     return "\n".join(lines)
 

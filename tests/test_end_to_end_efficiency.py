@@ -9,6 +9,7 @@ import json
 import httpx
 import pytest
 
+from agent.domains.articles.requests import tool_args
 from eval import efficiency_contracts as contracts
 from eval import native_contracts
 from models.llm import get_llm
@@ -103,11 +104,11 @@ def test_rag_correct_answer_still_fails_for_duplicate_or_excess_body_reads(sdk, 
         args.update(offset=0, max_chars=12000)
     responses = [
         [call("rag_search", query=contracts.QUERY, article_id=contracts.ARTICLE_ID, top_k=1)],
-        [call("get_article_detail", **args)], contracts.FACT,
+        [call("get_article_detail", **tool_args(args))], contracts.FACT,
     ]
     if mode in {"scoped", "followup_reread"}:
         if mode == "followup_reread":
-            responses.append([call("get_article_detail", **args)])
+            responses.append([call("get_article_detail", **tool_args(args))])
         responses.append(contracts.FACT)
     requests = sdk(responses)
     row = result("efficiency_scoped_article", requests)
@@ -213,7 +214,8 @@ def test_metadata_fixture_uses_the_body_free_host_envelope():
     from tools.notes import get_article_detail
 
     with contracts.article_backend() as state:
-        result = get_article_detail.invoke({"article_id": contracts.ARTICLE_ID, "view": "metadata"})
+        result = get_article_detail.invoke(tool_args(
+            {"article_id": contracts.ARTICLE_ID, "view": "metadata"}))
     assert result.kind == "ok" and result.data["description"] == "已保存的摘要。"
     assert not {"noteContent", "totalChars", "sectionCount"}.intersection(result.data)
     assert state["body_reads"] == [0] and len(state["requests"]) == 1
