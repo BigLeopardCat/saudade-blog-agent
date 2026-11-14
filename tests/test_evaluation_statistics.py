@@ -133,3 +133,23 @@ def test_ordered_multi_write_accepts_related_discovery_not_early_second_preparat
     assert decision_score(events, case["first_action"]) is False
     events[0]["tool_calls"] = [*first, "load_admin_gallery_info_tools"]
     assert decision_score(events, case["first_action"]) is False
+
+
+def test_calibration_impact_has_the_real_tool_contract_and_authorized_caller():
+    from agent.domains.categories.preparation import prepare_category_update
+
+    sample = next(row for row in load_samples() if row["id"] == "verified_impact")
+    context = sample["material"]["turns"][0]["runtime_context"]
+    assert sample["expected_issue"] is False
+    assert context["caller"]["verified"] and context["caller"]["role"] == "admin"
+    assert "admin.console" in context["permissions"]
+    assert context["available_tools"] == context["used_tool_contracts"] == [
+        {"name": prepare_category_update.name, "description": prepare_category_update.description}]
+
+
+def test_calibration_article_link_matches_its_own_route_contract():
+    sample = next(row for row in load_samples() if row["id"] == "article_candidate_navigation")
+    turn = sample["material"]["turns"][0]
+    template = turn["runtime_context"]["product_facts"]["article_url_template"]
+    assert sample["expected_issue"] is False
+    assert "(" + template.replace("<id>", "19") + ")" in turn["assistant_reply_to_review"]
