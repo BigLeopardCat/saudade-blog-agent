@@ -138,12 +138,66 @@ def test_visible_directory_binds_sections_and_its_exact_next_page():
     assert state.bind_read_args(next_page) == {**next_page, **guards}
     assert state.bind_read_args(section) == {**section, **guards}
     assert state.documents == state.read_ranges == {}
+    for selected in ({**section, "section": "s30"}, {**section, "offset": 1}):
+        assert state.bind_read_args(selected) == {**selected, **guards}
+    assert state.documents == state.read_ranges == {}
     for unseen in ({**next_page, "offset": next_page["offset"] + 1},
-                   {**section, "section": "s30"}, {**section, "offset": 1},
                    {**section, "doc_type": "talk"}, {**section, "revision": "0" * 64}):
         assert state.bind_read_args(unseen) == unseen
     restored = ArticleEvidence.restore(json.loads(json.dumps(state.snapshot())))
     assert restored.bind_read_args(next_page) == {**next_page, **guards}
+
+
+@pytest.mark.parametrize("changed", [False, True])
+def test_framework_batches_independent_sections_and_host_validates_the_known_version(
+    monkeypatch, changed
+):
+    original = "".join(f"## Chapter {n}\nparagraph {n}\n" for n in range(30))
+    requests, model_calls = [], []
+
+    def read(path, **kwargs):
+        params = {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
+        requests.append(params)
+        body = original + "changed" if changed and len(requests) > 1 else original
+        try:
+            return document_page("note", ARTICLE, "Source", body, params)
+        except RevisionChanged:
+            return unavailable("Document changed", meta={"status": 409})
+
+    monkeypatch.setattr(notes, "_get", read)
+    monkeypatch.setattr("rag.search.invalidate_document", lambda *args: None)
+
+    class Model:
+        max_tokens = 128
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, messages, **kwargs):
+            model_calls.append(messages)
+            if len(model_calls) == 1:
+                selections = [{"kind": "outline"}]
+            elif len(model_calls) == 2:
+                selections = [{"kind": "source_range", "section": s, "max_chars": 100}
+                              for s in ("s22", "s23")]
+            else:
+                return AIMessage(content="Source changed." if changed else "Read two sections.")
+            return AIMessage(content="", tool_calls=[{"name": "get_article_detail",
+                "args": {"article_id": ARTICLE, "selection": selection},
+                "id": f"{len(model_calls)}-{i}"} for i, selection in enumerate(selections)])
+
+    result = ToolSession(Model(), {}, {notes.get_article_detail.name: notes.get_article_detail},
+                         {}, middleware=(ArticleMiddleware,)).run([HumanMessage("Read chapters")])
+    assert result.reply and len(model_calls) == 3 and len(requests) == (2 if changed else 3)
+    assert [r.get("section") for r in requests[1:]] == (["s22"] if changed else ["s22", "s23"])
+    assert len(requests[1]["revision"]) == 64
+    if not changed:
+        assert requests[1]["revision"] == requests[2]["revision"]
+    results = [m for m in model_calls[-1] if getattr(m, "type", None) == "tool"]
+    assert [m.artifact["kind"] for m in results[-2:]] == (
+        ["unavailable", "invalid_args"] if changed else ["ok", "ok"])
+    if changed:
+        assert all("sectionText" not in m.content for m in results[-2:])
 
 
 def test_conflicting_directory_versions_do_not_guess_which_version_to_bind():

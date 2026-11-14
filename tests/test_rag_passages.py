@@ -1,5 +1,6 @@
 """Only current, visible, exact source ranges may establish body-read evidence."""
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -108,6 +109,47 @@ def test_global_passage_budget_keeps_exact_visible_range(source):
     )
     passage = BodyPassage.model_validate(rows[0]["passages"][0])
     assert len(passage.text) == 5 and passage.source.end - passage.source.offset == 5
+
+
+def test_delivered_passages_have_heading_paths_and_are_not_requested_again(source):
+    _, index, hits = source
+    rows = index.read_passages(hits)
+    doc = json.loads(search_frame(rows, {}))["documents"][0]
+    assert doc["read_requests"] == []
+    assert doc["passages"] and doc["passages"][0]["path"][-1] == "Workers"
+    assert sum(len(p["text"]) for p in doc["passages"]) == sum(
+        len(p["text"]) for p in rows[0]["passages"])
+
+
+def test_budgeted_or_removed_passages_leave_only_the_missing_ranges_readable(source):
+    document, index, hits = source
+    rows = attach_passages(hits, {(document["type"], document["id"]): document},
+                           index.status()["revision"], max_chars=5)
+    doc = json.loads(search_frame(rows, {}))["documents"][0]
+    seen = doc["passages"][0]["range"]
+    selected = doc["read_requests"][0]["request"]["selection"]
+    assert selected["section"] == seen["section_id"]
+    assert selected["offset"] == seen["end"]
+    assert selected["offset"] + selected["max_chars"] == hits[0]["matches"][0]["end"]
+    removed = [{**rows[0], "passages": []}]
+    selected = json.loads(search_frame(removed, {}))["documents"][0]["read_requests"][0][
+        "request"]["selection"]
+    assert selected["offset"] == hits[0]["matches"][0]["offset"]
+
+
+def test_internal_unread_gap_is_not_hidden_by_visible_text_on_both_sides(source):
+    _, index, hits = source
+    rows = index.read_passages(hits)
+    passage = rows[0]["passages"][0]
+    start, end = passage["source"]["offset"], passage["source"]["end"]
+    rows[0]["passages"] = [
+        {"source": {**passage["source"], "end": start + 5}, "text": passage["text"][:5]},
+        {"source": {**passage["source"], "offset": end - 5}, "text": passage["text"][-5:]},
+    ]
+    reads = json.loads(search_frame(rows, {}))["documents"][0]["read_requests"]
+    assert len(reads) == 1
+    selected = reads[0]["request"]["selection"]
+    assert selected["offset"] == start + 5 and selected["max_chars"] == end - start - 10
 
 
 def test_body_passage_rejects_mismatched_text_length_and_unknown_parser(source):

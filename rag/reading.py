@@ -9,6 +9,43 @@ from rag.sections import PARSER_VERSION
 from rag.source import BodyPassage, DocumentReference, SourceRange
 
 
+def read_observation(call, value):
+    """Describe delivered evidence without copying body text into telemetry."""
+    if call["name"] not in {"rag_search", "get_article_detail"}:
+        return None
+    from rag.reading_requests import is_question
+
+    retrieval = call["name"] == "rag_search" or is_question(call["args"])
+    artifact = value.artifact or {}
+    kind = artifact.get("kind", "ok")
+    data = artifact.get("data")
+    ranges: list[dict] | None = []
+    if kind == "ok":
+        if retrieval and isinstance(data, list) and (
+                (artifact.get("meta") or {}).get("body_evidence") or {}).get("verified") is True:
+            ranges = [BodyPassage.model_validate(p).source.model_dump()
+                      for row in data for p in row.get("passages", [])]
+        elif (not retrieval and isinstance(data, dict)
+              and data.get("view") in {"outline", "metadata"}):
+            pass
+        elif not retrieval and isinstance(data, dict) and data.get("source"):
+            try:
+                source = SourceRange.model_validate(data["source"])
+                body = data.get("sectionText") or data.get("noteContent") or data.get("content", "")
+                ranges = ([source.model_dump()] if isinstance(body, str)
+                          and source.end - source.offset == len(body) else None)
+            except ValueError:
+                ranges = None
+        else:
+            ranges = None
+    operation = "retrieval" if retrieval else data.get("view", "read") if isinstance(
+        data, dict) else "read"
+    return {"name": call["name"], "call_id": call["id"], "kind": kind,
+            "operation": operation, "ranges": ranges,
+            "returned_chars": sum(r["end"] - r["offset"] for r in ranges)
+            if ranges is not None else None}
+
+
 def article_frame_text(data):
     """Serialize the same article representation for budgeting and model delivery."""
     body = data.get("noteContent")
@@ -61,6 +98,24 @@ def read_requests(hit):
     return reads
 
 
+def _unread_requests(reads, passages):
+    """Subtract delivered ranges; omitted or budget-trimmed text remains readable."""
+    pending = []
+    for read in reads:
+        args = read["request"]
+        spans = [(args["offset"], args["offset"] + args["max_chars"])]
+        for passage in passages:
+            source = passage["range"]
+            if source["section_id"] != args["section"]:
+                continue
+            low, high = source["offset"], source["end"]
+            spans = [(a, min(b, low)) for a, b in spans if a < min(b, low)] + [
+                (max(a, high), b) for a, b in spans if max(a, high) < b]
+        pending.extend({**read, "request": {**args, "offset": a, "max_chars": b - a}}
+                       for a, b in spans)
+    return pending
+
+
 def candidate_view(index, hit):
     """Model-facing JSON uses executable read coordinates and verified body passages."""
     reads = read_requests(hit)
@@ -78,6 +133,8 @@ def candidate_view(index, hit):
         passages.append(
             {
                 "range": passage.source.model_dump(include={"section_id", "offset", "end"}),
+                "path": next((match.get("section_path", []) for match in hit.get("matches", [])
+                              if match["section_id"] == passage.source.section_id), []),
                 "text": passage.text,
             }
         )
@@ -94,7 +151,7 @@ def candidate_view(index, hit):
                 "request": tool_args({key: value for key, value in read["request"].items()
                                       if key not in {"revision", "section_schema"}}),
             }
-            for read in reads
+            for read in _unread_requests(reads, passages)
         ],
     }
     if reads or passages:

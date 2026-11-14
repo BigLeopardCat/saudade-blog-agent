@@ -109,6 +109,7 @@ def _metrics(report):
                 continue
             row = request_metrics.summary(doc)
             process.append({"case": case["id"], "round": index, "model_calls": row["calls"],
+                            "article_usage": row["article_usage"],
                             **request_metrics.discovery_totals([row])})
             ttft.extend(row["model_ttft_s"])
             expectation = case.get("first_action") if index == 1 else None
@@ -141,6 +142,7 @@ def _metrics(report):
         decisions.append(case_decisions)
         case_usage[case["id"]] = case_total
     return {"groups": groups, "populations": populations, "usage": totals,
+            "article_usage": [row for row in process if row["article_usage"]["requested"]],
             "trace_errors": trace_errors, "first_visible": first_visible,
             "missing": missing, "decisions": action_metrics.decision_report(decisions),
             "model_ttft_s": ttft, "case_usage": case_usage,
@@ -326,6 +328,7 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
+        "article_usage": metrics["article_usage"],
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
         "quality_statistics": quality_statistics(report["cases"], semantic),
         "quality_gate_statistics": quality_gate_statistics(report["cases"], semantic, profile),

@@ -239,6 +239,14 @@ class ArticleEvidence:
             candidates = [target for target in self.read_targets
                           if all(target[key] == value for key, value in selector.items())]
         guards = {(row["revision"], row["section_schema"]) for row in candidates}
+        section = args.get("section")
+        if (not guards and view == "body" and isinstance(section, str)
+                and re.fullmatch(r"s[1-9][0-9]*", section)):
+            # A version identifies the document, not permission to claim a section was read.
+            # The host still validates the selected coordinates and current visibility.
+            guards = {(row["revision"], row["section_schema"]) for row in self.read_targets
+                      if row["article_id"] == args["article_id"]
+                      and row["doc_type"] == args.get("doc_type", "note")}
         if len(guards) != 1:
             return args
         revision, schema = guards.pop()
