@@ -9,12 +9,13 @@ from _memory_support import Capture, config
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.application import BlogApplication
 from agent.products.blog.capabilities import ToolCatalog
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.service import AgentRuntime
 from eval import dataset_audit, native_assertions, online_baseline
-from eval.fixtures.document_reads import DEFAULT_READ_CHARS, document_page
+from eval.fixtures.document_reads import DEFAULT_READ_CHARS, article_page, document_page
 from eval.offline_rag_eval import bm25_run, evaluate
 from eval.rag_dataset import load
 from rag.corpus import content_revision
@@ -22,6 +23,7 @@ from rag.search import RagIndex
 from rag.sections import PARSER_VERSION, outline
 from tools import base
 from tools.notes import get_article_detail
+from tools.result import ok
 
 ROOT = Path(__file__).resolve().parents[1]
 DATASET = ROOT / "eval/fixtures/blog_retrieval"
@@ -229,7 +231,15 @@ def test_short_reference_judgment_rejects_reading_the_wrong_article_despite_corr
         "args": {"article_id": 22}, "kind": "ok"}]}
     assert native_assertions.check(gold, result)
     result["native_events"][0]["args"]["article_id"] = 23
+    assert native_assertions.check(gold, result)
+    data = article_page({"noteTitle": "Source", "noteContent": "original body"}, 23)
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", {"article_id": 23}, ok("body", data=data))
+    result["native_events"].append({"node": "native", "event": "article_evidence",
+                                    "provenance": evidence.provenance("")})
     assert not native_assertions.check(gold, result)
+    result["native_events"][-1]["provenance"]["body_reads"][0]["id"] = 22
+    assert native_assertions.check(gold, result)
 
 
 def test_short_reference_acceptance_retains_a_per_round_model_call_limit():
