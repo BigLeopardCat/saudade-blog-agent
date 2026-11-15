@@ -19,7 +19,8 @@ def read_observation(call, value):
     artifact = value.artifact or {}
     kind = artifact.get("kind", "ok")
     data = artifact.get("data")
-    if call["name"] == "get_article_detail" and is_summary(call["args"]):
+    if (call["name"] == "get_article_detail" and is_summary(call["args"])
+            and (kind != "ok" or not isinstance(data, dict) or data.get("view") != "body")):
         # A synthesized result is derived evidence, never a raw passage seen by the chat model.
         return {"name": call["name"], "call_id": call["id"], "kind": kind,
                 "operation": "summary", "ranges": [], "returned_chars": 0}

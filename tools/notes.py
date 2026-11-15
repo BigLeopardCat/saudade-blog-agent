@@ -12,7 +12,7 @@ from agent.domains.article_metadata import tag_references
 from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
-from rag.reading import search_frame, search_text
+from rag.reading import article_frame_text, search_frame, search_text
 from rag.reading_requests import ArticleQuestion, ArticleSummary, ReadSelection
 from tools import base as _base
 from tools.result import (
@@ -148,7 +148,12 @@ def get_article_detail(
             return invalid_args("Whole-document summaries cover public articles only.")
         from agent.domains.articles.summary import summarize_article
 
-        return summarize_article(article_id, selection.instructions, config, read=_read_document)
+        result = summarize_article(article_id, selection.instructions, config, read=_read_document)
+        if result.kind == "ok":
+            text = article_frame_text({
+                **result.data, "sourceUrl": f"{_base.SITE_BASE}/article/{article_id}"})
+            return ok(text, data=result.data, meta=result.meta)
+        return result
     if isinstance(selection, ArticleQuestion):
         if doc_type != "note":
             return invalid_args("Question retrieval covers public articles; "
