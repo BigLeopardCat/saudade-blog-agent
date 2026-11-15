@@ -42,13 +42,18 @@ def _invoke(model, prompt, budget, config, output):
             response = model.invoke(messages, config={"tags": ["langsmith:nostream"]})
             budget.settle(ticket, response)
     finally:
+        fields = usage_fields(response)
+        metadata = (getattr(response, "response_metadata", None) or {})
+        text = text_content(getattr(response, "content", "")).strip()
+        estimated = estimate_tokens([HumanMessage(content=text)])
         record("article_summary", "llm_done" if response is not None else "llm_error",
-               duration_s=round(time.monotonic() - started, 3), **usage_fields(response))
+               duration_s=round(time.monotonic() - started, 3), **fields,
+               finish_reason=metadata.get("finish_reason"), estimated_output=estimated)
     check_cancelled(config)
-    text = text_content(response.content).strip()
-    metadata = response.response_metadata or {}
-    if (not text or metadata.get("finish_reason") not in (None, "stop")
-            or estimate_tokens([HumanMessage(content=text)]) > output
+    measured = fields.get("output")
+    used = measured if type(measured) is int and measured > 0 else estimated
+    if (response is None or not text or metadata.get("finish_reason") not in (None, "stop")
+            or used > output
             or response.tool_calls or response.invalid_tool_calls
             or response.additional_kwargs.get("refusal")):
         raise ValueError("incomplete_summary")

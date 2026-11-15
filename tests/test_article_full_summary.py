@@ -148,6 +148,33 @@ def test_truncated_or_empty_model_output_is_not_complete_evidence(source, finish
     assert budget.model_calls == 1 and budget.tokens == 112
 
 
+@pytest.mark.parametrize("receipt,finish,accepted", [
+    (200, "stop", True), (257, "stop", False), (200, "length", False),
+    (None, "stop", False), (0, "stop", False),
+])
+def test_summary_output_validation_uses_actual_usage_before_conservative_estimates(
+    source, monkeypatch, receipt, finish, accepted
+):
+    _, model = source
+    from agent.runtime.message_content import estimate_tokens
+
+    text = " documentation" * 100
+    assert estimate_tokens([HumanMessage(content=text)]) > settings.agent_summary_output_tokens
+    original = model.invoke
+
+    def answer(messages, **kwargs):
+        response = original(messages, **kwargs)
+        return response.model_copy(update={"content": text,
+            "response_metadata": {"finish_reason": finish},
+            "usage_metadata": None if receipt is None else {
+                "input_tokens": 100, "output_tokens": receipt, "total_tokens": 100 + receipt}})
+
+    monkeypatch.setattr(model, "invoke", answer)
+    result = invoke()
+    assert (result.kind == "ok") is accepted
+    assert len(model.prompts) == 1
+
+
 def test_budget_exhaustion_does_not_publish_an_intermediate_refinement(source):
     state, model = source
     state["body"] = "章节材料。\n" * 6000
