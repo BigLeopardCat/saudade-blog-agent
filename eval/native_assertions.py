@@ -319,7 +319,7 @@ def _prepared_or_noop(wanted, result, events):
 
 
 def _body_chars(events):
-    """Measure verified body ranges; repeated evidence snapshots are not extra reads."""
+    """Count delivered ranges and internal source pages without multiplying snapshots."""
     totals = []
     for event in events:
         if event.get("event") != "article_evidence":
@@ -334,8 +334,52 @@ def _body_chars(events):
         if any(start < 0 or end < start or end - start != size for start, end, size in spans):
             return None
         totals.append(sum(size for _, _, size in spans))
-    return max(totals, default=None)
+    source_chars = 0
+    for event in events:
+        if event.get("node") != "article_summary" or event.get("event") != "source_page":
+            continue
+        start, end = event.get("offset"), event.get("end")
+        if not all(type(value) is int for value in (start, end)) or not 0 <= start < end:
+            return None
+        source_chars += end - start
+    return max(totals, default=0) + source_chars if totals or source_chars else None
 
+
+
+def _summary_proof(row):
+    if not isinstance(row, dict) or not isinstance(row.get("coverage"), dict):
+        return None
+    coverage = row["coverage"]
+    ident, start, end, total, pages, segments = (
+        row.get("id"), coverage.get("start"), coverage.get("end"),
+        coverage.get("total_chars"), coverage.get("pages"), row.get("segments"))
+    revision, schema = coverage.get("revision"), coverage.get("section_schema")
+    if (not all(type(value) is int for value in (ident, start, end, total, pages, segments))
+            or not ident > 0 or start != 0 or not end == total > 0 or pages <= 0 or segments <= 0
+            or coverage.get("complete") is not True
+            or row.get("strategy") not in ("stuff", "refine")
+            or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)
+            or not isinstance(schema, str) or not schema or len(schema) > 128):
+        return None
+    return ident, revision, schema, total, pages, row["strategy"], segments
+
+
+def _summary_source_read(proof, events):
+    ident, revision, _, total, expected_pages, *_ = proof
+    covered = pages = 0
+    for event in events:
+        if (event.get("node") != "article_summary" or event.get("event") != "source_page"
+                or type(event.get("article_id")) is not int or event["article_id"] != ident
+                or event.get("revision") != revision):
+            continue
+        start, end = event.get("offset"), event.get("end")
+        if start == 0:
+            covered = pages = 0
+        if (not all(type(value) is int for value in (start, end, event.get("total_chars")))
+                or start != covered or not start < end <= total or event["total_chars"] != total):
+            return False
+        covered, pages = end, pages + 1
+    return covered == total and pages == expected_pages
 
 
 def _body_read_failures(gold, events):
@@ -346,6 +390,16 @@ def _body_read_failures(gold, events):
                  if event.get("node") == "native" and event.get("event") == "article_evidence"]
     latest = snapshots[-1] if snapshots and isinstance(snapshots[-1], dict) else {}
     found = set()
+    completed = {_summary_proof({
+                    "id": event.get("article_id"), "coverage": event,
+                    "strategy": event.get("strategy"), "segments": event.get("segments")})
+                 for event in events
+                 if event.get("node") == "article_summary" and event.get("event") == "completed"}
+    summaries = latest.get("document_summaries")
+    for row in summaries if isinstance(summaries, list) else []:
+        if ((proof := _summary_proof(row)) is not None and proof in completed
+                and _summary_source_read(proof, events)):
+            found.add(proof[0])
     reads = latest.get("body_reads")
     for doc in reads if isinstance(reads, list) else []:
         if not isinstance(doc, dict) or type(doc.get("id")) is not int or doc["id"] <= 0:

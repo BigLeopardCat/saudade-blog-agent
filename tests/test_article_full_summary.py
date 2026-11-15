@@ -185,6 +185,66 @@ def test_summary_has_separate_provenance_and_failed_summary_cannot_be_replaced_b
         "article_summary_incomplete")
 
 
+@pytest.mark.parametrize("read_path", ["complete", "gap", "revision", "section"])
+def test_failed_summary_requires_complete_same_revision_document_read_to_recover(source, read_path):
+    state, summarizer = source
+    state["body"] = "# Section\n" + "完整正文材料。" * 100
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", ARGS, unavailable("incomplete"))
+
+    def read(selection):
+        args = {"article_id": ARTICLE, "selection": selection}
+        result = notes.get_article_detail.invoke(args)
+        assert result.kind == "ok"
+        evidence.observe("get_article_detail", args, result)
+        return result.data
+
+    page = read({"kind": "full_text", "max_chars": 100})
+    assert evidence.summary_failures == {ARTICLE}
+    if read_path == "revision":
+        state["body"] = state["body"][:-1] + "改"
+        page = read({"kind": "metadata"})
+    locator = {"revision": page["contentRevision"], "section_schema": page["sectionSchema"]}
+    selection = ({"section": "s1"} if read_path == "section" else
+                 {"offset": 101 if read_path == "gap" else 100})
+    read({"kind": "source_range", **selection, **locator})
+    restored = ArticleEvidence.restore(json.loads(json.dumps(evidence.snapshot())))
+    issue = restored.issue("依据原文总结。[Source](/article/19)", "https://example.test")
+    assert issue == (None if read_path == "complete" else "article_summary_incomplete")
+    assert not summarizer.prompts and not restored.summaries
+
+
+def test_native_tool_loop_recovers_after_truncated_summary_by_reading_the_whole_source(source):
+    _, summarizer = source
+    summarizer.finish = "length"
+
+    class AgentModel:
+        max_tokens = 256
+
+        def __init__(self):
+            self.prompts = []
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            self.prompts.append(prompt)
+            if len(self.prompts) < 3:
+                args = ARGS if len(self.prompts) == 1 else {
+                    "article_id": ARTICLE, "selection": {"kind": "full_text"}}
+                return AIMessage(content="", tool_calls=[{
+                    "name": "get_article_detail", "args": args,
+                    "id": f"read-{len(self.prompts)}"}])
+            return AIMessage(content="依据读完的原文总结。[Source](/article/19)")
+
+    model = AgentModel()
+    session = ToolSession(model, {}, {notes.get_article_detail.name: notes.get_article_detail},
+                          {}, middleware=(ArticleMiddleware,))
+    result = session.run([HumanMessage("总结全文")])
+    assert result.reply == "依据读完的原文总结。[Source](/article/19)"
+    assert len(model.prompts) == 3 and len(summarizer.prompts) == 1
+
+
 @pytest.mark.parametrize("failed", [False, True])
 def test_toolnode_workflow_delivers_only_a_complete_summary_or_explicit_failure(source, failed):
     state, summarizer = source

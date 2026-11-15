@@ -46,6 +46,71 @@ def test_a_different_article_body_cannot_satisfy_the_named_source():
                       result("body"))
 
 
+def summary_result():
+    coverage = {"complete": True, "start": 0, "end": 12, "total_chars": 12,
+                "revision": "a" * 64, "section_schema": PARSER_VERSION, "pages": 1}
+    data = {"view": "summary", "noteId": 19, "noteTitle": "Source", "summary": "Derived",
+            "strategy": "stuff", "segments": 1, "coverage": coverage}
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", {"article_id": 19, "selection": {"kind": "summary"}},
+                     ok("summary", data=data))
+    return {"text": "answer", "commands": [], "tool_calls": [], "exec_rows": [],
+            "native_events": [
+                {"node": "article_summary", "event": "source_page", "article_id": 19,
+                 "offset": 0, "end": 12, "total_chars": 12, "revision": "a" * 64},
+                {"node": "article_summary", "event": "completed", "article_id": 19,
+                 "strategy": "stuff", "segments": 1, **coverage},
+                {"node": "native", "event": "article_evidence",
+                 "provenance": evidence.provenance("")}]}
+
+
+def test_full_summary_requires_source_read_completion_and_published_evidence():
+    observed = summary_result()
+    assert not check_gold({"require_body_reads": [{"article_id": 19}]}, observed)
+    assert check_gold({"require_body_reads": [{"article_id": 20}]}, observed)
+    assert check_gold({"max_article_body_chars": 11}, observed)
+    assert not check_gold({"max_article_body_chars": 12}, observed)
+
+
+def test_multi_page_summary_requires_contiguous_source_ranges():
+    observed = summary_result()
+    events = observed["native_events"]
+    events[0]["end"] = 6
+    events.insert(1, {**events[0], "offset": 6, "end": 12})
+    events[2]["pages"] = 2
+    events[-1]["provenance"]["document_summaries"][0]["coverage"]["pages"] = 2
+    assert not check_gold({"require_body_reads": [{"article_id": 19}]}, observed)
+    events[1]["offset"] = 7
+    assert check_gold({"require_body_reads": [{"article_id": 19}]}, observed)
+
+
+@pytest.mark.parametrize("failure", ["missing_source", "missing_completion", "unpublished",
+    "incomplete", "wrong_revision", "bool_total", "wrong_strategy", "gap", "different_article"])
+def test_incomplete_or_unverified_summaries_cannot_satisfy_body_read_evidence(failure):
+    observed = summary_result()
+    events = observed["native_events"]
+    published = events[-1]["provenance"]["document_summaries"][0]
+    if failure == "missing_source":
+        events.pop(0)
+    elif failure == "missing_completion":
+        events.pop(1)
+    elif failure == "unpublished":
+        events[-1]["provenance"]["document_summaries"] = []
+    elif failure == "incomplete":
+        published["coverage"]["complete"] = False
+    elif failure == "wrong_revision":
+        events[1]["revision"] = "b" * 64
+    elif failure == "bool_total":
+        published["coverage"]["total_chars"] = True
+    elif failure == "wrong_strategy":
+        published["strategy"] = []
+    elif failure == "gap":
+        events[0]["offset"] = 1
+    else:
+        published["id"] = 20
+    assert check_gold({"require_body_reads": [{"article_id": 19}]}, observed)
+
+
 @pytest.mark.parametrize("change", [{"revision": "unknown"}, {"start": True}, {"end": 0},
                                     {"visible_chars": 0}, {"visible_chars": 1},
                                     {"section_id": None}])
