@@ -60,7 +60,7 @@ def site(tmp_path, request):
         "INSERT INTO test_flags VALUES ('block_notify',false),('article_public',false);"
         "CREATE TABLE test_effects(id serial,run_id text);"
         "CREATE TABLE test_attempts(id serial,run_id text);"
-        "CREATE TABLE test_notifications(run_id text primary key, owner_id integer,body text);"
+        "CREATE TABLE test_notifications(run_id text primary key, owner_id integer,body text,conversation_id integer);"
         "CREATE TABLE test_publications(run_id text primary key,"
         "owner_id integer,title text,body text);"
         "INSERT INTO test_flags VALUES ('block_publish_after_commit',false)"
@@ -139,7 +139,7 @@ def site(tmp_path, request):
             conn.execute(sql.SQL("DROP SCHEMA {} CASCADE").format(sql.Identifier(schema)))
 
 
-def create(service, **values):
+def create(service, *, conversation_id=None, **values):
     ident = "sc_" + uuid.uuid4().hex
     definition = {
         "title": "提醒",
@@ -148,15 +148,16 @@ def create(service, **values):
         "delay_seconds": 5,
         **values,
     }
-    return ident, definition, service.create(ADMIN, ident, definition)
+    return ident, definition, service.create(
+        ADMIN, ident, definition, conversation_id=conversation_id)
 
 
 def test_timing_replay_owner_isolation_pause_and_resume(site):
     service, query, _, _ = site
-    ident, definition, first = create(service)
+    ident, definition, first = create(service, conversation_id=42)
     assert first["changed"]
     assert service.backend.once(ADMIN.uid, ident).status == "DELAYED"
-    assert not service.create(ADMIN, ident, definition)["changed"]
+    assert not service.create(ADMIN, ident, definition, conversation_id=43)["changed"]
     with pytest.raises(ScheduleConflict):
         service.create(ADMIN, ident, {**definition, "instruction": "不同内容"})
     with pytest.raises(ScheduleNotFound):
@@ -171,6 +172,7 @@ def test_timing_replay_owner_isolation_pause_and_resume(site):
     service.control(ADMIN, ident, "resume", paused["version"])
     eventually(lambda: service.get(ADMIN, ident)["status"] == "finished")
     assert query("SELECT count(*) FROM test_notifications")[0][0] == 1
+    assert query("SELECT conversation_id FROM test_notifications") == [(42,)]
     runs = service.runs(ADMIN, ident)
     assert runs["items"][0]["result"]["status"] == "completed"
     assert service.result(ADMIN, ident, runs["items"][0]["id"])["result"]["text"] == "隔离测试"

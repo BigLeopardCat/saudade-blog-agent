@@ -102,9 +102,11 @@ class Host(BlogHost):
         return self.publish_announcement(owner, run_id, title,
                                          json.dumps(write, ensure_ascii=False, sort_keys=True))
 
-    def notify(self, owner, run_id, title, text):
+    def notify(self, owner, run_id, title, text, *, conversation_id=None,
+               schedule_id=None, status="completed"):
         if self.notification_base:
-            return super().notify(owner, run_id, title, text)
+            return super().notify(owner, run_id, title, text, conversation_id=conversation_id,
+                                  schedule_id=schedule_id, status=status)
         self.actor(owner)
         with connection() as conn:
             conn.execute("INSERT INTO test_attempts(run_id) VALUES (%s)", (run_id,))
@@ -118,9 +120,9 @@ class Host(BlogHost):
             time.sleep(0.05)
         with connection() as conn:
             conn.execute(
-                "INSERT INTO test_notifications(run_id,owner_id,body) VALUES (%s,%s,%s) "
+                "INSERT INTO test_notifications(run_id,owner_id,body,conversation_id) VALUES (%s,%s,%s,%s) "
                 "ON CONFLICT(run_id) DO NOTHING",
-                (run_id, owner, text),
+                (run_id, owner, text, conversation_id),
             )
         return {"notification_id": 1}
 
