@@ -81,8 +81,9 @@ def prepared(monkeypatch, tmp_path):
         elif path.endswith("/approve"):
             job_id = path.split("/")[-2]
             assert body == {"version": jobs[job_id]["requestHash"]}
-            paid.append(job_id)
-            jobs[job_id]["status"] = "generating"
+            if jobs[job_id]["status"] == "pending":
+                paid.append(job_id)
+                jobs[job_id]["status"] = "generating"
             result = jobs[job_id]
         else:
             result = jobs[path.rsplit("/", 1)[-1]]
@@ -212,9 +213,38 @@ def test_saved_replacement_recovers_when_the_http_reply_or_interrupt_setup_is_lo
         revisions.revise(runtime, old, draft(), cfg)
     assert runtime.store.load(cfg).pending_action["jti"] != old["jti"] and not paid
     monkeypatch.setattr(approval_revision.approval, "graph", native_graph)
-    restored = (revisions.revise(runtime, old, draft(), cfg)["confirmation"] if retry_update
-                else runtime.store.load(cfg).pending_confirm)
+    restored = (
+        revisions.revise(runtime, old, draft(), cfg)["confirmation"]
+        if retry_update
+        else runtime.store.load(cfg).pending_confirm
+    )
     new = confirm.verify(restored["token"], 7, 42)
     model.responses = iter([AIMessage(content="修改后的生图请求已开始执行。")])
     list(runtime.stream_events({"confirm_grant": new}, cfg))
     assert paid == [NEW]
+
+
+def test_replacement_saved_before_checkpoint_failure_keeps_old_approval_unpaid(
+    prepared, monkeypatch
+):
+    from agent.products.blog.pending import PendingOperation
+
+    runtime, cfg, old, model, jobs, paid, requests = prepared
+    original = PendingOperation.feedback
+
+    def fail_before_revocation(*_args, **_kwargs):
+        raise RuntimeError("interrupted before checkpoint update")
+
+    monkeypatch.setattr(PendingOperation, "feedback", fail_before_revocation)
+    with pytest.raises(RuntimeError):
+        revisions.revise(runtime, old, draft(), cfg)
+    assert jobs[ID]["status"] == "rejected" and jobs[NEW]["status"] == "pending"
+    assert runtime.store.load(cfg).pending_action["jti"] == old["jti"]
+    monkeypatch.setattr(PendingOperation, "feedback", original)
+    model.responses = iter([AIMessage(content="原生成请求尚未执行，修改后的请求需要重新确认。")])
+    result = list(runtime.stream_events({"confirm_grant": old}, cfg))[-1]
+    assert result.execution["operation_outcome"]["status"] == "unverified"
+    assert not paid and not runtime.store.load(cfg).pending_action
+    count = len(model.prompts)
+    list(runtime.stream_events({"confirm_grant": old}, cfg))
+    assert not paid and len(model.prompts) == count
