@@ -9,6 +9,7 @@ export async function assertImageCardRevision({browser,origin,requests,setMode,r
     await page.locator('#chat-input').fill('准备可编辑的图片请求');await page.locator('#chat-send').click();
     await page.locator('#chat-ask.active textarea').waitFor();
     await page.waitForFunction(()=>!window.__chatTest.ctx.state.isSending);
+    const originalTurn=await page.evaluate(()=>window.__chatTest.ctx.state.pendingAsk.anchor_turn_id);
     const streams=requests.filter(row=>row.path==='/api/chat/stream').length;
     const originalAnchor=await page.locator('#chat-ask').evaluate(node=>node.previousElementSibling.dataset.mid);
     await page.locator('#chat-ask textarea').fill('Human edited exact prompt');
@@ -23,7 +24,10 @@ export async function assertImageCardRevision({browser,origin,requests,setMode,r
     assert.equal(requests.filter(row=>row.path==='/api/chat/confirmation/image-revision').length,1);
     appendReply();await page.reload();await page.locator('#chat-ask.active textarea').waitFor();
     assert.equal(await page.locator('#chat-ask textarea').inputValue(),'Human edited exact prompt');
-    assert.equal(await page.locator('#chat-ask').evaluate(node=>node.previousElementSibling.dataset.mid),originalAnchor);
+    assert.equal(await page.locator('#chat-ask').evaluate(node=>{
+      const id=node.previousElementSibling.dataset.mid;
+      return window.__chatTest.ctx.state.items.find(item=>item.id===id)?.turn_id;
+    }),originalTurn);
     assert.equal(await page.locator('#chat-ask [data-ask-value="yes"]').isDisabled(),false);
     await page.locator('#chat-ask [data-ask-value="no"]').click();
     await page.waitForFunction(()=>!window.__chatTest.ctx.state.approvalBusy);
