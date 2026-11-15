@@ -4,7 +4,7 @@ import json
 
 from rag.context_windows import merge_read_windows
 from rag.ranking import source_excerpt
-from rag.reading_requests import tool_args
+from rag.reading_requests import is_summary, tool_args
 from rag.sections import PARSER_VERSION
 from rag.source import BodyPassage, DocumentReference, SourceRange
 
@@ -19,6 +19,10 @@ def read_observation(call, value):
     artifact = value.artifact or {}
     kind = artifact.get("kind", "ok")
     data = artifact.get("data")
+    if call["name"] == "get_article_detail" and is_summary(call["args"]):
+        # A synthesized result is derived evidence, never a raw passage seen by the chat model.
+        return {"name": call["name"], "call_id": call["id"], "kind": kind,
+                "operation": "summary", "ranges": [], "returned_chars": 0}
     ranges: list[dict] | None = []
     if kind == "ok":
         if retrieval and isinstance(data, list) and (
