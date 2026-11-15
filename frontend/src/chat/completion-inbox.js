@@ -58,15 +58,14 @@ export function createCompletionInbox(ctx, send, engine) {
         } finally { fetching = false; }
     };
     const consume = async () => {
-        if (!expanded() || busy() || dispatching || !ctx.state.conv) return;
+        if (!expanded() || dispatching || !ctx.state.conv) return;
         const anchor = current(), cid = ctx.state.conv;
         const items = snapshot.items.filter(row => row.conversationId === cid);
         // Image reporting retains its existing preview/confirmation controller.
         const pending = items.find(row => row.kind === 'task' && !row.reported);
         dispatching = true;
         try {
-            if (pending) {
-                if (Date.now() < retryAt) return;
+            if (pending && !busy() && Date.now() >= retryAt) {
                 retryAt = Date.now() + 15000;
                 await send({silent: true, completionConversation: cid,
                     taskEvent: {run_id: pending.id, version: pending.version}});
@@ -78,8 +77,9 @@ export function createCompletionInbox(ctx, send, engine) {
             const known = new Set((ctx.state.items || []).filter(row => row.type === 'agent')
                 .map(row => row.turnId));
             const ids = await Promise.all(reported.map(row => completionTurnId(row.kind, row.id, row.version)));
-            if (current() !== anchor || !expanded() || busy()) return;
+            if (current() !== anchor || !expanded()) return;
             if (ids.some(id => !known.has(id))) {
+                if (busy()) return;
                 await engine.pullHistory();
                 return;
             }
