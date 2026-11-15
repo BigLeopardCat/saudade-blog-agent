@@ -12,7 +12,7 @@ from agent.domains.image_generation.tools import PATH, approve_card
 from agent.domains.image_generation.transactions import validate
 from agent.products.blog import confirmation
 from agent.products.blog.pending import PendingOperation
-from agent.runtime import approval, approval_revision
+from agent.runtime import approval, approval_revision, memory
 from tools import base
 
 
@@ -47,6 +47,7 @@ def revise(runtime, grant, draft, config):
                     "confirmation": confirmation.public_card(
                         {**snapshot.pending, "task_id": snapshot.run["id"]}
                     ),
+                    "source_turn_id": memory.latest_turn_id(snapshot.run.get("input") or []),
                     "pending_action": snapshot.pending_action,
                     "event": {
                         "event": "cancelled",
@@ -107,6 +108,7 @@ def revise(runtime, grant, draft, config):
         execution["task_id"] = snapshot.run["id"]
         return {
             "confirmation": confirmation.public_card(execution),
+            "source_turn_id": memory.latest_turn_id(snapshot.run.get("input") or []),
             "pending_action": execution["pending_action"],
             "event": {"event": "cancelled", "task_id": "pa_" + grant["jti"], "jti": grant["jti"]},
         }
