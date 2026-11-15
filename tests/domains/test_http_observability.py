@@ -30,7 +30,7 @@ def recorder(monkeypatch, tmp_path):
     with open(path) as saved:
         document = json.load(saved)
     assert document["events"] == rec.events
-    assert document["observability"] == {"json_http": 1}
+    assert document["observability"] == {"json_http": 1, "credential_redaction": 1}
 
 
 def http_events(recorder):

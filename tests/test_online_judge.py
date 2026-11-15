@@ -703,3 +703,57 @@ def test_calibration_stops_on_provider_failure_without_retrying_or_spending_rema
     assert failure["attempt_status"] == "failed" and failure["predicted_issue"] is None
     assert failure["error_fields"]["http_status"] == 429
     assert "private provider message" not in (folder / "report.json").read_text()
+
+
+def test_calibration_model_override_is_frozen_and_never_changes_generation_settings(
+        tmp_path, monkeypatch):
+    import sys
+
+    from config.settings import settings
+    from eval import judge_calibration
+
+    samples = tmp_path / "samples.jsonl"
+    samples.write_text(json.dumps({"id": "synthetic", "expected_issue": False,
+        "rationale": "bounded fixture", "material": {"turns": [
+            {"assistant_reply_to_review": "有依据"}]}}) + "\n")
+    output = tmp_path / "calibration"
+    before = settings.active_llm_model
+    monkeypatch.setattr(sys, "argv", ["judge_calibration", "--samples", str(samples),
+        "--out", str(output), "--model", "independent-reviewer", "--max-output-tokens", "2048"])
+    options = []
+
+    def make(**kwargs):
+        options.append(kwargs)
+        model = Model()
+        model.model_name = kwargs["model"]
+        model.max_tokens = kwargs["max_tokens"]
+        return model
+
+    monkeypatch.setattr(semantic_judge, "make_llm", make)
+    judge_calibration.main()
+    saved = json.loads((output / "report.json").read_text())
+    assert options[0]["model"] == saved["model"] == "independent-reviewer"
+    assert saved["reviewer_options"]["max_tokens"] == 2048
+    assert saved["measured"] == 1 and saved["automatic_retries"] == 0
+    assert saved["independent_validation"] == "not_evaluated"
+    assert settings.active_llm_model == before
+
+
+def test_recommendation_boundary_fixtures_stay_separate_from_active_calibration():
+    from eval import judge_calibration
+
+    path = (Path(judge_calibration.__file__).parent
+            / "fixtures/judge_recommendation_boundaries.jsonl")
+    candidate = judge_calibration.load_samples(path)
+    active = judge_calibration.load_samples()
+    assert not ({row["id"] for row in candidate} & {row["id"] for row in active})
+    labels = {row["id"]: row["expected_issue"] for row in candidate}
+    assert labels["catalog_light_topic_impression"] is False
+    assert labels["catalog_title_readability_opinion"] is False
+    assert labels["generic_refresh_advice"] is False
+    for name in ("catalog_invented_body_details", "catalog_unread_quality_guarantee",
+                 "catalog_opinion_wrong_link", "catalog_opinion_invented_permission",
+                 "advice_invented_private_access", "advice_invented_recovery_guarantee",
+                 "advice_cannot_invent_confirmation_card",
+                 "actual_appearance_failure_is_not_advice"):
+        assert labels[name] is True

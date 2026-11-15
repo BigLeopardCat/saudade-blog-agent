@@ -251,3 +251,49 @@ def test_trace_filename_uses_start_time_across_midnight(tmp_path, monkeypatch):
     payload = json.loads(Path(path).read_text())
     assert datetime.fromisoformat(payload["started_at"]).strftime("%Y%m%dT%H%M%S") == \
         "20261112T235959"
+
+
+def test_compression_preserves_private_permissions_content_and_age_with_public_umask(tmp_path):
+    import gzip
+
+    original = tmp_path / "private.json"
+    body = b'{"trace_id":"synthetic","reply":"private evidence"}'
+    original.write_bytes(body)
+    original.chmod(0o600)
+    timestamp = time.time() - 25 * 3600
+    os.utime(original, (timestamp, timestamp))
+    previous = os.umask(0o022)
+    try:
+        tr.compress_file(str(original))
+    finally:
+        os.umask(previous)
+    target = original.with_suffix(".json.gz")
+    assert target.stat().st_mode & 0o777 == 0o600
+    assert target.stat().st_mtime == timestamp
+    assert gzip.decompress(target.read_bytes()) == body
+    assert not original.exists() and not list(tmp_path.glob("*.tmp"))
+
+
+def test_compression_failure_keeps_source_and_existing_archive_and_removes_private_temp(
+        tmp_path, monkeypatch):
+    original = tmp_path / "private.json"
+    original.write_bytes(b"complete source")
+    original.chmod(0o600)
+    archive = original.with_suffix(".json.gz")
+    archive.write_bytes(b"existing archive")
+
+    def fail(source, target):
+        assert os.fstat(target.fileobj.fileno()).st_mode & 0o777 == 0o600
+        target.write(b"partial content")
+        raise OSError("synthetic disk full")
+
+    monkeypatch.setattr(tr.shutil, "copyfileobj", fail)
+    try:
+        tr.compress_file(str(original))
+    except OSError as exc:
+        assert str(exc) == "synthetic disk full"
+    else:
+        raise AssertionError("compression failure must propagate")
+    assert original.read_bytes() == b"complete source"
+    assert archive.read_bytes() == b"existing archive"
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["private.json", "private.json.gz"]
