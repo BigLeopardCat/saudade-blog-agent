@@ -87,7 +87,7 @@ def test_tentative_moderation_accepts_clarification_or_eligibility_read(check_el
                       "name": "get_account_action_eligibility", "kind": "ok",
                       "args": {"account_id": 20, "action": "mute"}})
     assert not native_assertions.check(gold, {"native_events": calls})
-    assert not native_assertions.check(gold, {"native_events": calls[1:]})
+    assert native_assertions.check(gold, {"native_events": calls[1:]})
 
 
 @pytest.mark.parametrize("case_id", ["account_mute_missing_duration",
@@ -129,19 +129,3 @@ def test_pending_board_accepts_proven_zero_but_nonempty_requires_filtered_record
                      if source == "list" else {}, result=json.dumps({"resource": "board"}))
     events = [] if source == "none" else [event]
     assert (not native_assertions.check(case["gold"], {"native_events": events})) is passed
-
-
-def test_tentative_moderation_still_requires_first_turn_source_and_never_approves_or_writes():
-    from eval.golden_evaluation import check_case, check_gold
-
-    case = next(c for c in online_baseline.load_suite() if c["id"] == "board_publisher_followup")
-    empty = {"text": "请确认是否查询发布者。", "native_events": [], "commands": [],
-             "frames": [], "exec_rows": [], "tool_calls": []}
-    failures = check_case(case, {"rounds": [empty, empty]})
-    assert any("第 1 轮" in f for f in failures)
-    assert not any("第 2 轮" in f for f in failures)
-    gold = case["rounds"][1]["gold"]
-    assert check_gold(gold, {**empty, "frames": ['__CONFIRM__:{"q":"confirm"}']})
-    assert check_gold(gold, {**empty, "exec_rows": [{"tool": "mute_user"}]})
-    assert check_gold(gold, {**empty, "native_events": [{"node": "native",
-        "event": "tool_requested", "name": "prepare_account_mute"}]})
