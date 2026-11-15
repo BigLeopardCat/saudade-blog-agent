@@ -38,6 +38,10 @@ def backend(*, configured=True):
             refs = [{'imageId': ident_, 'name': 'Synthetic reference', 'digest': 'c' * 64,
                      'previewUrl': f'/api/public/image-generation/{ident}/preview?token=fixture'}
                     for ident_ in state['draft']['referenceIds']]
+            refs.extend({'conversationImageId': handle, 'name': 'Synthetic chat reference',
+                         'digest': 'd' * 64,
+                         'previewUrl': f'/api/public/image-generation/{ident}/preview?token=fixture'
+                         } for handle in state['draft'].get('conversationReferenceIds', []))
             value = {'id': ident, 'status': 'pending', 'requestHash': 'a' * 64,
                      'imageRemoved': False,
                      'request': {**state['draft'], 'references': refs,

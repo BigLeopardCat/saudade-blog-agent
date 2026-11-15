@@ -1817,3 +1817,10 @@
   background: color-mix(in srgb, currentColor 5%, transparent); }
 .chat-image-references { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
 .chat-image-references .chat-image-preview { height: 130px; }
+
+.chat-image-editor {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+.chat-image-editor textarea {grid-column:1/-1;resize:vertical;min-height:7rem;max-height:18rem}
+.chat-image-editor label {display:flex;flex-direction:column;gap:4px;min-width:0}
+.chat-image-editor select,.chat-image-editor textarea {width:100%;box-sizing:border-box;border:1px solid var(--chat-border,#cdb7d4);border-radius:8px;padding:8px;background:color-mix(in srgb,currentColor 5%,transparent);color:inherit;font:inherit}
+.chat-image-editor-status {grid-column:1/-1;margin:0;font-size:.9em}
+.chat-image-editor button {grid-column:1/-1;justify-self:end;padding:6px 14px;border-radius:8px}

@@ -38,7 +38,7 @@ def preview(job, url):
     return url
 
 
-def approve_card(job, config, *, result=False, storage="local"):
+def approve_card(job, config, *, result=False, storage="local", editor=None):
     principal, cid = bound_context(config)
     request = job.request
     if result:
@@ -63,13 +63,21 @@ def approve_card(job, config, *, result=False, storage="local"):
                                   "value": "本地存储" if storage == "local" else "R2"})
     review = {"job_id": job.id, "version": version, "prompt": request.prompt,
               "references": [{"name": ref.name, "url": preview(job, ref.previewUrl),
-                              "image_id": ref.imageId} for ref in request.references]}
+                              **({"image_id": ref.imageId} if ref.imageId is not None else
+                                 {"conversation_image_id": ref.conversationImageId})}
+                             for ref in request.references]}
+    if editor is not None and not result:
+        review["editor"] = editor
     if result:
         review["result_url"] = preview(job, job.previewUrl)
     facts = {"status": job.status, "provider": request.provider, "model": request.model,
              "size": request.size, "quality": request.quality,
              "reference_count": len(request.references),
-             "reference_ids": [ref.imageId for ref in request.references],
+             "reference_ids": [ref.imageId for ref in request.references
+                               if ref.imageId is not None],
+             **({"conversation_reference_ids": [ref.conversationImageId
+                     for ref in request.references if ref.conversationImageId is not None]}
+                if any(ref.conversationImageId for ref in request.references) else {}),
              "has_preview": job.previewUrl is not None, "image_removed": job.imageRemoved}
     observed("image_generation", facts, tuple(facts))
     card = proposal(principal, cid, workflow,
@@ -98,6 +106,8 @@ def prepare_image_generation(
     prompt: Annotated[str, Field(min_length=1, max_length=32000)],
     config: RunnableConfig,
     reference_ids: Annotated[list[Annotated[int, Field(gt=0)]], Field(max_length=4)] | None = None,
+    conversation_reference_ids: Annotated[list[Annotated[str, Field(
+        pattern=r"^img_[0-9a-f]{64}$")]], Field(max_length=4)] | None = None,
     model: str | None = None,
     size: Literal["1536x1024", "1024x1024", "1024x1536"] = "1536x1024",
     quality: Literal["low", "medium", "high", "auto"] = "high",
@@ -105,7 +115,9 @@ def prepare_image_generation(
     """Propose ONE paid image generation, only for an administrator's explicit request.
     Supply the COMPLETE exact prompt the human will approve. For an article cover, first
     read the article and compose a suitable prompt; never secretly append article data.
-    reference_ids are optional gallery IDs; no references unless explicitly selected.
+    reference_ids are gallery IDs; conversation_reference_ids are img_ handles from
+    images uploaded in this conversation. Use either source only when selected by the user.
+    Reference handles suffice; do not reload pixels merely to attach a reference.
     model=None uses the configured default. Only snapshots and a pending job are saved:
     no OpenAI call until the human confirms the card. Generated pixels require a SECOND
     approval to enter the gallery; setting an article cover uses prepare_article_cover.
@@ -119,6 +131,9 @@ def prepare_image_generation(
     if selected not in settings.get("models", []):
         return base.unavailable("所选生图模型不在服务端允许列表中。")
     refs = reference_ids or []
+    chat_refs = conversation_reference_ids or []
+    if len(refs) + len(chat_refs) > 4:
+        return base.unavailable("参考图合计不能超过 4 张。")
     value = base._admin_request(
         "POST",
         PATH + "/jobs",
@@ -128,6 +143,7 @@ def prepare_image_generation(
             "size": size,
             "quality": quality,
             "referenceIds": refs,
+            "conversationReferenceIds": chat_refs,
             "conversationId": bound_context(config)[1],
         },
         config,
@@ -142,10 +158,13 @@ def prepare_image_generation(
             or request["model"] != selected
             or request["size"] != size
             or request["quality"] != quality
-            or [r["imageId"] for r in request["references"]] != refs
+            or [r["imageId"] for r in request["references"] if "imageId" in r] != refs
+            or [r["conversationImageId"] for r in request["references"]
+                if "conversationImageId" in r] != chat_refs
         ):
             raise ValueError("Prepared request differs from intent")
-        return approve_card(checked(value, value["id"]), config)
+        return approve_card(checked(value, value["id"]), config, editor={
+            "models": settings["models"], "model": selected, "size": size, "quality": quality})
     except (KeyError, TypeError, ValueError):
         return base.unavailable("未能核对生图请求，本次没有调用计费 API。")
 

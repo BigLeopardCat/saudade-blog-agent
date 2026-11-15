@@ -91,7 +91,9 @@ def stage(messages, transient):
     for message in messages:
         if image_urls(message.content):
             message = message.model_copy(update={"id": message.id or uuid.uuid4().hex})
-            transient[message.id] = message
+            refs = ", ".join(image_id(url) for url in image_urls(message.content))
+            transient[message.id] = message.model_copy(update={"content": [
+                *message.content, {"type": "text", "text": "本轮上传图片引用：" + refs}]})
         staged.append(compact(message))
     return staged
 

@@ -75,6 +75,8 @@ def prepared(call, proposal, todos):
         "tool_execution": "disabled_until_decision",
         "result": proposal["execution"]["pending_confirm"].get("q", proposal["reply"]),
     }
+    if proposal["execution"].get("reviewed_input"):
+        visible["reviewed_input"] = proposal["execution"]["reviewed_input"]
     visible["notices"] = proposal["execution"]["pending_confirm"].get("notices", [])
     if "details" in proposal["execution"]["pending_confirm"]:
         visible["details"] = proposal["execution"]["pending_confirm"]["details"]

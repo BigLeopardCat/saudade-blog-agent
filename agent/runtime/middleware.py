@@ -152,6 +152,8 @@ class SessionMiddleware(AgentMiddleware):
     def _resume(self, state):
         session = self.session
         facts = state["resume"]
+        from agent.runtime.approval_revision import apply
+        state = apply(session, state, facts)
         session.state["resume"] = None
         proposal = (session.outcome.execution or {}) if session.outcome else {}
         if facts["jti"] != proposal.get("pending_action", {}).get("jti"):

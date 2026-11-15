@@ -79,6 +79,7 @@ export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput
             reportConfirm('当前仍有请求在处理，卡片保留，待收尾后再操作');
             return;
         }
+        if (value !== 'no' && askBox.dataset.imageDirty === 'true') return;
         if (value === 'no') {
             cancelAsk(ask);
             return;
@@ -97,6 +98,46 @@ export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput
             onDropped: (why) => askRollback(ask, why),
             message: '' });
     };
+    askBox.addEventListener('image-review-dirty', event => {
+        askBox.dataset.imageDirty = event.detail.dirty ? 'true' : 'false';
+        syncAsk();
+    });
+    askBox.addEventListener('image-review-update', async event => {
+        const ask = ctx.state.pendingAsk;
+        if (!ask || ctx.state.approvalBusy || ctx.state.isSending
+            || Object.keys(ctx.state.remoteRounds || {}).length
+            || ask.image_review?.job_id !== event.detail.jobId
+            || ask.image_review?.version !== event.detail.version) return;
+        const {draft, controls, status} = event.detail;
+        const conv = ctx.state.conv, login = localStorage.getItem('tokenKey'), request = {};
+        approval.invalidate();
+        ctx.state.approvalBusy = request;
+        controls.forEach(control => {control.disabled = true;});
+        askBtns.querySelectorAll('button').forEach(button => {button.disabled = true;});
+        status.textContent = '正在更新预览，尚未调用生图 API…';
+        try {
+            const response = await fetch('/api/chat/confirmation/image-revision', {
+                method:'POST', headers:{'Content-Type':'application/json', Authorization:'Bearer ' + login},
+                body:JSON.stringify({conversation_id:conv,token:ask.token,draft}),
+                signal:AbortSignal.timeout(35000),
+            });
+            const body = await response.json();
+            if (!response.ok || !body.confirmation) throw new Error(body.detail || '未能更新预览，请重试或刷新卡片。');
+            if (ctx.state.conv !== conv || localStorage.getItem('tokenKey') !== login) return;
+            if (ctx.state.pendingAsk?.token !== ask.token) return;
+            askSettle('已由修改后的请求替换，未调用生图 API', undefined, 'amend', ask);
+            approval.receive(body.confirmation, conv, {anchor_turn_id:ask.anchor_turn_id, anchor_id:ask.anchor_id}, true);
+            syncAsk();
+        } catch (error) {
+            if (ctx.state.conv === conv && ctx.state.pendingAsk?.token === ask.token) {
+                status.textContent = error.message || '未能核对修改结果，请重试或刷新卡片。';
+                controls.forEach(control => {control.disabled = false;});
+            }
+        } finally {
+            if (ctx.state.approvalBusy === request) ctx.state.approvalBusy = false;
+            syncAsk();
+        }
+    });
     askBtns.addEventListener('click', (e) => {
         const btn = e.target && e.target.closest ? e.target.closest('button[data-ask-value]') : null;
         if (!btn)
