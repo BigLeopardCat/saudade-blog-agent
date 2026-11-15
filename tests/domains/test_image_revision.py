@@ -14,8 +14,8 @@ from langgraph.checkpoint.memory import InMemorySaver
 from test_confirmation_continuation import Model, call
 
 from agent import confirm
-from agent.domains.image_generation import revisions
 from agent.principal import SOURCE_ASSERTION, Principal
+from agent.products.blog import image_revision as revisions
 from agent.products.blog.application import BlogApplication
 from agent.runtime import writes
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -192,3 +192,29 @@ def test_multiple_revisions_resume_the_original_native_tool_exchange(prepared):
     assert paid == [latest["specs"][0]["args"]["job_id"]]
     assert len(model.prompts) == before + 1
     assert "final human prompt" in str(model.prompts[-1])
+
+
+@pytest.mark.parametrize("retry_update", [True, False])
+def test_saved_replacement_recovers_when_the_http_reply_or_interrupt_setup_is_lost(
+    prepared, monkeypatch, retry_update
+):
+    runtime, cfg, old, model, jobs, paid, requests = prepared
+    from agent.runtime import approval_revision
+
+    native_graph = approval_revision.approval.graph
+
+    class Unavailable:
+        def invoke(self, *_):
+            raise RuntimeError("checkpoint interrupt setup unavailable")
+
+    monkeypatch.setattr(approval_revision.approval, "graph", lambda *_: Unavailable())
+    with pytest.raises(RuntimeError):
+        revisions.revise(runtime, old, draft(), cfg)
+    assert runtime.store.load(cfg).pending_action["jti"] != old["jti"] and not paid
+    monkeypatch.setattr(approval_revision.approval, "graph", native_graph)
+    restored = (revisions.revise(runtime, old, draft(), cfg)["confirmation"] if retry_update
+                else runtime.store.load(cfg).pending_confirm)
+    new = confirm.verify(restored["token"], 7, 42)
+    model.responses = iter([AIMessage(content="修改后的生图请求已开始执行。")])
+    list(runtime.stream_events({"confirm_grant": new}, cfg))
+    assert paid == [NEW]

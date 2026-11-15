@@ -42,6 +42,7 @@ def revise(runtime, grant, draft, config):
                 and saved.get("request_jti") == grant["jti"]
                 and saved.get("draft_digest") == digest
             ):
+                approval.graph(runtime.saver).invoke(None, config)
                 return {
                     "confirmation": confirmation.public_card(
                         {**snapshot.pending, "task_id": snapshot.run["id"]}
@@ -74,8 +75,19 @@ def revise(runtime, grant, draft, config):
         if isinstance(value, base.ToolResult):
             raise ValueError("未能更新生图预览，请重试或刷新当前卡片")
         job = checked(value, value["id"])
+        facts = snapshot.pending_confirm["preparation_facts"]
         if (
-            job.status != "pending"
+            job.id == spec["args"]["job_id"]
+            or job.request.provider != facts["provider"]
+            or [ref.imageId for ref in job.request.references if ref.imageId is not None]
+            != facts["reference_ids"]
+            or [
+                ref.conversationImageId
+                for ref in job.request.references
+                if ref.conversationImageId is not None
+            ]
+            != facts.get("conversation_reference_ids", [])
+            or job.status != "pending"
             or job.conversationId != grant["conv"]
             or any(getattr(job.request, key) != val for key, val in draft.model_dump().items())
         ):

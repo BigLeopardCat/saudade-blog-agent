@@ -10,8 +10,8 @@ from agent import checkpoint, confirm
 from agent.api.authentication import require_checkpoint_cleanup
 from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.dependencies import require_runtime, require_workers
-from agent.domains.image_generation.revisions import ImageDraft
 from agent.products.blog import confirmation
+from agent.products.blog.image_revision import ImageDraft
 from agent.runtime.checkpoint_store import ConversationDeleted
 
 logger = logging.getLogger(__name__)
@@ -91,7 +91,7 @@ class ImageRevision(Cancellation):
 
 @router.post("/confirmation/image-revision")
 async def revise_image(req: ImageRevision, request: Request):
-    from agent.domains.image_generation.revisions import revise
+    from agent.products.blog.image_revision import revise
 
     principal = _resolve_principal(request, req.user_id)
     grant = confirm.verify(req.token, principal.uid, req.conversation_id)
