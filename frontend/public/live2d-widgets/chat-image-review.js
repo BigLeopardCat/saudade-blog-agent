@@ -21,7 +21,7 @@
     const editor = value.editor;
     if (!editor || !Array.isArray(editor.models) || !editor.models.length
       || editor.models.length > 50 || !editor.models.every(model => typeof model === 'string' && model.length <= 200)
-      || !editor.models.includes(editor.model)) return;
+      || !editor.models.includes(editor.model)) return false;
     const controls = document.createElement('div'); controls.className = 'chat-image-editor';
     const prompt = document.createElement('textarea'); prompt.value = value.prompt;
     prompt.maxLength = 32000; prompt.rows = 5; prompt.setAttribute('aria-label', '生图提示词');
@@ -51,6 +51,7 @@
         detail:{jobId:value.job_id, version:value.version, draft:draft(), controls:[prompt, ...Object.values(fields), update], status}}));
     });
     controls.prepend(prompt); controls.append(update, status); root.append(controls);
+    return true;
   };
   const render = (target, value, options = {}) => {
     if (!valid(value)) return false;
@@ -77,8 +78,7 @@
     const prompt = document.createElement('div'); prompt.className = 'chat-image-prompt';
     prompt.textContent = value.prompt;
     root.append(header);
-    if (options.editable && value.editor && !value.result_url) renderEditor(root, value);
-    else root.append(prompt);
+    if (!(options.editable && !value.result_url && renderEditor(root, value))) root.append(prompt);
     const refs = document.createElement('div'); refs.className = 'chat-image-references';
     value.references.forEach((ref, index) => refs.append(image(ref.url,
       '固定参考图 ' + (index + 1) + (ref.name ? '：' + ref.name : ''))));

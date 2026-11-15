@@ -362,6 +362,16 @@
       saveAsk(currentAsk);
       return true;
     };
+    const replaceAsk = (previous, data, note) => {
+      const anchor = findAnchor(previous);
+      if (!receive(data, previous.convId, anchor, true)) return false;
+      currentAsk.anchor_id = previous.anchor_id || anchor?.dataset.mid;
+      currentAsk.anchor_turn_id = previous.anchor_turn_id;
+      saveAsk(currentAsk);
+      askSettle(note, undefined, 'amend', previous);
+      syncAsk();
+      return true;
+    };
     const restoreAsk = async (force = false) => {
       restoreRecords();
       if (ctx.state.isSending || ctx.state.confirmRound || ctx.state.approvalBusy) return;
@@ -400,7 +410,7 @@
       revision++; currentAsk = null; restoring = null; owners.clear();
       clearTimeout(askTimer); askTimer = null;
     });
-    return { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, askUnknown, hideAsk, revealAskOther, setAskQuestion, syncAsk, restoreAsk, receive,
+    return { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, askUnknown, hideAsk, revealAskOther, setAskQuestion, syncAsk, restoreAsk, receive, replaceAsk,
       invalidate: () => { revision++; } };
   };
 })(typeof window !== 'undefined' ? window : globalThis);
