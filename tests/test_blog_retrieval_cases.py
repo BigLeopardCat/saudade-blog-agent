@@ -215,14 +215,16 @@ def test_standard_metrics_require_both_articles_and_keep_no_answer_out_of_recall
 
 def test_multiturn_retrieval_suite_uses_real_turns_and_the_standard_http_entrypoint():
     cases = online_baseline.load_suite(SUITE)
-    assert len(cases) == 2
+    assert len(cases) == 3
     audit = dataset_audit.audit(cases)
-    assert audit["rounds"] == audit["annotated_decisions"] == 4
+    assert audit["rounds"] == audit["annotated_decisions"] == 5
     assert not audit["missing_source_groups"] and not audit["exact_duplicate_inputs"]
     assert not {case["id"] for case in cases}.intersection(
         case["id"] for case in online_baseline.load_suite())
     for case in cases:
-        assert "history" not in case["context"] and len(case["rounds"]) == 2
+        assert "history" not in case.get("context", {})
+    assert [len(case["rounds"]) for case in cases[:2]] == [2, 2]
+    assert cases[2]["id"] == "retrieval_whole_article_summary"
 
 
 def test_short_reference_judgment_rejects_reading_the_wrong_article_despite_correct_link():
