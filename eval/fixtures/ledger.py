@@ -65,7 +65,7 @@ class Ledger:
         return self._conn
 
     def claim(self, key: str, tool: str, attempt: str, *,
-              resuming: bool = True) -> tuple[str, tuple | None]:
+              resuming: bool = True, pending: bool = False) -> tuple[str, tuple | None]:
         """Atomically claim an operation or return its completed/unfinished record.
 
         Attempt identity is stored in fp. Resuming preserves an existing record; a caller
@@ -73,7 +73,8 @@ class Ledger:
         conn = self._db()
         cur = conn.execute(
             "INSERT OR IGNORE INTO idem(key, tool, fp, status, ts)"
-            " VALUES (?,?,?,'intent',?)", (key, tool, attempt, time.time()))
+            " VALUES (?,?,?,?,?)",
+            (key, tool, attempt, "claimed" if pending else "intent", time.time()))
         if cur.rowcount == 1:
             return "new", None
         row = conn.execute(_SELECT_BY_KEY, (key,)).fetchone()
@@ -83,8 +84,9 @@ class Ledger:
             return _split_row(row)
         # Only a conditional update may claim a different explicitly authorized attempt.
         got = conn.execute(
-            "UPDATE idem SET status='intent', fp=?, text=NULL, kind=NULL, meta=NULL, ts=?"
-            " WHERE key=? AND fp=?", (attempt, time.time(), key, row[1])).rowcount
+            "UPDATE idem SET status=?, fp=?, text=NULL, kind=NULL, meta=NULL, ts=?"
+            " WHERE key=? AND fp=?",
+            ("claimed" if pending else "intent", attempt, time.time(), key, row[1])).rowcount
         if got == 1:
             return "new", None
         return _split_row(conn.execute(
@@ -94,6 +96,15 @@ class Ledger:
         row = self._db().execute(
             _SELECT_BY_KEY, (key,)).fetchone()
         return _split_row(row) if row is not None else None
+
+    def dispatch(self, key: str, *, recoverable: bool = False) -> bool:
+        return self._db().execute(
+            "UPDATE idem SET status=? WHERE key=? AND status='claimed'",
+            ("recoverable" if recoverable else "dispatched", key)).rowcount == 1
+
+    def cancel_claim(self, key: str) -> None:
+        self._db().execute("UPDATE idem SET status='cancelled' WHERE key=? AND status='claimed'",
+                           (key,))
 
     def finish(self, key: str, out) -> bool:
         """记完成。返回"结果是否因超上限而未留档"（撞顶时上层补一条 trace）。"""

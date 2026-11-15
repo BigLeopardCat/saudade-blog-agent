@@ -51,14 +51,15 @@ def validate(grant, config):
 
 def outcome(value, args, plan):
     state = targets.plan(value["state"], args["intent"], committed=True)
-    expected = dict(plan)
-    if args["intent"]["action"] == "create":
+    expected = dict(plan) if plan is not None else dict(state)
+    if plan is not None and args["intent"]["action"] == "create":
         expected = {**plan, "after": {**plan["after"], "id": state["after"]["id"]}}
     if (
         state != expected
+        or state["version"] != args["version"]
         or value.get("beforeVersion") != args["version"]
         or type(value.get("changed")) is not bool
-        or value["changed"] != (plan["before"] != plan["after"])
+        or value["changed"] != (state["before"] != state["after"])
     ):
         raise ValueError("公告实际结果与确认计划不一致")
     return state
@@ -72,13 +73,29 @@ class Operation:
         if plan["version"] != args["version"]:
             return base.unavailable("公告或通知范围已变化，请重新核对并确认，本次未改动。")
         check_cancelled(config)
+        if ((config or {}).get("configurable") or {}).get("confirmed_operation_id"):
+            from agent.domains.announcements import recovery
+
+            return self.result(recovery.change(args, config), args, plan)
         result = base._admin_request("POST", targets.PATH, args, config)
+        return self.result(result, args, plan)
+
+    def recover(self, args, config=None, *, retry=False):
+        from agent.domains.announcements import recovery
+
+        return self.result(recovery.recover(args, config, retry=retry), args, None)
+
+    def result(self, result, args, plan):
         if isinstance(result, base.ToolResult):
             return result
         try:
             state = outcome(result, args, plan)
         except (ValueError, TypeError, KeyError):
-            return base.unavailable("公告请求已发出，但实际结果无法确认；请先查询，不要重复执行。")
+            return base.unavailable("公告请求已发出，但实际结果无法确认；请先查询，不要重复执行。",
+                                    meta={"reason": "receipt_mismatch"})
+        if plan is None:
+            plan = {**state, "after": ({**state["after"], "id": None}
+                    if args["intent"]["action"] == "create" else state["after"])}
         row = state["after"] or state["before"]
         verb = {"create": "已发布", "update": "已更新", "delete": "已删除"}[
             args["intent"]["action"]

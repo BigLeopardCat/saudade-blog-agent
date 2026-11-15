@@ -67,7 +67,7 @@ class PostgresLedger:
         self.pool = pool
 
     def claim(self, key: str, tool: str, attempt: str, *,
-              resuming: bool = True) -> tuple[str, tuple | None]:
+              resuming: bool = True, pending: bool = False) -> tuple[str, tuple | None]:
         """Atomically claim a new intent or read the persisted outcome.
 
         Attempt identity is stored in fp. Resuming preserves the existing record; an explicitly
@@ -77,23 +77,40 @@ class PostgresLedger:
             with conn.cursor(row_factory=tuple_row) as cur:
                 cur.execute(
                     f"INSERT INTO {TABLE}(key, tool, fp, status)"
-                    " VALUES (%s, %s, %s, 'intent')"
+                    " VALUES (%s, %s, %s, %s)"
                     " ON CONFLICT (key) DO NOTHING RETURNING key",
-                    (key, tool, attempt))
+                    (key, tool, attempt, "claimed" if pending else "intent"))
                 if cur.fetchone() is not None:
                     return "new", None
                 row = self._read(cur, key)
                 if row is not None and row[1] != attempt and not resuming:
-                    # 合法的重复：**一次原子的 UPDATE** 才算抢到（`fp` 一起进 WHERE ⇒
-                    # 抢不到就是有人同时在动这一行 ⇒ 回读一次再判，不猜）。
+                    # Compare the previous attempt so only one concurrent reset can win.
                     cur.execute(
-                        f"UPDATE {TABLE} SET status='intent', fp=%s, text=NULL,"
+                        f"UPDATE {TABLE} SET status=%s, fp=%s, text=NULL,"
                         " kind=NULL, meta=NULL, ts=now() WHERE key=%s AND fp=%s",
-                        (attempt, key, row[1]))
+                        ("claimed" if pending else "intent", attempt, key, row[1]))
                     if cur.rowcount == 1:
                         return "new", None
                     row = self._read(cur, key)
         return idem._split_row(row)
+
+    def dispatch(self, key: str, *, recoverable: bool = False) -> bool:
+        """Only the winner may cross the external-call boundary; commit before calling."""
+        ensure_autocommit(self.pool)
+        with self.pool.connection() as conn:
+            changed = conn.execute(
+                sql.SQL("UPDATE {} SET status=%s WHERE key=%s AND status='claimed'").format(
+                    sql.Identifier(TABLE)),
+                ("recoverable" if recoverable else "dispatched", key))
+            return changed.rowcount == 1
+
+    def cancel_claim(self, key: str) -> None:
+        """A cancellation observed before dispatch is known not to have called the tool."""
+        ensure_autocommit(self.pool)
+        with self.pool.connection() as conn:
+            conn.execute(sql.SQL(
+                "UPDATE {} SET status='cancelled' WHERE key=%s AND status='claimed'").format(
+                    sql.Identifier(TABLE)), (key,))
 
     @staticmethod
     def _read(cur, key: str):

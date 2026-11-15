@@ -7,6 +7,7 @@ from agent.domains import article_editor, talks
 from agent.domains.account_actions import preparation as accounts
 from agent.domains.admin_writes import available
 from agent.domains.announcements import preparation as announcements
+from agent.domains.announcements.recovery import get_announcement_operation
 from agent.domains.article_actions import deletion as article_deletions
 from agent.domains.article_actions import preparation as articles
 from agent.domains.article_tags import preparation as article_tags
@@ -55,6 +56,7 @@ def domains(config, can_prepare, reads):
         return {}
     selected = {name: dict(tools) for name, tools in reads.items()}
     selected["admin_gallery"] = gallery_reads.tools()
+    selected["admin_announcements"] = {get_announcement_operation.name: get_announcement_operation}
     selected["admin_talks"] = {talks.list_admin_talks.name: talks.list_admin_talks}
     selected["admin_image_generation"] = {
         image_generation.get_image_generation.name: image_generation.get_image_generation

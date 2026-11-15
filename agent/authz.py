@@ -80,6 +80,7 @@ TOOL_SCOPE: dict[str, str] = {
     "prepare_tag_delete": SCOPE_ADMIN_CONSOLE,
     "prepare_tag_update": SCOPE_ADMIN_CONSOLE,
     "prepare_announcement_create": SCOPE_ADMIN_CONSOLE,
+    "get_announcement_operation": SCOPE_ADMIN_CONSOLE,
     "prepare_announcement_delete": SCOPE_ADMIN_CONSOLE,
     "prepare_announcement_deletions": SCOPE_ADMIN_CONSOLE,
     "prepare_announcement_update": SCOPE_ADMIN_CONSOLE,
