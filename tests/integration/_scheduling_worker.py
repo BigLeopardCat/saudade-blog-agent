@@ -120,7 +120,8 @@ class Host(BlogHost):
             time.sleep(0.05)
         with connection() as conn:
             conn.execute(
-                "INSERT INTO test_notifications(run_id,owner_id,body,conversation_id) VALUES (%s,%s,%s,%s) "
+                "INSERT INTO test_notifications(run_id,owner_id,body,conversation_id) "
+                "VALUES (%s,%s,%s,%s) "
                 "ON CONFLICT(run_id) DO NOTHING",
                 (run_id, owner, text, conversation_id),
             )
