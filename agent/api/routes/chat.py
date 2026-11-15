@@ -261,7 +261,8 @@ async def chat_stream(req: ChatRequest, request: Request):
     )):
         raise HTTPException(503, "Agent busy（并发已满），请稍后重试")
     try:
-        messages = ([] if grant is not None or req.resume_task or req.image_event or req.task_event else
+        messages = ([] if (grant is not None or req.resume_task
+                           or req.image_event or req.task_event) else
                     build_messages(req, holds_context=runtime_probe.holds_context(runtime)))
         thread_id = checkpoint.thread_id_for(
             req.user_id, req.conversation_id, runtime_probe.holds_context(runtime)

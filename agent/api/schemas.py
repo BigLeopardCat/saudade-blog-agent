@@ -94,7 +94,8 @@ class ChatRequest(BaseModel):
     @model_validator(mode="after")
     def continuation_is_control_only(self):
         if (self.image_event is not None or self.task_event is not None) and (
-            not self.conversation_id or self.conversation_id <= 0 or self.message.strip() or self.image
+            not self.conversation_id or self.conversation_id <= 0
+            or self.message.strip() or self.image
             or self.image_event is not None and self.task_event is not None
             or self.confirm_token or self.confirm_pick or self.resume_task or self.browser_result
             or self.task_inputs or self.browser_feedback
