@@ -11,8 +11,9 @@ function scenario(data={unread:1,conversations:[{id:42,unread:1}],items:[row]}) 
     querySelector:()=>badge,querySelectorAll:()=>[{dataset:{id:'42'},classList:{toggle:(...v)=>toggles.push(v)}}]};
   const ctx={state:{conv:42,items:[],remoteRounds:{}},dom:{chatPanel:panel,
     messages:{scrollHeight:100,scrollTop:0,clientHeight:100}}};
-  globalThis.crypto=webcrypto;globalThis.document={hidden:false};
-  globalThis.localStorage={getItem:()=>token};
+  Object.defineProperty(globalThis,'crypto',{value:webcrypto,configurable:true});
+  Object.defineProperty(globalThis,'document',{value:{hidden:false},configurable:true,writable:true});
+  Object.defineProperty(globalThis,'localStorage',{value:{getItem:()=>token},configurable:true});
   globalThis.fetch=async(path,options)=>{requests.push({path,options});return {ok:true,status:200,
     json:async()=>({code:200,data})};};
   let pulls=0;
