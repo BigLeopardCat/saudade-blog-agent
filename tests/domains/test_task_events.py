@@ -117,7 +117,7 @@ def test_task_event_input_is_typed_and_cannot_mix_content_or_approval():
     assert ChatRequest(**payload).task_event.run_id == RUN
     for update in [
         dict(message="write"),
-        dict(confirm_token="token"),
+        dict(confirm_token=secrets.token_urlsafe(32)),
         dict(resume_task="paused"),
         dict(image_event={"job_id": "11111111-1111-4111-8111-111111111111", "version": VERSION}),
         dict(task_event={"run_id": RUN, "version": VERSION, "status": "completed"}),
