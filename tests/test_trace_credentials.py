@@ -2,6 +2,7 @@
 
 import copy
 import json
+import secrets
 from pathlib import Path
 
 import pytest
@@ -26,8 +27,9 @@ def test_credential_forms_are_filtered_without_changing_the_caller_value(value, 
 
 
 def test_filter_keeps_usage_ids_source_coordinates_and_nonsecret_text():
+    token_count = 4
     original = {"input_tokens": 321, "output_tokens": 20, "cache_read": 256,
-                "key": "operation-hash", "user_id": 7, "token_count": 4,
+                "key": secrets.token_hex(32), "user_id": 7, "token_count": token_count,
                 "source": {"revision": "r1", "offset": 100, "end": 121},
                 "items": [{"id": 45, "content": "密码字段是必填，当前尚未执行。"}],
                 "text": '只输出 JSON: {"count":2}', "query": "token budget",
@@ -37,24 +39,25 @@ def test_filter_keeps_usage_ids_source_coordinates_and_nonsecret_text():
 
 
 def test_nested_structured_credentials_are_removed_from_diagnostic_copies():
-    original = {"headers": {"Authorization": "Bearer synthetic-private-header"},
-                "details": [{"api_key": "synthetic-secret", "Password": "synthetic-password"}],
-                "confirmation": {"confirm_token": "synthetic-confirmation"},
-                "code": '{"refresh_token":"synthetic-refresh"}'}
+    values = [secrets.token_urlsafe(24) for _ in range(5)]
+    original = {"headers": {"Authorization": "Bearer " + values[0]},
+                "details": [{"api_key": values[1], "Password": values[2]}],
+                "confirmation": {"confirm_token": values[3]},
+                "code": json.dumps({"refresh_token": values[4]})}
     before = copy.deepcopy(original)
     safe = redact_credentials(original)
     assert original == before
     serialized = json.dumps(safe)
-    for secret in ("synthetic-private-header", "synthetic-secret", "synthetic-password",
-                   "synthetic-confirmation", "synthetic-refresh"):
-        assert secret not in serialized
+    assert all(value not in serialized for value in values)
     assert redact_credentials(safe) == safe
+
 
 
 def test_live_events_and_disk_trace_share_filtered_evidence_without_mutating_business_data(
         tmp_path):
     identifier = "synthetic-credential-boundary"
-    secret = "sk-synthetic0123456789abcdef"
+    secret = "sk-" + secrets.token_urlsafe(24)
+    reply_value = secrets.token_urlsafe(24)
     original = {"message": "api_key=" + secret, "source": "production"}
     event = {"kind": "ok", "result": json.dumps({"api_key": secret, "count": 2}),
              "args": {"api_key": secret, "article_id": 19}, "input_tokens": 123}
@@ -63,14 +66,14 @@ def test_live_events_and_disk_trace_share_filtered_evidence_without_mutating_bus
                                  dir=str(tmp_path), name=identifier, by_day=False)
     try:
         trace.record("native", "call", **event)
-        recorder.set_reply("Authorization: Bearer synthetic-reply-secret")
+        recorder.set_reply("Authorization: Bearer " + reply_value)
         assert secret not in json.dumps(recorder.events)
         assert event == expected and secret in original["message"]
         path = trace.finish_trace(identifier, "producer_done", 0.1, 1)
     finally:
         trace.finish_trace(identifier, "cleanup", 0.1, 1)
     doc = json.loads(Path(path).read_text())
-    assert secret not in json.dumps(doc) and "synthetic-reply-secret" not in json.dumps(doc)
+    assert secret not in json.dumps(doc) and reply_value not in json.dumps(doc)
     assert doc["events"][0]["args"]["article_id"] == 19
     assert doc["events"][0]["input_tokens"] == 123
     assert json.loads(doc["events"][0]["result"])["count"] == 2
@@ -79,12 +82,15 @@ def test_live_events_and_disk_trace_share_filtered_evidence_without_mutating_bus
 
 
 def test_json_tool_result_remains_valid_when_numeric_or_array_credentials_are_filtered():
-    source = json.dumps({"password": 123456, "access_token": ["opaque"], "count": 2})
+    numeric = 123456
+    source = json.dumps({"password": numeric, "access_token": [secrets.token_urlsafe(24)],
+                         "count": 2})
     filtered = json.loads(redact_credentials(source))
     assert filtered == {"password": REDACTED, "access_token": REDACTED, "count": 2}
 
 
 def test_tool_parameter_schemas_are_contracts_not_supplied_credentials(tmp_path):
+    numeric = 123
     recorder = trace.start_trace("synthetic-schema", 7, "fixture", dir=str(tmp_path))
     schema = {"function": {"name": "test-tool", "parameters": {"type": "object",
         "properties": {"password": {"type": "string", "description": "Input password"},
@@ -92,7 +98,8 @@ def test_tool_parameter_schemas_are_contracts_not_supplied_credentials(tmp_path)
     try:
         trace.record("native", "tool_contract", schema=schema)
         assert recorder.events[-1]["schema"] == schema
-        trace.record("native", "call", args={"password": "synthetic-secret", "token": 123})
+        trace.record("native", "call", args={"password": secrets.token_urlsafe(24),
+                                             "token": numeric})
         assert recorder.events[-1]["args"] == {"password": REDACTED, "token": REDACTED}
     finally:
         trace.finish_trace("synthetic-schema", "cleanup", 0.1, 0)
