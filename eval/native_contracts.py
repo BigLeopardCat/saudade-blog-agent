@@ -77,6 +77,14 @@ class _Store:
         with closing(Ledger(self.path)) as store:
             return store.lookup(*args)
 
+    def dispatch(self, *args, **kwargs):
+        with closing(Ledger(self.path)) as store:
+            return store.dispatch(*args, **kwargs)
+
+    def cancel_claim(self, *args):
+        with closing(Ledger(self.path)) as store:
+            return store.cancel_claim(*args)
+
 
 def _principal(role="user"):
     expires = int(time.time()) + 600

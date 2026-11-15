@@ -105,8 +105,8 @@ def get_announcement_operation(
         return result
     if isinstance(result, dict) and result.get("status") == "absent" and (
             result.get("operationId") == operation_id):
-        value = {**result, "note": "暂未取得已提交回执，不证明原请求未执行。"}
-        return ok(json.dumps(value, ensure_ascii=False), data=value)
+        text = "暂未取得已提交回执，不证明原请求未执行。\n" + json.dumps(result, ensure_ascii=False)
+        return ok(text, data=result)
     if isinstance(result, dict) and result.get("status") == "completed":
         try:
             receipt = Receipt.model_validate(result.get("receipt"))
