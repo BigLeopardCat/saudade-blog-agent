@@ -75,6 +75,9 @@ async def notify(payload, run_id, result):
         run_id,
         payload["definition"]["title"],
         result["text"],
+        conversation_id=payload.get("conversation_id"),
+        schedule_id=payload["schedule_id"],
+        status=result["status"],
     )
 
 

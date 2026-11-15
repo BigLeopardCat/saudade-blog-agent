@@ -66,6 +66,7 @@ def runtime_events(
     browser_result=None,
     task_inputs=False,
     image_event=None,
+    task_event=None,
 ):
     """Bind verified request coordinates to the Runtime event contract."""
     stream_events = getattr(runtime, "stream_events", None)
@@ -91,6 +92,8 @@ def runtime_events(
     state: dict[str, object] = {"messages": messages}
     if image_event is not None:
         state["system_event"] = {"kind": "image_generation", **image_event}
+    if task_event is not None:
+        state["system_event"] = {"kind": "task_result", **task_event}
     if confirm_grant is not None:
         state["confirm_grant"] = confirm_grant
     if task_id:
@@ -118,6 +121,7 @@ def run_turn(
     confirm_grant=None,
     task_inputs=False,
     image_event=None,
+    task_event=None,
 ) -> CollectedTurn:
     """Run one turn, preserving ordered controls separately from visible prose."""
     return collect_turn(
@@ -135,6 +139,7 @@ def run_turn(
             confirm_grant=confirm_grant,
             task_inputs=task_inputs,
             image_event=image_event,
+            task_event=task_event,
         )
     )
 
@@ -159,6 +164,7 @@ def stream_to_queue(
     browser_result=None,
     task_inputs=False,
     image_event=None,
+    task_event=None,
 ):
     """Run runtime events in the worker and enqueue protocol-safe values.
 
@@ -218,6 +224,7 @@ def stream_to_queue(
             browser_result=browser_result,
             task_inputs=task_inputs,
             image_event=image_event,
+            task_event=task_event,
         )
         emit_to_queue(events, put)
         put(None)

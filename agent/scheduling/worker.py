@@ -58,6 +58,8 @@ class WorkerActions:
             original = {
                 key: payload[key] for key in ("owner_id", "schedule_id", "definition", "start_at")
             }
+            if "conversation_id" in payload:
+                original["conversation_id"] = payload["conversation_id"]
             return bool(row and row["status"] == "ACTIVE" and row["context"] == original)
         row = self.backend.once(payload["owner_id"], payload["schedule_id"])
         return bool(

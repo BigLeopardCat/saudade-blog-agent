@@ -220,7 +220,8 @@ def test_unverified_business_write_reaches_user_notification_without_posting_it_
 
     definition = Definition(title="公告", action="publish_announcement", instruction="批准正文",
                             delay_seconds=300)
-    payload = {"owner_id": 7, "definition": definition.model_dump(mode="json")}
+    payload = {"owner_id": 7, "schedule_id": IDENT,
+               "definition": definition.model_dump(mode="json")}
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         worker = WorkerActions(None, BlogHost(client), None)
         worker.enabled = Mock(return_value=True)

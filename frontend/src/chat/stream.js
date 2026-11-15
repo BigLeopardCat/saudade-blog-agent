@@ -1,3 +1,4 @@
+import { createCompletionInbox, completionTurnId } from './completion-inbox.js';
 import { createReplyState, receiveReply, preservePartialReply, renderFailed as renderFailedReply } from './reply-view.js';
 import { createAppearance } from './appearance.js';
 import { bindPanelGeometry } from './panel-geometry.js';
@@ -61,7 +62,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                 const silent = !!opts.silent;
                 const msg = silent ? (opts.message || '') : input.value.trim();
                 const imgs = silent ? [] : (ctx.state.pendingImages || []);
-                if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken && !opts.imageEvent) || ctx.state.isSending
+                if ((!msg && !imgs.length && !opts.resumeTask && !opts.confirmToken && !opts.imageEvent && !opts.taskEvent) || ctx.state.isSending
                     || ctx.state.steeringSubmitting || Object.keys(ctx.state.remoteRounds || {}).length) {
                     if (silent && typeof opts.onDropped === 'function')
                         opts.onDropped('此刻有轮次在跑');
@@ -87,6 +88,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                         opts.onDropped('建会话期间被别的轮次抢占');
                     return;
                 }
+                if (opts.taskEvent && opts.completionConversation !== ctx.state.conv) return false;
                 const roundConvId = ctx.state.conv;
                 const resumedAsk = opts.resumeTask && ctx.state.pendingAsk
                     && ctx.state.pendingAsk.task_id === opts.resumeTask ? ctx.state.pendingAsk : null;
@@ -112,7 +114,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                 const thumbs = imgs.length ? await makeThumbs(imgs) : [];
                 if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length)
                     return;
-                const roundId = opts.imageEvent ? await g.__waifuImageJobs.turnId(opts.imageEvent) : __chatCore.genId();
+                const roundId = opts.taskEvent ? await completionTurnId('task', opts.taskEvent.run_id, opts.taskEvent.version) : opts.imageEvent ? await g.__waifuImageJobs.turnId(opts.imageEvent) : __chatCore.genId();
                 const userItemId = silent ? null : __chatCore.genId();
                 const sentAt = Date.now();
                 ctx.state.activeRound = { roundId, userItemId, msg, convId: roundConvId, silent,
@@ -123,7 +125,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                                 .filter(id => Number.isSafeInteger(id) && id > 0))],
                     },
                     taskId: opts.resumeTask || (opts.confirmAsk || {}).task_id || roundId,
-                    turnId: opts.imageEvent ? roundId : silent
+                    turnId: (opts.imageEvent || opts.taskEvent) ? roundId : silent
                         ? (opts.resumeTurn || opts.confirmAsk?.anchor_turn_id || lastUserTurn()) : roundId,
                     resumeTask: opts.resumeTask || (opts.confirmAsk || {}).task_id,
                     resumeText: opts.resumeText || (silent ? ([...ctx.state.items].reverse()
@@ -200,11 +202,12 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                             task_inputs: !!steering && (!silent || !!opts.resumeTask),
                             message: msg,
                             turn_id: roundState.turnId,
-                            ...(!silent || opts.imageEvent ? { task_id: roundId } : {}),
-                            browser_feedback: !!browserActions,
+                            ...(!silent || opts.imageEvent || opts.taskEvent ? { task_id: roundId } : {}),
+                            browser_feedback: !opts.imageEvent && !opts.taskEvent && !!browserActions,
                             ...(opts.resumeTask ? { resume_task: opts.resumeTask } : {}),
                             ...(opts.browserResult ? { browser_result: opts.browserResult } : {}),
                             ...(opts.imageEvent ? { image_event: opts.imageEvent } : {}),
+                            ...(opts.taskEvent ? { task_event: opts.taskEvent } : {}),
                             ...(roundConvId !== null ? { conversation_id: roundConvId } : {}),
                             ...(imgs.length ? { image: imgs } : {}),
                             current_url: window.location.href,
@@ -220,7 +223,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                     });
                     if (!ownsRound())
                         throw staleRound();
-                    if (opts.imageEvent && [204, 409, 401, 403].includes(resp.status)) {
+                    if ((opts.imageEvent || opts.taskEvent) && [204, 409, 401, 403].includes(resp.status)) {
                         reply.typingEl?.remove();
                         div?.remove();
                         delete ctx.state.live[roundId];
@@ -353,7 +356,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                 catch (e) {
                     if (e?.staleRound || !ownsRound())
                         return false;
-                    if (opts.imageEvent && !reply.text) {
+                    if ((opts.imageEvent || opts.taskEvent) && !reply.text) {
                         reply.typingEl?.remove();
                         div?.remove();
                         delete ctx.state.live[roundId];
@@ -504,6 +507,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                 return ownsRound() && completed && !ctx.state.stoppedByUser;
             };
             g.__waifuImageJobs?.init(ctx, sendMessage, engine);
+            createCompletionInbox(ctx, sendMessage, engine).start();
             const browserActions = g.__waifuBrowserActions
                 ? g.__waifuBrowserActions(ctx, engine, sendMessage, settings => {
                     for (const [name, mode] of Object.entries(settings)) {

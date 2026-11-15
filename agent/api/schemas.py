@@ -57,9 +57,16 @@ class ImageEvent(BaseModel):
     version: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class TaskEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str = Field(min_length=1, max_length=200, pattern=r"^[A-Za-z0-9_-]+$")
+    version: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 class ChatRequest(BaseModel):
     message: str = Field(max_length=MAX_MESSAGE_CHARS)
     image_event: ImageEvent | None = None
+    task_event: TaskEvent | None = None
     current_url: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     page_title: str = Field(default="", max_length=MAX_SHORT_FIELD_CHARS)
     user_id: int = 0
@@ -86,11 +93,13 @@ class ChatRequest(BaseModel):
 
     @model_validator(mode="after")
     def continuation_is_control_only(self):
-        if self.image_event is not None and (
-            not self.conversation_id or self.message.strip() or self.image
+        if (self.image_event is not None or self.task_event is not None) and (
+            not self.conversation_id or self.conversation_id <= 0 or self.message.strip() or self.image
+            or self.image_event is not None and self.task_event is not None
             or self.confirm_token or self.confirm_pick or self.resume_task or self.browser_result
+            or self.task_inputs or self.browser_feedback
         ):
-            raise ValueError("图片完成事件不能同时提交消息或操作")
+            raise ValueError("后台结果事件不能同时提交消息或操作")
         if self.resume_task and (
             self.conversation_id is None or self.conversation_id <= 0
             or self.task_id or self.message.strip() or self.image
