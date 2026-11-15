@@ -14,6 +14,13 @@ class ArticleQuestion(BaseModel):
         strip_whitespace=True, min_length=1, max_length=500)]
 
 
+class ArticleSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["summary"]
+    instructions: Annotated[StrictStr, StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=1000)] = "按原文结构总结全文。"
+
+
 class DocumentRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
     kind: Literal["full_text", "source_range", "outline", "metadata"]
@@ -24,11 +31,16 @@ class DocumentRead(BaseModel):
     section_schema: Annotated[StrictStr, Field(max_length=128)] = ""
 
 
-ReadSelection = Annotated[ArticleQuestion | DocumentRead, Field(discriminator="kind")]
+ReadSelection = Annotated[
+    ArticleQuestion | ArticleSummary | DocumentRead, Field(discriminator="kind")]
 
 
 def is_question(args):
     return isinstance(args.get("selection"), dict) and args["selection"].get("kind") == "question"
+
+
+def is_summary(args):
+    return isinstance(args.get("selection"), dict) and args["selection"].get("kind") == "summary"
 
 
 def document_args(args):

@@ -10,7 +10,7 @@ from langchain_core.messages import ToolMessage
 
 from agent.domains.articles.reading import body_continuation, directory_targets
 from rag.reading import read_requests
-from rag.reading_requests import is_question
+from rag.reading_requests import is_question, is_summary
 from rag.source import BodyPassage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
@@ -105,6 +105,8 @@ class ArticleEvidence:
         self.empty = False
         self.failed = False
         self.documents: dict[int, str] = {}
+        self.summaries: dict[int, dict] = {}
+        self.summary_failures: set[int] = set()
         self.read_ranges: dict[int, list[dict]] = {}
         self.continuations: dict[int, dict] = {}
         self.read_targets: list[dict] = []
@@ -117,6 +119,7 @@ class ArticleEvidence:
             **vars(self),
             "references": sorted(self.references),
             "catalog_references": sorted(self.catalog_references),
+            "summary_failures": sorted(self.summary_failures),
             "read_ranges": {
                 ident: [dict(row) for row in rows] for ident, rows in self.read_ranges.items()
             },
@@ -131,6 +134,9 @@ class ArticleEvidence:
             setattr(evidence, key, bool(state[key]))
         for key in ("documents", "candidates"):
             setattr(evidence, key, {int(ident): title for ident, title in state[key].items()})
+        evidence.summaries = {int(ident): dict(value)
+                              for ident, value in state.get("summaries", {}).items()}
+        evidence.summary_failures = set(state.get("summary_failures", []))
         evidence.read_ranges = {
             int(ident): [dict(row) for row in rows]
             for ident, rows in state.get("read_ranges", {}).items()
@@ -154,6 +160,9 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
+        if name == "get_article_detail" and is_summary(args):
+            self._observe_summary(args.get("article_id"), kind, payload(value))
+            return
         search_operation = (name in SEARCH_TOOLS
                             or name == "get_article_detail" and is_question(args))
         if search_operation or name == "search_notes" or name in CATALOG_TOOLS:
@@ -208,6 +217,24 @@ class ArticleEvidence:
             else:
                 self.read_targets = [target for target in self.read_targets
                                      if target["article_id"] != args["article_id"]]
+
+    def _observe_summary(self, ident, kind, data):
+        from agent.domains.articles.summary import visible_summary
+
+        if type(ident) is not int or ident <= 0:
+            return
+        if kind == "ok":
+            try:
+                result = visible_summary(data, ident)
+            except (TypeError, ValueError):
+                pass
+            else:
+                self.summaries[ident] = {key: result[key] for key in
+                                         ("noteTitle", "coverage", "strategy", "segments")}
+                self.summary_failures.discard(ident)
+                return
+        self.summaries.pop(ident, None)
+        self.summary_failures.add(ident)
 
     def _remember_target(self, target):
         selected = {key: target[key] for key in ("article_id", "revision", "section_schema")}
@@ -301,6 +328,9 @@ class ArticleEvidence:
                 }
                 for ident, title in self.documents.items()
             ],
+            **({"document_summaries": [{"id": ident, **value}
+                                      for ident, value in self.summaries.items()]}
+               if self.summaries else {}),
             "mentioned_article_ids": sorted(
                 {ident for host, ident in self.references if not host or host == origin}
             ),
@@ -308,9 +338,11 @@ class ArticleEvidence:
 
     def issue(self, reply: str, site: str) -> str | None:
         """Validate references only; content grounding requires semantic evaluation."""
-        if self.found and not self.documents and not self.candidates:
+        if self.summary_failures:
+            return "article_summary_incomplete"
+        if self.found and not self.documents and not self.candidates and not self.summaries:
             return "article_body_missing"
-        if not self.searched and not self.documents and not self.candidates:
+        if not self.searched and not self.documents and not self.candidates and not self.summaries:
             return None
         if self.invalid_references(reply, site):
             return "unread_article_reference"
@@ -320,7 +352,7 @@ class ArticleEvidence:
         """Explain rejected references without retaining URLs, credentials or answer text."""
         origin = urlsplit(site).netloc.casefold()
         referenced = {ident for host, ident in self.references if not host or host == origin}
-        available = {*self.documents, *self.candidates, *referenced}
+        available = {*self.documents, *self.candidates, *self.summaries, *referenced}
         return [
             {
                 "article_id": ident,

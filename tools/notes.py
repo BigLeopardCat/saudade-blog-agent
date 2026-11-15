@@ -13,7 +13,7 @@ from agent.reports import sanitize_untrusted
 from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import search_frame, search_text
-from rag.reading_requests import ArticleQuestion, ReadSelection
+from rag.reading_requests import ArticleQuestion, ArticleSummary, ReadSelection
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -131,16 +131,24 @@ DOC_TYPE_CN = {
 def get_article_detail(
     article_id: Annotated[StrictInt, Field(gt=0, le=2_147_483_647)],
     selection: ReadSelection,
+    config: RunnableConfig,
     doc_type: Literal["note", "talk", "board", "announcement"] = "note",
 ) -> str | ToolResult:
     """Read a known public document. Select question for a specific fact/topic
-    (returns verified passages), full_text for a document-level summary or analysis
-    (returns original text), source_range for exact source coordinates, outline for
+    (returns verified passages), summary for a complete document summary/analysis
+    (reads every page and synthesizes within the task budget), full_text to start
+    reading original text, source_range for exact source coordinates, outline for
     headings, metadata for author/title/tags. Source IDs or unique heading titles
     select section subtrees. A known source version is bound
     by the runtime; supplied versions stay checked. Independent sections can use
     parallel tool calls. Private/drafts use read_current_article.
     """
+    if isinstance(selection, ArticleSummary):
+        if doc_type != "note":
+            return invalid_args("Whole-document summaries cover public articles only.")
+        from agent.domains.articles.summary import summarize_article
+
+        return summarize_article(article_id, selection.instructions, config, read=_read_document)
     if isinstance(selection, ArticleQuestion):
         if doc_type != "note":
             return invalid_args("Question retrieval covers public articles; "
