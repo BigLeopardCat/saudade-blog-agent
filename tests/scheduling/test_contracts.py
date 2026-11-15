@@ -251,7 +251,8 @@ def test_confirmed_create_uses_existing_execution_ledger_and_replay_does_not_rei
     grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
     calls = []
 
-    def create(principal, identifier, definition):
+    def create(principal, identifier, definition, *, conversation_id):
+        assert conversation_id == 42
         calls.append(identifier)
         return {"changed": True, "schedule": {"id": identifier, "definition": definition}}
 

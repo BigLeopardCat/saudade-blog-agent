@@ -71,7 +71,10 @@ class BlogHost:
             raise ValueError("public article condition returned a different target")
         return True
 
-    def notify(self, owner, run_id, title, text):
+    def notify(
+        self, owner, run_id, title, text, *, conversation_id=None, schedule_id=None,
+        status="completed",
+    ):
         self.actor(owner)
         content = (
             text if len(text) <= 1000 else text[:960] + "\n\n完整结果可请助手查询此计划的执行记录。"
@@ -79,7 +82,11 @@ class BlogHost:
         response = self.client.post(
             self.base + "/api/protected/automation-results",
             headers=self.headers(owner),
-            json={"runId": run_id, "title": title[:80], "content": content},
+            json={
+                "runId": run_id, "title": title[:80], "content": content,
+                "resultText": text,
+                "conversationId": conversation_id, "scheduleId": schedule_id, "status": status,
+            },
         )
         response.raise_for_status()
         body = response.json()

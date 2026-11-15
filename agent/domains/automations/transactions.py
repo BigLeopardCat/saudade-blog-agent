@@ -46,9 +46,11 @@ class Operation:
         self.service, self.action = service, action
 
     def invoke(self, args, config=None):
-        principal, _ = writes.bound_context(config)
+        principal, cid = writes.bound_context(config)
         if self.action == "create":
-            result = self.service.create(principal, args["schedule_id"], args["definition"])
+            result = self.service.create(
+                principal, args["schedule_id"], args["definition"], conversation_id=cid
+            )
         else:
             result = self.service.control(
                 principal, args["schedule_id"], self.action, args["version"]

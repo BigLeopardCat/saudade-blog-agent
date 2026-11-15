@@ -122,8 +122,12 @@ class ScheduleService:
     def get(self, principal, identifier):
         return self._get(self.authorize(principal), identifier)
 
-    def create(self, principal, identifier, definition):
+    def create(self, principal, identifier, definition, *, conversation_id=None):
         owner = self.authorize(principal)
+        if conversation_id is not None and (
+            type(conversation_id) is not int or conversation_id <= 0
+        ):
+            raise ValueError("invalid source conversation")
         definition = Definition.model_validate(definition)
         value = definition.model_dump(mode="json")
         with self.backend.mutation(owner):
@@ -159,6 +163,8 @@ class ScheduleService:
                 "definition": value,
                 "start_at": (definition.resolved_time(now) or now).isoformat(),
             }
+            if conversation_id is not None:
+                payload["conversation_id"] = conversation_id
             if definition.cron:
                 self.backend.client.create_schedule(
                     schedule_name=storage_name(owner, identifier),

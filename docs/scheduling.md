@@ -17,6 +17,12 @@
 - 只读分析使用独立 checkpoint，没有原聊天历史、页面操作、设备操作或任意业务写入。
   提示中必须提供完整目标。不迁移正在交互的任务，也不能通过只读分析绕过写入确认。
 - 结果通知发给创建者本人，超过通知长度的内容截取预览；完整结果在执行记录中读取。
+- 完成结果绑定创建计划的原会话；打开该会话且没有执行、暂停或待确认任务时，
+  通过原生工具读取完整结果并生成一条回复，写入同一 LangGraph checkpoint。
+  关闭对话框时不调用模型，重新打开后补报；切换会话不改投目标。
+  标题气泡与会话列表提示未读，仅在结果已汇报且实际可见时按精确版本标记已读。
+  重投不重复生成回复，删除原会话不会重新创建。完整汇报正文与投递事实一起保存，
+  不依赖 DBOS 执行历史的保留期限；`result_saved` 仅表示结果已保存，不伪装为框架成功状态。
 
 模型只准备计划。确认后服务端保存定义，到期由独立 DBOS Worker 执行。
 一次性时间直接使用 DBOS 延迟入队，到点前不占执行队列名额。
@@ -50,6 +56,7 @@
 ## 部署
 
 1. 先在博客仓应用 PostgreSQL 编号迁移 `0021_automation_results.sql` 和 `0025_automation_announcements.sql`，
+   另应用 `0036_chat_task_results.sql` 以保存来源会话结果和未读状态。
    发布 `/api/protected/automation-actor` 、`/api/protected/automation-results` 和 `/api/protected/automation-announcements`。
 2. 配置 `SCHEDULING_ENABLED=true`。`SCHEDULING_DSN` 为空时使用 `CHECKPOINT_DSN`。
    DSN 必须指向独立的 Agent PostgreSQL 数据库，不能是博客业务库。

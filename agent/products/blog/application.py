@@ -31,6 +31,10 @@ class BlogApplication:
     history_access = staticmethod(tool_access)
 
     def system_event(self, event, snapshot, config):
+        if event.get("kind") == "task_result":
+            from agent.products.blog.task_events import prepare
+
+            return prepare(event, snapshot, config, self.scheduling)
         from agent.products.blog.image_events import prepare
 
         return prepare(event, snapshot, config)
