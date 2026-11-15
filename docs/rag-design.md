@@ -148,6 +148,24 @@ BM25S 的文章段落语料和 PG 距离查询的 WHERE 中生效，先限定再
 工具 schema 与检索入口共用 top_k 上限 50，越界输入在参数校验时拒绝。
 
 `get_article_detail` 必须显式提供 `selection.kind`：`question` 携带 query，复用现有文章检索；
+`summary` 用于公开文章的全文总结或整篇分析，可传递关注点和格式要求。代码从文首遍历
+全部正文页，绑定同一内容版本与解析器，检查文档范围从 0 无缺口到 `totalChars`，
+再调用现有 LangChain 文档摘要链。材料能容纳时使用 stuff 一次总结；超窗时用标准
+RecursiveCharacterTextSplitter 按原文顺序无重叠分段，再用 refine 将前段摘要与后续
+原文逐次合并。每个分段校验精确源坐标，保留空白，不因正文分页切开句子而插入分隔。
+内部模型调用不带业务工具、不向聊天流输出中间结果，沿用任务累计调用、Token、时间与取消边界；
+额外正文页也计入工具预算。源版本变化、缺页、空正文、预算不足、模型输出截断或取消时，
+不交付部分结果为完整总结。分段摘要仍可能遗漏细节，覆盖通过不等于语义正确。
+
+返回的 `view=summary` 标记派生文本、stuff/refine 策略、段数及完整源覆盖；
+`document_summaries` 单独记录其来源，不登记为聊天模型直接看过的原文范围。
+它在独立模型输入中处理正文，不依赖普通会话压缩保留全部分页；总结输出也须完整
+放入工具结果预算，放不下则拒绝交付，不能截断后继续声称完整。模型仍负责选择总结模式，
+提示词要求全文总结使用 summary，真实模型验收分别检查模式选择与内容忠实度。
+已完整交付的摘要及其工具调用组保留至当前任务结束，后续查询触发通用会话压缩时
+不再次压缩这份证据；新任务不继承该保护，材料仍须符合总上下文与累计预算。
+
+原文阅读使用以下范围：
 `full_text` 从文首读取原文，`source_range` 按已知小节或续读坐标读取。单页最多 32768 字符，使用 offset、max_chars、revision，
 返回 contentRevision、readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
 工具将两种正文范围映射到宿主的 `view=body`；question 与 `rag_search(article_id=...)` 共用检索、版本验证和正文证据，
@@ -182,7 +200,8 @@ contentRevision 与 sectionSchema。sectionsOffset、sectionCount 和 nextSectio
 
 文章能力运行于现有 LangChain Agent，通过
 [ArticleMiddleware](../agent/products/blog/articles.py) 的公开 middleware hooks 观察工具结果、
-处理最终回复，并在恢复时读取已保存的证据快照。工具选择与后续读取由 Agent 决定。
+处理最终回复，并在恢复时读取已保存的证据快照。工具选择与普通原文续读由 Agent 决定；
+summary 模式的完整正文遍历与汇总由代码负责。
 
 [ArticleEvidence](../agent/domains/articles/evidence.py) 分别记录公开搜索候选、
 模型实际可见的非空正文范围，以及已读正文提到的文章链接。正文先按本轮预算渲染，
@@ -190,7 +209,9 @@ contentRevision 与 sectionSchema。sectionsOffset、sectionCount 和 nextSectio
 候选与其中的真实链接可用于文章推荐。经核验的可见原文片段登记为局部正文读取，
 未核验的索引摘录不登记；局部证据不证明看过整篇，也不支持任意正文结论。
 
-最终回复的站内文章引用必须来自已知候选、已读文章或已读正文提到的本站链接；
+全文总结成功或失败随同任务证据保存；失败后不允许用先前片段替代完整总结。
+派生摘要和完整源覆盖在 `document_summaries` 中单列，不据此声称聊天模型直接读过原文。
+最终回复的站内文章引用必须来自已知候选、已读文章、完整总结来源或已读正文提到的本站链接；
 未知文章及错误站点引用会被阻止。成功读取正文后，若回复遗漏相应来源，
 中间件追加真实已读文章链接。RAG 搜索的 empty 与服务 failed 分别记录，
 无可核实结果时使用不同说明。

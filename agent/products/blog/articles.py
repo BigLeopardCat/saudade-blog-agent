@@ -15,7 +15,7 @@ from rag.reading import (
     render_article_result,
     render_search_result,
 )
-from rag.reading_requests import document_args, is_question, tool_args
+from rag.reading_requests import document_args, is_question, is_summary, tool_args
 from tools.base import SITE_BASE
 from utils.trace import record
 
@@ -83,7 +83,7 @@ class ArticleMiddleware(AgentMiddleware):
                                if not selected.get(key)])
                 request = request.override(tool_call={**call, "args": tool_args(args)})
         result = handler(request)
-        if not (self.evidence.searched or self.evidence.documents or self.evidence.candidates):
+        if not self._has_evidence():
             return result
 
         def attach(message):
@@ -105,7 +105,10 @@ class ArticleMiddleware(AgentMiddleware):
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"
         question = call["name"] == "get_article_detail" and is_question(call["args"])
-        if success and call["name"] == "get_article_detail" and not question:
+        summary = call["name"] == "get_article_detail" and is_summary(call["args"])
+        if success and summary:
+            value = self._summary_result(call, value, limit)
+        elif success and call["name"] == "get_article_detail" and not question:
             data = artifact.get("data")
             if isinstance(data, dict):
                 limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}))
@@ -133,9 +136,29 @@ class ArticleMiddleware(AgentMiddleware):
         self._visibility()
         return value
 
+    def _summary_result(self, call, value, limit):
+        from agent.domains.articles.summary import visible_summary
+
+        artifact = value.artifact or {}
+        try:
+            data = visible_summary(artifact.get("data"), call["args"].get("article_id"))
+            text = article_frame_text(data)
+            if len(text) > limit:
+                raise ValueError("summary_presentation_budget")
+        except (TypeError, ValueError):
+            return value.model_copy(update={"status": "error",
+                "content": "全文总结未能完整交付，不能用截断摘要代替完整总结。",
+                "artifact": {**artifact, "kind": "unavailable", "data": None}})
+        return value.model_copy(update={"content": text, "artifact": {
+            **artifact, "data": data, "retain_for_task": True}})
+
+    def _has_evidence(self):
+        evidence = self.evidence
+        return bool(evidence.searched or evidence.documents or evidence.candidates
+                    or evidence.summaries or evidence.summary_failures)
+
     def _visibility(self):
-        self.session.suppress_output = bool(self.evidence.searched or self.evidence.documents
-                                            or self.evidence.candidates)
+        self.session.suppress_output = self._has_evidence()
 
     def wrap_model_call(self, request, handler):
         self._recover(request.state)
@@ -145,7 +168,7 @@ class ArticleMiddleware(AgentMiddleware):
             return result
         reply = text_content(response.content)
         evidence = self.evidence
-        if evidence.searched or evidence.documents or evidence.candidates:
+        if self._has_evidence():
             record("native", "article_evidence", provenance=evidence.provenance(SITE_BASE))
         issue = evidence.issue(reply, SITE_BASE)
         if issue:
@@ -153,7 +176,9 @@ class ArticleMiddleware(AgentMiddleware):
             record("native", "task_stopped", reason=issue, tool_calls=self.session.calls_used,
                    invalid_references=rejected[:8], omitted_references=max(0, len(rejected) - 8),
                    read_documents=len(evidence.documents), candidates=len(evidence.candidates))
-            reply = ("答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"
+            reply = ("全文总结尚未完成：原文读取或汇总未能完整交付，不能以局部片段代替。"
+                     if issue == "article_summary_incomplete" else
+                     "答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"
                      if issue == "unread_article_reference" else
                      "暂时无法核实文章正文，不能据此回答文章内容。请重新指定要阅读的文章。")
         return replace(result, result=[*result.result[:-1], response.model_copy(

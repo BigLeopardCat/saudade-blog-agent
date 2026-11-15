@@ -29,6 +29,14 @@ def _protected(messages, anchor, pending=False):
                  if memory.is_user_input(message)
                  and not message.additional_kwargs.get("task_input")), default=len(messages))
     protected = {message.id for message in messages[start:] if isinstance(message, HumanMessage)}
+    # Trusted task evidence keeps its complete native exchange until the task anchor advances.
+    retained = {m.tool_call_id for m in messages[start:] if isinstance(m, ToolMessage)
+                and (m.artifact or {}).get("retain_for_task") is True}
+    exchanges = {call["id"] for m in messages[start:] if isinstance(m, AIMessage)
+                 and any(call["id"] in retained for call in m.tool_calls) for call in m.tool_calls}
+    protected.update(m.id for m in messages[start:] if (
+        isinstance(m, AIMessage) and any(call["id"] in exchanges for call in m.tool_calls)
+        or isinstance(m, ToolMessage) and m.tool_call_id in exchanges))
     if pending or (messages and isinstance(messages[-1], ToolMessage)):
         exchange = max(
             (
