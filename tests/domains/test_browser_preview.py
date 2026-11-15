@@ -83,7 +83,11 @@ def test_browser_checkpoint_resumes_the_separate_read_once_after_feedback(monkey
     messages = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)]
     navigation = next(m for m in messages if m.name == "navigate_page")
     assert json.loads(navigation.content)["completion_confirmed"] is (status == "completed")
-    assert any(m.name == "read_public_page" and m.artifact["kind"] == "ok" for m in messages)
+    # Deferred history receipts do not carry successful-read evidence.
+    read_results = [m for m in messages if m.name == "read_public_page"]
+    assert read_results
+    assert sum((m.artifact or {}).get("kind") == "ok" for m in read_results) == 1
+    assert (read_results[-1].artifact or {}).get("kind") == "ok"
     duplicate = list(runtime().stream_events({"resume_task": "visit-read"}, resumed))[-1]
     assert duplicate.execution["blocked"] and len(reads) == 1 and len(model.prompts) == 2
 

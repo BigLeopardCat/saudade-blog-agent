@@ -4,9 +4,20 @@ import ast
 import pathlib
 
 import conftest
+import pytest
+from starlette.datastructures import State
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent
+
+
+def test_monkeypatch_restores_dynamic_application_state():
+    state = State({"runtime": None})
+    replacement = object()
+    with pytest.MonkeyPatch.context() as changes:
+        changes.setattr(state, "runtime", replacement)
+        assert state.runtime is replacement
+    assert state.runtime is None
 
 
 def test_real_fixture_restores_globals_between_tests(isolated_pytest):

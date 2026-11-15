@@ -58,6 +58,10 @@ uvx --python 3.12 --from pip-audit==2.10.1 pip-audit --disable-pip --require-has
   -r /tmp/agent-all-requirements.txt
 ```
 
+pytest 9.2.0 存在[动态属性恢复回归](https://github.com/pytest-dev/pytest/issues/15287)，
+会让应用 State 在测试结束后丢失字段，暂时保留已验证版本；Dependabot 仅排除该精确版本。
+恢复动态属性的行为回归必须通过后才接受后续升级，安全审计仍覆盖 pytest。
+
 ## 提交与评审
 
 采用 [Conventional Commits 1.0](https://www.conventionalcommits.org/zh-hans/v1.0.0/)。维护者默认使用中文描述，类型和 scope 使用英文；接受英文贡献，不要求逐行双语。

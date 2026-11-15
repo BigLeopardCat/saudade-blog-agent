@@ -15,6 +15,11 @@ updates:
     # 大版本独立迁移；此限制仅影响常规版本更新，不限制安全修复。
     allow:
       - update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+    ignore:
+      # https://github.com/pytest-dev/pytest/issues/15287
+      # 只排除已证实破坏动态属性恢复的版本，后续修复版仍可更新。
+      - dependency-name: "pytest"
+        versions: ["9.2.0"]
     groups:
       # SDK 与适配库在同一兼容更新组内解析，避免只更新一侧造成版本冲突。
       minor-and-patch:
