@@ -84,6 +84,7 @@ class BlogHost:
             headers=self.headers(owner),
             json={
                 "runId": run_id, "title": title[:80], "content": content,
+                "resultText": text,
                 "conversationId": conversation_id, "scheduleId": schedule_id, "status": status,
             },
         )

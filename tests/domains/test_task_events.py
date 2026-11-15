@@ -35,14 +35,22 @@ class Model(FakeListChatModel):
 @pytest.fixture
 def scenario(monkeypatch):
     monkeypatch.setattr(confirm.settings, "confirmation_secret", secrets.token_urlsafe(32))
-    row = dict(runId=RUN, scheduleId=SCHEDULE, eventVersion=VERSION, conversationId=42)
+    row = dict(
+        runId=RUN,
+        scheduleId=SCHEDULE,
+        eventVersion=VERSION,
+        conversationId=42,
+        status="completed",
+        content="已核对执行结果。",
+    )
     outcome = dict(state="success", result={"status": "completed", "text": "已核对执行结果。"})
     requests = []
 
     def host(request):
         requests.append(request)
         assert request.method == "GET"
-        assert request.url.params["conversation_id"] == "42"
+        if request.url.params.get("conversation_id"):
+            assert request.url.params["conversation_id"] == "42"
         return httpx.Response(200, json={"code": 200, "data": row})
 
     def result(actor, schedule, run):
@@ -93,7 +101,7 @@ def test_report_writes_native_tool_and_assistant_to_original_memory_and_replays(
     assert runtime.store.load(cfg).messages == saved
 
 
-@pytest.mark.parametrize("change", ["conversation", "version", "run", "role", "not_committed"])
+@pytest.mark.parametrize("change", ["conversation", "version", "run", "role", "invalid_status"])
 def test_untrusted_or_unfinished_completion_never_generates_a_report(scenario, change):
     runtime, cfg, event, row, outcome, _ = scenario
     if change == "conversation":
@@ -104,8 +112,8 @@ def test_untrusted_or_unfinished_completion_never_generates_a_report(scenario, c
         row["runId"] = "another_run"
     if change == "role":
         cfg["configurable"]["principal"] = Principal(7, "user", SOURCE_ASSERTION)
-    if change == "not_committed":
-        outcome["state"] = "pending"
+    if change == "invalid_status":
+        row["status"] = "pending"
     before = runtime.store.load(cfg).messages
     with pytest.raises(ValueError, match="task_event_"):
         list(runtime.stream_events(event, cfg))
@@ -151,3 +159,15 @@ def test_completion_does_not_resume_or_replace_a_paused_foreground_task(scenario
         list(runtime.stream_events(event, cfg))
     after = runtime.store.load(cfg)
     assert after.run == before.run and after.messages == before.messages
+
+
+def test_committed_delivery_is_reportable_before_the_workflow_wrapper_finishes(scenario):
+    runtime, cfg, event, _, outcome, requests = scenario
+    outcome.update(state="pending", result=None)
+    result = list(runtime.stream_events(event, cfg))[-1]
+    assert result.reply == "定时任务已完成喵。"
+    saved = runtime.store.load(cfg).messages
+    assert any(
+        isinstance(m, ToolMessage) and "delivered_execution_result" in m.content for m in saved
+    )
+    assert len(requests) == 2

@@ -29,11 +29,7 @@ def prepare(event, snapshot, config, scheduling):
             or row.get("eventVersion") != event["version"]):
         raise ValueError("task_event_deferred")
     schedule = row.get("scheduleId")
-    # The notification POST can precede the workflow's final commit; retry the event later.
-    result = scheduling.result(principal, schedule, event["run_id"])
-    if (result.get("state") not in {"success", "error"}
-            or not isinstance(result.get("result"), dict)
-            or not result["result"].get("text")):
+    if row.get("status") not in {"completed", "incomplete", "failed", "unknown"}:
         raise ValueError("task_event_deferred")
     message = AIMessage(content="", id="event:" + event_id, tool_calls=[{
         "type": "tool_call", "id": event_id, "name": "get_automation_result",

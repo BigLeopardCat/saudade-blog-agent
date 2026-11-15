@@ -62,9 +62,10 @@ def tools(service, can_prepare):
     def get_automation_result(
         schedule_id: Identifier, run_id: str, config: RunnableConfig
     ) -> object:
-        """Read the complete saved result of one owned execution, using its history ID."""
-        data = service.result(principal(config), schedule_id, run_id)
-        return ok(json.dumps(data, ensure_ascii=False), data=data)
+        """Read one owned execution result; retained deliveries survive workflow-history cleanup."""
+        from agent.domains.automations.results import read_result
+
+        return read_result(service, principal(config), schedule_id, run_id, config)
 
     @tool(return_direct=True)
     @tool_boundary
