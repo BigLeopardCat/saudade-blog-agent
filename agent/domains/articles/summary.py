@@ -1,9 +1,9 @@
-"""Read every page of one public revision before publishing a derived summary."""
+"""Deliver complete source material; synthesize sources that exceed the observation budget."""
 
 import json
 from typing import Annotated, Literal
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from openai import OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
@@ -12,6 +12,8 @@ from agent.runtime.budget import BudgetExceeded, TaskBudget, current_budget
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.progress import emit
 from agent.runtime.turns import check_cancelled
+from config.settings import settings
+from rag.reading import article_frame_text
 from rag.sections import PARSER_VERSION
 from rag.source import MAX_DOCUMENT_CHARS, Digest
 from tools.result import ToolResult, ok, unavailable
@@ -93,14 +95,29 @@ def _source(identifier, config, budget, read):
         if end == total:
             return "".join(pages), title, {
                 "complete": True, "start": 0, "end": end, "total_chars": total,
-                "revision": revision, "section_schema": schema, "pages": len(pages)}
+                "revision": revision, "section_schema": schema, "pages": len(pages)}, (
+                    data if len(pages) == 1 else None)
+
+
+def _source_fits(data, budget):
+    if data is None:
+        return False
+    message = ToolMessage(content=article_frame_text(data), name="get_article_detail",
+                          tool_call_id="source-" + "0" * 64)
+    output = max(settings.agent_output_tokens, settings.agent_extended_output_tokens)
+    capacity = min(settings.agent_tool_result_tokens, budget.limits.input_tokens,
+                   budget.limits.context_tokens - output)
+    return estimate_tokens([message]) <= capacity
 
 
 def summarize_article(identifier, instructions, config, *, read):
     budget = current_budget() or TaskBudget()
     try:
-        body, title, coverage = _source(identifier, config, budget, read)
+        body, title, coverage, source = _source(identifier, config, budget, read)
         check_cancelled(config)
+        if _source_fits(source, budget):
+            record("article_summary", "source_delivered", article_id=identifier, **coverage)
+            return ok(article_frame_text(source), data=source)
         emit(config, "正在汇总全文…", key=f"summary:{identifier}")
         text, strategy, segments = synthesize(body, instructions, budget, config)
         data = visible_summary({"view": "summary", "noteId": identifier, "noteTitle": title,

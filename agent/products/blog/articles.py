@@ -16,6 +16,8 @@ from rag.reading import (
     render_search_result,
 )
 from rag.reading_requests import document_args, is_question, is_summary, tool_args
+from rag.sections import PARSER_VERSION
+from rag.source import SourceRange
 from tools.base import SITE_BASE
 from utils.trace import record
 
@@ -141,8 +143,24 @@ class ArticleMiddleware(AgentMiddleware):
 
         artifact = value.artifact or {}
         try:
-            data = visible_summary(artifact.get("data"), call["args"].get("article_id"))
-            text = article_frame_text(data)
+            data = artifact.get("data")
+            identifier = call["args"].get("article_id")
+            if isinstance(data, dict) and data.get("view") == "body":
+                source = SourceRange.model_validate(data.get("source"))
+                if (source.type != "note" or source.id != identifier or source.offset != 0
+                        or data.get("noteId") != identifier
+                        or source.section_id or data.get("selectedScope") != "document"
+                        or data.get("readComplete") is not True
+                        or source.revision != data.get("contentRevision")
+                        or source.section_schema != data.get("sectionSchema")
+                        or source.section_schema != PARSER_VERSION or source.end <= 0
+                        or source.end != data.get("totalChars")
+                        or not isinstance(data.get("noteContent"), str)
+                        or source.end != len(data.get("noteContent", ""))):
+                    raise ValueError("incomplete_summary_source")
+            else:
+                data = visible_summary(data, identifier)
+            text = article_frame_text({**data, "sourceUrl": f"{SITE_BASE}/article/{identifier}"})
             if len(text) > limit:
                 raise ValueError("summary_presentation_budget")
         except (TypeError, ValueError):

@@ -318,6 +318,21 @@ def _prepared_or_noop(wanted, result, events):
     )
 
 
+def _synthesis_pages(events):
+    latest, direct = {}, set()
+    for index, event in enumerate(events):
+        if event.get("node") != "article_summary":
+            continue
+        key = (event.get("article_id"), event.get("revision"))
+        if event.get("event") == "source_page":
+            latest[key] = index
+        elif (event.get("event") == "source_delivered" and event.get("complete") is True
+              and event.get("pages") == 1 and key in latest):
+            direct.add(latest[key])
+    return [event for index, event in enumerate(events) if index not in direct
+            and event.get("node") == "article_summary" and event.get("event") == "source_page"]
+
+
 def _body_chars(events):
     """Count delivered ranges and internal source pages without multiplying snapshots."""
     totals = []
@@ -335,9 +350,7 @@ def _body_chars(events):
             return None
         totals.append(sum(size for _, _, size in spans))
     source_chars = 0
-    for event in events:
-        if event.get("node") != "article_summary" or event.get("event") != "source_page":
-            continue
+    for event in _synthesis_pages(events):
         start, end = event.get("offset"), event.get("end")
         if not all(type(value) is int for value in (start, end)) or not 0 <= start < end:
             return None

@@ -183,7 +183,9 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
-        if name == "get_article_detail" and is_summary(args):
+        if (name == "get_article_detail" and is_summary(args)
+                and (kind != "ok" or not isinstance(payload(value), dict)
+                     or payload(value).get("view") != "body")):
             self._observe_summary(args.get("article_id"), kind, payload(value))
             return
         search_operation = (name in SEARCH_TOOLS
