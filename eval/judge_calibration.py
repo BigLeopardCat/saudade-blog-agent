@@ -72,6 +72,7 @@ def main():
     parser.add_argument("--samples", type=Path, default=SAMPLES)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--model", default="", help="Override only the calibration reviewer model")
     parser.add_argument("--reasoning-effort", choices=semantic_judge.REASONING_EFFORTS,
                         default="none")
     parser.add_argument("--max-output-tokens", type=int,
@@ -111,6 +112,7 @@ def main():
         try:
             llm = semantic_judge.make_llm(
                 reasoning_effort=args.reasoning_effort,
+                **({"model": args.model} if args.model else {}),
                 **({"max_tokens": args.max_output_tokens}
                    if args.max_output_tokens is not None else {}),
                 timeout=60 if args.reasoning_effort != "none" else 30)
