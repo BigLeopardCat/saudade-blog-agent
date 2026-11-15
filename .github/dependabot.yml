@@ -1,9 +1,7 @@
 version: 2
 
 updates:
-  # 运行时依赖 + dev 组都在 pyproject.toml 里，都由 uv.lock 定版；Dependabot 的
-  # pip 生态认识 uv.lock，会在同一个 PR 里把它一起改掉（改 pyproject 不改 lock
-  # 会让 CI 的 `uv sync --frozen` 当场失败，这正是我们要它一起改的原因）。
+  # pyproject.toml 和 uv.lock 必须配套更新，CI 使用锁定安装验证。
   - package-ecosystem: "pip"
     directory: "/"
     schedule:
@@ -14,17 +12,33 @@ updates:
     open-pull-requests-limit: 3
     commit-message:
       prefix: "chore"
+    # 大版本独立迁移；此限制仅影响常规版本更新，不限制安全修复。
+    allow:
+      - update-types: ["version-update:semver-minor", "version-update:semver-patch"]
     groups:
-      # 次要/补丁合成一个 PR：本仓的提交纪律是"一笔提交一个意图"
-      # （见 CLAUDE.md 的提交规范），十几个单依赖 PR 只会让复审停摆。
-      # 主版本**不并进来**——那是要读 changelog、跑套件的那一类，值得单独一个 PR。
+      # SDK 与适配库在同一兼容更新组内解析，避免只更新一侧造成版本冲突。
       minor-and-patch:
         patterns: ["*"]
         update-types: ["minor", "patch"]
 
-  # workflow 里钉的 action 版本（`actions/checkout@v4`、`astral-sh/setup-uv@v5` 这些）。
-  # 它们没有 lock 文件，升版就是改 `.github/workflows/*.yml` 那一行——单独成组，
-  # 免得与依赖升级混在同一个 PR 里（两者的验证方式完全不同）。
+  - package-ecosystem: "npm"
+    directory: "/frontend"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Shanghai"
+    open-pull-requests-limit: 3
+    allow:
+      - update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+    commit-message:
+      prefix: "chore"
+    groups:
+      widget-compatible:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # 工作流工具与运行依赖分开评审。
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

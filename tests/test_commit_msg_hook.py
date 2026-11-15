@@ -135,6 +135,46 @@ class ContributionPolicyTest(unittest.TestCase):
         result = self.command(["bash", str(CHECK)], EVENT_NAME="pull_request", PR_TITLE="invalid")
         self.assertNotEqual(result.returncode, 0)
 
+    def test_dependabot_exception_requires_the_real_pr_author(self):
+        self.repository()
+        title = "chore(deps): " + "update dependency " * 6
+        for author, accepted in (
+            ("dependabot[bot]", True),
+            ("dependabot", False),
+            ("maintainer", False),
+            ("other[bot]", False),
+            ("", False),
+        ):
+            with self.subTest(author=author):
+                result = self.command(
+                    ["bash", str(CHECK)],
+                    EVENT_NAME="pull_request",
+                    PR_AUTHOR=author,
+                    PR_TITLE=title,
+                )
+                self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+        for title in ("invalid", "chore: title\n\nbody", "chore: " + "x" * 260):
+            with self.subTest(title=title):
+                result = self.command(
+                    ["bash", str(CHECK)],
+                    EVENT_NAME="pull_request",
+                    PR_AUTHOR="dependabot[bot]",
+                    PR_TITLE=title,
+                )
+                self.assertNotEqual(result.returncode, 0)
+
+    def test_dependabot_author_does_not_relax_mainline_commit_length(self):
+        tree = self.repository()
+        head = self.commit(tree, "chore: " + "x" * 80 + "\n")
+        result = self.command(
+            ["bash", str(CHECK)],
+            EVENT_NAME="push",
+            PR_AUTHOR="dependabot[bot]",
+            HEAD_SHA=head,
+            BASE_SHA="",
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_mainline_validates_the_whole_new_range_and_current_head(self):
         tree = self.repository()
         base = self.commit(tree, "docs: 初始化\n")

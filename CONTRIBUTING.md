@@ -47,14 +47,15 @@ bash scripts/dev/coverage.sh
 
 真实模型、小批量与全量线上评测独立于普通 PR CI，见[评测说明](docs/eval-observability.md)。
 
-`Dependency audit` 使用 pip-audit 检查锁定的生产依赖及可选 extras，不安装这些依赖、
+`Dependency audit` 使用 pip-audit 检查锁定的生产、开发依赖及可选 extras，并以 npm audit
+检查组件的生产和开发依赖；不安装这些项目依赖、
 不读取运行配置。漏洞服务失败与发现漏洞均阻止该检查通过，原始结果保留为 CI artifact。
 Bandit 检查源码安全，两者不能互相替代。本地复现：
 
 ```sh
-uv export --frozen --no-dev --all-extras --no-emit-project --output-file /tmp/agent-runtime-requirements.txt
-uvx --from pip-audit==2.10.1 pip-audit --disable-pip --require-hashes \
-  -r /tmp/agent-runtime-requirements.txt
+uv export --frozen --all-groups --all-extras --no-emit-project --output-file /tmp/agent-all-requirements.txt
+uvx --python 3.12 --from pip-audit==2.10.1 pip-audit --disable-pip --require-hashes \
+  -r /tmp/agent-all-requirements.txt
 ```
 
 ## 提交与评审
@@ -71,6 +72,7 @@ type(scope)!: 不兼容变更的描述
 `feat` · `fix` · `refactor` · `perf` · `test` · `docs` · `style` · `build` · `ci` · `chore` · `revert`
 
 - 标题不超过 60 个字符，说明最终变化；模块明确时使用小写 scope，如 `chat`、`auth`、`rag`、`ui`、`eval`。整个仓库的改动可省略 scope。
+- Dependabot 自动 PR 按事件中的真实作者识别，标题可至 256 字符，仍校验类型、格式和单行文本；人工 PR 与主线提交保持 60 字符限制。合并时使用简短的 Squash 标题。
 - `feat` 表示新增能力，`fix` 表示修复缺陷，`perf` 表示性能或成本改善，`refactor` 表示保持行为的结构调整。`style` 仅用于代码格式，界面变化按功能或修复归类。
 - 正文按需说明原因、必要取舍和影响，与标题空一行；可以使用自然段或列表。保留真实贡献者信息和标准 Git trailers。
 - 不兼容的接口、配置或数据变化使用 `!` 或 `BREAKING CHANGE:`，并在 PR 中说明迁移与发布顺序。
