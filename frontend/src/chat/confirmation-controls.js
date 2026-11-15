@@ -1,3 +1,4 @@
+/** @param {Record<string, any> & {replaceAsk(previous: object, data: object, note: string): boolean}} approval */
 export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput) {
     const { input, askBox, askBtns, askOtherInput, askOtherSend } = ctx.dom;
     const { reportConfirm, reportAskStage, saveAsk, dropAsk, askSettle, askExpire, askRollback, revealAskOther, setAskQuestion, syncAsk } = approval;
@@ -125,9 +126,9 @@ export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput
             if (!response.ok || !body.confirmation) throw new Error(body.detail || '未能更新预览，请重试或刷新卡片。');
             if (ctx.state.conv !== conv || localStorage.getItem('tokenKey') !== login) return;
             if (ctx.state.pendingAsk?.token !== ask.token) return;
-            askSettle('已由修改后的请求替换，未调用生图 API', undefined, 'amend', ask);
-            approval.receive(body.confirmation, conv, {anchor_turn_id:ask.anchor_turn_id, anchor_id:ask.anchor_id}, true);
-            syncAsk();
+            if (!approval.replaceAsk(ask, body.confirmation,
+                '已由修改后的请求替换，未调用生图 API'))
+                throw new Error('修改结果已保存，请刷新卡片后核对。');
         } catch (error) {
             if (ctx.state.conv === conv && ctx.state.pendingAsk?.token === ask.token) {
                 status.textContent = error.message || '未能核对修改结果，请重试或刷新卡片。';

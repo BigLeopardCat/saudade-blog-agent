@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { assertBootstrapRecovery } from './chat-bootstrap.browser.mjs';
 import { assertHeaderFocusTheme } from './chat-header.browser.mjs';
+import {assertImageCardRevision} from './chat-image-card-revision.browser.mjs';
 import { assertImageReview, assertWorkRecovery, assertCoverReview } from './chat-image-review.browser.mjs';
 import { assertConfirmationContent } from './chat-confirmation-content.browser.mjs';
 import { assertImageJobReports } from './chat-image-jobs.browser.mjs';
@@ -187,7 +188,7 @@ const server = createServer(async (req, res) => {
           };
           if (mode === 'confirmation-images') card.details = {
             sections:[{label:'正文图片',text:'fixture-images',format:'markdown'}]};
-          if (mode === 'confirmation-structured') {
+          if (mode === 'confirmation-structured' || mode === 'confirmation-editor') {
             card.q='请核对这次请求。';
             card.details={fields:[{label:'服务地址',value:'https://api.openai.com/v1'},
               {label:'固定参考图',value:'1 张'},
@@ -196,6 +197,7 @@ const server = createServer(async (req, res) => {
             const job='6b9e2bf1-56af-428c-8177-e3ad0641e036';
             card.image_review={job_id:job,version:'a'.repeat(64),prompt:'**原样提示词**\n```不是代码控件```',
               references:[{image_id:11,name:'竖版参考图',url:'/api/public/image-generation/'+job+'/preview?token=fixture'}]};
+            if(mode === 'confirmation-editor') card.image_review.editor={models:['one','two'],model:'one',size:'1536x1024',quality:'high'};
             steeringHistory=[{id:801000,role:'user',content:body.message,time:Date.now(),images:[],turn_id:body.turn_id},
               {id:801001,role:'assistant',content:'离线测试回复：已收到你的消息。',time:Date.now(),images:[],turn_id:body.turn_id}];
           }
@@ -255,6 +257,13 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/api/chat/conversations') return json(res, { conversations: [
         { id: conversation, title: conversationTitle, updated_at: Date.now(), created_at: Date.now(), pinned: false },
       ] });
+      if (url.pathname === '/api/chat/confirmation/image-revision') {
+        assert.equal(body.token,pendingConfirmation.token);
+        pendingConfirmation={...pendingConfirmation,id:'offline-revised',token:'offline-revised-signature',
+          image_review:{...pendingConfirmation.image_review,job_id:'7b9e2bf1-56af-428c-8177-e3ad0641e036',version:'b'.repeat(64),prompt:body.draft.prompt,
+            references:[],editor:{...pendingConfirmation.image_review.editor,...body.draft}}};
+        return json(res,{confirmation:pendingConfirmation});
+      }
       if (url.pathname === '/api/chat/confirmation/cancel') {
         pendingConfirmation = null;
         return json(res, { cancelled: true });
@@ -694,6 +703,10 @@ try {
   passed('own, expired and other-conversation leases preserve full initialization; an active peer lease stays protected');
   await assertBootstrapRecovery({browser,origin,requests,completedNavigations});
   await assertImageReview({page,origin,output});
+  await assertImageCardRevision({browser,origin,requests,setMode:mode=>{nextMode=mode;},
+    appendReply:()=>steeringHistory.push({id:801002,role:'assistant',content:'Later reply from another turn.',
+      time:Date.now(),images:[],turn_id:'different-later-turn'}),
+    resetState:()=>{steeringHistory=[];inputTasks.clear();pendingConfirmation=null;}});
   await assertImageJobReports({browser,origin});
   passed('image jobs release chat, catch up on reopen and keep completion approval coordinates');
   await assertCoverReview({page});

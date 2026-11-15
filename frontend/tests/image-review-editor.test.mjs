@@ -12,7 +12,7 @@ function fixture() {
   const received=[],sent=[];
   const approval={reportConfirm(){},reportAskStage(){},saveAsk(){},dropAsk(){},askExpire(){},
     askRollback(){},revealAskOther(){},setAskQuestion(){},invalidate(){},
-    askSettle(){},syncAsk(){},receive:(...args)=>received.push(args)};
+    askSettle(){},syncAsk(){},replaceAsk:(...args)=>{received.push(args);return true;}};
   bindConfirmationControls(ctx,approval,(...args)=>sent.push(args),()=>{});
   const detail={jobId:'job',version:'hash',draft:{prompt:'edited',model:'allowed',size:'1024x1024',quality:'low'},
     controls:[{disabled:false}],status:{textContent:''}};
@@ -34,8 +34,8 @@ test('editing disables old approval; update sends one HTTP request and adopts th
     f.events.choose({target:{closest:()=>({getAttribute:()=> 'yes'})}});
     assert.equal(f.sent.length,0);
     await f.events['image-review-update']({detail:f.detail});
-    assert.equal(calls,1);assert.equal(f.received[0][0].token,'signed-edited');
-    assert.equal(f.received[0][2].anchor_turn_id,'turn-1');
+    assert.equal(calls,1);assert.equal(f.received[0][1].token,'signed-edited');
+    assert.equal(f.received[0][0].anchor_turn_id,'turn-1');
     assert.equal(f.ctx.state.approvalBusy,false);
   } finally {
     globalThis.fetch=oldFetch;
