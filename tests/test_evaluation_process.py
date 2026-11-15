@@ -110,3 +110,22 @@ def test_rankings_accept_aggregate_or_complete_enumeration(aggregate, complete, 
         calls.append({"name": "get_article_stats", "args": {"article_id": 7}})
     events = [{"node": "native", "event": "call", "kind": "ok", **call} for call in calls]
     assert (not native_assertions.check(case["gold"], {"native_events": events})) is passed
+
+
+@pytest.mark.parametrize("source,pending,scope,kind,passed", [
+    ("summary", 0, "all", "ok", True), ("summary", 2, "all", "ok", False),
+    ("summary", False, "all", "ok", False), ("summary", 0, "page", "ok", False),
+    ("summary", 0, "all", "unavailable", False), ("none", 0, "all", "ok", False),
+    ("list", 2, "all", "ok", True), ("unfiltered_list", 2, "all", "ok", False),
+])
+def test_pending_board_accepts_proven_zero_but_nonempty_requires_filtered_records(
+        source, pending, scope, kind, passed):
+    case = next(c for c in online_baseline.load_suite() if c["id"] == "admin_board")
+    event = {"node": "native", "event": "call", "kind": kind, "args": {},
+             "name": "get_moderation_status", "result": json.dumps({
+                 "board": {"scope": scope, "finalStatus": {"pending": pending}}})}
+    if source in {"list", "unfiltered_list"}:
+        event.update(name="list_admin_board", args={"status": "pending"}
+                     if source == "list" else {}, result=json.dumps({"resource": "board"}))
+    events = [] if source == "none" else [event]
+    assert (not native_assertions.check(case["gold"], {"native_events": events})) is passed

@@ -14,6 +14,7 @@ import time
 from datetime import datetime
 
 from config.settings import settings
+from utils.secret_redaction import redact_credentials
 
 logger = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ class _TraceRecorder:
         self.by_day = by_day
         self.started_at = datetime.now().astimezone().isoformat(timespec="seconds")
         self._t0 = time.monotonic()
-        self.input_meta = input_meta
+        self.input_meta = redact_credentials(input_meta)
         self.events: list = []
         self.reply = ""
         # Filled by finalize(); None keeps "not finished yet" distinct from an empty value.
@@ -120,11 +121,12 @@ class _TraceRecorder:
         # 相对请求开始的单调偏移秒——跨事件排序/分段耗时直接读差值
         if event in _LOGGED_STAGES:
             logger.info("trace_id=%s stage=%s.%s", self.trace_id, node, event)
-        self.events.append({"t": round(time.monotonic() - self._t0, 3),
-                            "node": node, "event": event, **data})
+        self.events.append(redact_credentials({"t": round(time.monotonic() - self._t0, 3),
+                                               "node": node, "event": event, **data},
+                                               structured=event != "tool_contract"))
 
     def set_reply(self, reply: str) -> None:
-        self.reply = (reply or "")[:2000]
+        self.reply = redact_credentials(reply or "")[:2000]
 
     def finalize(self, end_reason: str, duration_s: float, frames: int) -> None:
         self.end_reason = end_reason
@@ -145,7 +147,7 @@ class _TraceRecorder:
         try:
             doc = {
                 "schema_version": SCHEMA_VERSION,
-                "observability": {"json_http": 1},
+                "observability": {"json_http": 1, "credential_redaction": 1},
                 "trace_id": self.trace_id,
                 "process_id": self.process_id,
                 "user_id": self.user_id,

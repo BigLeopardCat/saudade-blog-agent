@@ -16,6 +16,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -102,13 +103,22 @@ def _has_gz_twin(p: str) -> bool:
 
 
 def compress_file(p: str) -> None:
-    """`p` → `p.gz`（原子替换 + **保留原 mtime**，理由见模块头注）。"""
+    """Publish a private gzip atomically; failed compression preserves the source."""
     st = os.stat(p)
-    tmp = p + ".gz.tmp"
-    with open(p, "rb") as fin, gzip.GzipFile(tmp, "wb", mtime=int(st.st_mtime)) as fout:
-        shutil.copyfileobj(fin, fout)
-    os.utime(tmp, (st.st_atime, st.st_mtime))
-    os.replace(tmp, p + ".gz")
+    fd, tmp = tempfile.mkstemp(prefix=".trace-", suffix=".gz.tmp", dir=os.path.dirname(p) or ".")
+    try:
+        with os.fdopen(fd, "wb") as target:
+            os.fchmod(target.fileno(), 0o600)
+            with open(p, "rb") as fin, gzip.GzipFile(
+                    filename="", fileobj=target, mode="wb", mtime=int(st.st_mtime)) as fout:
+                shutil.copyfileobj(fin, fout)
+        os.utime(tmp, (st.st_atime, st.st_mtime))
+        os.replace(tmp, p + ".gz")
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
     # 源文件可能已被 logrotate 抢先 rename 走（rename 语义）——那不是错误
     try:
         os.unlink(p)
