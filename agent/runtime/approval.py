@@ -82,6 +82,8 @@ def review(state, config, *, feedback=None):
                 "messages": memory.checkpoint_messages(state.get("messages") or [], current)}
     if not has_result(facts.get("execution", {}), action["specs"], jti=action["jti"]):
         raise ValueError("确认恢复需要当前操作的真实执行回执")
+    if approval.get("revision"):
+        facts = {**facts, "proposal_revision": approval["revision"]}
     result = TurnResult(facts["reply"], facts["execution"])
     principal = config["configurable"]["principal"]
     current = memory.turn_messages(facts.get("input") or [],

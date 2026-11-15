@@ -58,6 +58,24 @@ export async function assertImageReview({page, origin, output}) {
   await page.context().grantPermissions(['clipboard-read','clipboard-write'], {origin});
   await page.locator('#image-review-fixture .chat-image-prompt-copy').click({force:true});
   assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),result.expected);
+  const edited = await page.evaluate(() => {
+    const root=document.createElement('div');document.body.append(root);
+    const job='6b9e2bf1-56af-428c-8177-e3ad0641e036';
+    const value={job_id:job,version:'a'.repeat(64),prompt:'original exact prompt',references:[],
+      editor:{models:['one','two'],model:'one',size:'1536x1024',quality:'high'}};
+    let dirty=false,detail;
+    root.addEventListener('image-review-dirty',event=>{dirty=event.detail.dirty;});
+    root.addEventListener('image-review-update',event=>{detail=event.detail;});
+    window.__waifuImageReview.render(root,value,{editable:true});
+    const input=root.querySelector('textarea');input.value='human revised';input.dispatchEvent(new Event('input'));
+    const model=root.querySelector('select');model.value='two';model.dispatchEvent(new Event('change'));
+    const button=[...root.querySelectorAll('button')].find(button=>button.textContent==='更新预览');button.click();
+    const result={dirty,editable:!!input,plain:root.querySelectorAll('.chat-image-prompt').length,
+      draft:detail?.draft,original:value.prompt};root.remove();return result;
+  });
+  assert.equal(edited.editable,true);assert.equal(edited.dirty,true);assert.equal(edited.plain,0);
+  assert.equal(edited.draft.prompt,'human revised');assert.equal(edited.draft.model,'two');
+  assert.equal(edited.original,'original exact prompt');
   await page.locator('#image-review-fixture').evaluate(node=>node.remove());
 }
 

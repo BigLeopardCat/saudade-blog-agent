@@ -16,13 +16,18 @@ def test_golden_image_intent_has_an_exact_signed_review(name, expected):
     with contracts.backend() as state:
         result = prepare_image_generation.invoke({
             'prompt': expected['prompt'], 'size': expected['size'],
-            'reference_ids': expected['referenceIds']},
+            'reference_ids': expected['referenceIds'],
+            'conversation_reference_ids': expected.get('conversationReferenceIds', [])},
             config=config(principal=Principal(7, 'admin', SOURCE_ASSERTION)))
         assert isinstance(result, TurnResult), name
         card = result.execution['pending_confirm']
         assert card['image_review']['prompt'] == expected['prompt']
-        assert [ref['image_id'] for ref in card['image_review']['references']] == (
+        assert [ref['image_id'] for ref in card['image_review']['references']
+                if 'image_id' in ref] == (
             expected['referenceIds'])
+        assert [ref['conversation_image_id'] for ref in card['image_review']['references']
+                if 'conversation_image_id' in ref] == expected.get('conversationReferenceIds', [])
+        assert card['image_review']['editor']['models'] == ['fixture']
         assert all(state['draft'][key] == value for key, value in expected.items())
         assert not any(request.url.path.endswith(('/approve', '/accept'))
                        for request in state['requests'])

@@ -13,10 +13,25 @@ TERMINAL = frozenset({"review", "accepted", "rejected", "failed", "unknown", "ex
 
 class Reference(BaseModel):
     model_config = ConfigDict(extra="ignore")
-    imageId: StrictInt = Field(gt=0)
     name: StrictStr = Field(max_length=2000)
     digest: StrictStr = Field(pattern=r"^[0-9a-f]{64}$")
     previewUrl: StrictStr = Field(max_length=4096)
+
+
+class GalleryReference(Reference):
+    imageId: StrictInt = Field(gt=0)
+
+    @property
+    def conversationImageId(self):
+        return None
+
+
+class ConversationReference(Reference):
+    conversationImageId: StrictStr = Field(pattern=r"^img_[0-9a-f]{64}$")
+
+    @property
+    def imageId(self):
+        return None
 
 
 class Request(BaseModel):
@@ -26,7 +41,7 @@ class Request(BaseModel):
     model: StrictStr = Field(min_length=1, max_length=200)
     size: Literal["1536x1024", "1024x1024", "1024x1536"]
     quality: Literal["low", "medium", "high", "auto"]
-    references: list[Reference] = Field(max_length=4)
+    references: list[GalleryReference | ConversationReference] = Field(max_length=4)
 
 
 class Job(BaseModel):

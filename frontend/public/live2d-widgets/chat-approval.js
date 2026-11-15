@@ -112,7 +112,8 @@
       question.className = 'chat-confirmation-question'; question.textContent = ask.q || '';
       container.replaceChildren(question);
       if (ask.details) window.__waifuConfirmationContent?.render(container, ask.details, applyMsg);
-      window.__waifuImageReview?.render(container, ask.image_review);
+      window.__waifuImageReview?.render(container, ask.image_review, {
+        editable: container === askQuestion && ask.token === ctx.state.pendingAsk?.token});
       window.__waifuImageReview?.renderCover(container, ask.cover_review);
       renderNotices(container, ask.notices);
     };
@@ -258,12 +259,13 @@
           && !!askBtns.querySelector('button[data-ask-value]')
           && positioned) {
         saveAsk(ask);
-        askBtns.querySelectorAll('button[data-ask-value]').forEach(button => { button.disabled = busy; });
+        askBtns.querySelectorAll('button[data-ask-value]').forEach(button => { button.disabled = busy || (askBox.dataset.imageDirty === 'true' && button.dataset.askValue !== 'no'); });
         askBtns.querySelectorAll('input[type="checkbox"]').forEach(input => { input.disabled = busy; });
         const submit = askBtns.querySelector('button[data-ask-submit]');
         if (submit) submit.disabled = busy || !ask.selected?.length;
         return;
       }
+      askBox.dataset.imageDirty = 'false';
       askBox.dataset.askToken = token;
       askBox.dataset.askId = String(ask.id || '');   // 埋点用（非凭据，见 askIdOf）
       setAskQuestion(ask.q);
@@ -362,7 +364,7 @@
     };
     const restoreAsk = async (force = false) => {
       restoreRecords();
-      if (ctx.state.isSending || ctx.state.confirmRound) return;
+      if (ctx.state.isSending || ctx.state.confirmRound || ctx.state.approvalBusy) return;
       if (ctx.state.pendingAsk && !force) { syncAsk(); return; }
       const conv = ctx.state.conv, owner = actor(), token = localStorage.getItem('tokenKey');
       if (!owner || !conv || restoring === owner + ':' + conv) return;

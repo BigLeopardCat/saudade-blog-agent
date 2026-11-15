@@ -27,7 +27,7 @@ def image_id(url: str) -> str:
 
 
 def compact(message):
-    """Apply on save and replay, including checkpoints written before this policy."""
+    """Compact media on save and replay; payloads remain transient."""
     urls = image_urls(message.content)
     if not urls or not isinstance(message, (HumanMessage, ToolMessage)):
         return message
@@ -43,7 +43,7 @@ def compact(message):
         )
     else:
         hint += "\n[原图未附在历史上下文；细节需使用 get_conversation_image 重新读取。]"
-    # Keep the first text block intact for the existing discard/source-text contract.
+    # Keep the first text block intact for discard/source-text identity.
     content = (
         [{"type": "text", "text": text}, {"type": "text", "text": hint}]
         if isinstance(message, HumanMessage)
@@ -91,7 +91,14 @@ def stage(messages, transient):
     for message in messages:
         if image_urls(message.content):
             message = message.model_copy(update={"id": message.id or uuid.uuid4().hex})
-            transient[message.id] = message
+            refs = ", ".join(image_id(url) for url in image_urls(message.content))
+            content = list(message.content)
+            hint = "本轮上传图片引用：" + refs
+            if content[-1].get("type") == "text":
+                content[-1] = {**content[-1], "text": content[-1]["text"] + "\n" + hint}
+            else:
+                content.append({"type": "text", "text": hint})
+            transient[message.id] = message.model_copy(update={"content": content})
         staged.append(compact(message))
     return staged
 

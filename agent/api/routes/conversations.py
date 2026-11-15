@@ -11,6 +11,7 @@ from agent.api.authentication import require_checkpoint_cleanup
 from agent.api.authentication import resolve_principal as _resolve_principal
 from agent.api.dependencies import require_runtime, require_workers
 from agent.products.blog import confirmation
+from agent.products.blog.image_revision import ImageDraft
 from agent.runtime.checkpoint_store import ConversationDeleted
 
 logger = logging.getLogger(__name__)
@@ -80,5 +81,25 @@ async def cancel(req: Cancellation, request: Request):
     config = checkpoint.conversation_config(principal, req.conversation_id)
     try:
         return await workers.run(confirmation.cancel, runtime, grant, config)
+    except (ValueError, ConversationDeleted) as exc:
+        raise HTTPException(409, str(exc)) from exc
+
+
+class ImageRevision(Cancellation):
+    draft: ImageDraft
+
+
+@router.post("/confirmation/image-revision")
+async def revise_image(req: ImageRevision, request: Request):
+    from agent.products.blog.image_revision import revise
+
+    principal = _resolve_principal(request, req.user_id)
+    grant = confirm.verify(req.token, principal.uid, req.conversation_id)
+    if grant is None:
+        raise HTTPException(403, "确认凭据无效或已过期")
+    config = checkpoint.conversation_config(principal, req.conversation_id)
+    try:
+        return await require_workers(request).run(
+            revise, require_runtime(request), grant, req.draft, config)
     except (ValueError, ConversationDeleted) as exc:
         raise HTTPException(409, str(exc)) from exc
