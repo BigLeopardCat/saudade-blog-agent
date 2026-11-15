@@ -99,6 +99,8 @@ sudoedit /etc/saudade/agent-runtime.env
 - `AGENT_CONFIRM_SECRET`：仅 Agent 持有，用于人工确认。
 - Rust 的登录 `JWT_SECRET`、工具委托 `BLOG_DELEGATION_SECRET` 不放进 Agent。
 
+正式版的 DeepSeek 配置使用 `AGENT_REASONING_EFFORT=low`，兼顾工具选择、规则读取和确认阶段的准确性；`none` 显式关闭推理。替换为不支持推理档位的端点时使用 `none`，并重新验证任务质量与时延。
+
 OpenCode 示例使用 Go 端点；其他供应商配置对应前缀和 `LLM_PROVIDER`，key 必须匹配实际套餐端点。`BLOG_API_BASE` 必须是自己的公开来源，导航允许地址也由此确定；`AGENT_ADMIN_BASE` 是 Agent 可访问的 Rust 地址。宿主设置 `AGENT_URL=http://127.0.0.1:8010/chat` 和相同断言密钥。
 
 ### 4. 准备版本、安装服务并发布

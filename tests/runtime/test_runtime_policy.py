@@ -62,8 +62,12 @@ def test_runtime_configuration_has_no_experimental_selector():
     assert not retired.intersection(type(policy).model_fields)
 
 
-def test_runtime_model_uses_configured_output_without_changing_sdk_default(monkeypatch):
+@pytest.mark.parametrize("effort,thinking", [("none", False), ("low", True)])
+def test_runtime_model_uses_configured_output_without_changing_sdk_default(
+    monkeypatch, effort, thinking
+):
     calls = []
+    monkeypatch.setattr(settings, "agent_reasoning_effort", effort)
     monkeypatch.setattr(settings, "agent_output_tokens", 1792)
     monkeypatch.setattr(settings, "llm_max_tokens", 8192)
 
@@ -76,10 +80,9 @@ def test_runtime_model_uses_configured_output_without_changing_sdk_default(monke
     runtime = AgentRuntime(
         CheckpointConversationStore(None), application=BlogApplication(), model_factory=factory
     )
-    # Construct the same session used by ordinary native turns.
     runtime._session(config(), runtime.store.load(config()))
     assert calls[0]["max_tokens"] == 1792
-    assert calls[0]["enable_thinking"] is False and calls[0]["streaming"] is True
+    assert calls[0]["enable_thinking"] is thinking and calls[0]["streaming"] is True
     assert settings.llm_max_tokens == 8192
 
 

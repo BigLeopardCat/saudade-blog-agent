@@ -100,7 +100,7 @@ class Settings(BaseSettings):
     agent_task_seconds: int = Field(default=300, gt=0)
     agent_model_calls: int = Field(default=12, ge=2)
     agent_tool_calls: int = Field(default=16, gt=0)
-    agent_reasoning_effort: Literal["none", "low", "high", "max"] = "none"
+    agent_reasoning_effort: Literal["none", "low", "high", "max"] = "low"
     agent_output_tokens: int = Field(default=4096, ge=128)
     agent_extended_output_tokens: int = Field(default=8192, ge=128)
     agent_output_material_threshold: int = Field(default=4096, ge=128)

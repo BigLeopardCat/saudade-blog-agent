@@ -81,3 +81,13 @@ def test_native_model_uses_explicit_reasoning_policy_without_changing_output_lim
     assert captured["enable_thinking"] is thinking
     assert captured.get("reasoning_effort") == (effort if thinking else None)
     assert captured["max_tokens"] == settings.agent_output_tokens
+
+
+@pytest.mark.parametrize("configured,expected", [(None, "low"), ("none", "none")])
+def test_default_reasoning_profile_and_explicit_opt_out(monkeypatch, configured, expected):
+    from config.settings import Settings
+
+    monkeypatch.delenv("AGENT_REASONING_EFFORT", raising=False)
+    if configured is not None:
+        monkeypatch.setenv("AGENT_REASONING_EFFORT", configured)
+    assert Settings(_env_file=None).agent_reasoning_effort == expected
