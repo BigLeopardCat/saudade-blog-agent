@@ -1,3 +1,4 @@
+import {assertWidgetTools} from './widget-tools.browser.mjs';
 import { assertChatScroll } from './chat-scroll.browser.mjs';
 // Real-browser checks. No model, production API, or Live2D vendor required.
 // PLAYWRIGHT_MODULE and CHROMIUM_EXECUTABLE may point to existing local installs.
@@ -306,6 +307,7 @@ try {
     ...(process.env.CHROMIUM_EXECUTABLE ? { executablePath: process.env.CHROMIUM_EXECUTABLE } : {}),
     args: ['--no-sandbox'],
   });
+  await assertWidgetTools(browser);
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
     permissions: ['clipboard-read', 'clipboard-write'], reducedMotion: 'reduce' });
   await context.addInitScript(() => {

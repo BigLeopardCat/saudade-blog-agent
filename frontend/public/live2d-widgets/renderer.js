@@ -4,24 +4,20 @@
   const MODEL_PATH = '/live2d_model/agent_2.model3.json';
   // 前五个工具按钮的顺序是锁定的契约（顺序由数组决定，别重排）
   const TOOL_ORDER = ['switch-model', 'switch-texture', 'photo', 'info', 'quit'];
+  const icon = (path) => '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="' + path + '"/></svg>';
   const ICONS = {
-    // street-view：一个人形 —— 「换一位看板娘」
-    'switch-model': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M320 64A64 64 0 1 0 192 64a64 64 0 1 0 128 0zm-96 96c-35.3 0-64 28.7-64 64l0 48c0 17.7 14.3 32 32 32l1.8 0 11.1 99.5c1.8 16.2 15.5 28.5 31.8 28.5l38.7 0c16.3 0 30-12.3 31.8-28.5L318.2 304l1.8 0c17.7 0 32-14.3 32-32l0-48c0-35.3-28.7-64-64-64l-64 0zM132.3 394.2c13-2.4 21.7-14.9 19.3-27.9s-14.9-21.7-27.9-19.3c-32.4 5.9-60.9 14.2-82 24.8c-10.5 5.3-20.3 11.7-27.8 19.6C6.4 399.5 0 410.5 0 424c0 21.4 15.5 36.1 29.1 45c14.7 9.6 34.3 17.3 56.4 23.4C130.2 504.7 190.4 512 256 512s125.8-7.3 170.4-19.6c22.1-6.1 41.8-13.8 56.4-23.4c13.7-8.9 29.1-23.6 29.1-45c0-13.5-6.4-24.5-14-32.6c-7.5-7.9-17.3-14.3-27.8-19.6c-21-10.6-49.5-18.9-82-24.8c-13-2.4-25.5 6.3-27.9 19.3s6.3 25.5 19.3 27.9c30.2 5.5 53.7 12.8 69 20.5c3.2 1.6 5.8 3.1 7.9 4.5c3.6 2.4 3.6 7.2 0 9.6c-8.8 5.7-23.1 11.8-43 17.3C374.3 457 318.5 464 256 464s-118.3-7-157.7-17.9c-19.9-5.5-34.2-11.6-43-17.3c-3.6-2.4-3.6-7.2 0-9.6c2.1-1.4 4.8-2.9 7.9-4.5c15.3-7.7 38.8-14.9 69-20.5z"/></svg>',
-    // shirt：T 恤 —— 「换装」
-    'switch-texture': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 512"><path d="M211.8 0c7.8 0 14.3 5.7 16.7 13.2C240.8 51.9 277.1 80 320 80s79.2-28.1 91.5-66.8C413.9 5.7 420.4 0 428.2 0l12.6 0c22.5 0 44.2 7.9 61.5 22.3L628.5 127.4c6.6 5.5 10.7 13.5 11.4 22.1s-2.1 17.1-7.8 23.6l-56 64c-11.4 13.1-31.2 14.6-44.6 3.5L480 197.7 480 448c0 35.3-28.7 64-64 64l-192 0c-35.3 0-64-28.7-64-64l0-250.3-51.5 42.9c-13.3 11.1-33.1 9.6-44.6-3.5l-56-64c-5.7-6.5-8.5-15-7.8-23.6s4.8-16.6 11.4-22.1L137.7 22.3C155 7.9 176.7 0 199.2 0l12.6 0z"/></svg>',
-    // camera-retro：相机 —— 「拍照」
-    photo: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M220.6 121.2L271.1 96 448 96l0 96-114.8 0c-21.9-15.1-48.5-24-77.2-24s-55.2 8.9-77.2 24L64 192l0-64 128 0c9.9 0 19.7-2.3 28.6-6.8zM0 128L0 416c0 35.3 28.7 64 64 64l384 0c35.3 0 64-28.7 64-64l0-320c0-35.3-28.7-64-64-64L271.1 32c-9.9 0-19.7 2.3-28.6 6.8L192 64l-32 0 0-16c0-8.8-7.2-16-16-16L80 32c-8.8 0-16 7.2-16 16l0 16C28.7 64 0 92.7 0 128zM168 304a88 88 0 1 1 176 0 88 88 0 1 1 -176 0z"/></svg>',
-    // circle-info：圈里一个 i —— 「关于」
-    info: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M256 512A256 256 0 1 0 256 0a256 256 0 1 0 0 512zM216 336l24 0 0-64-24 0c-13.3 0-24-10.7-24-24s10.7-24 24-24l48 0c13.3 0 24 10.7 24 24l0 88 8 0c13.3 0 24 10.7 24 24s-10.7 24-24 24l-80 0c-13.3 0-24-10.7-24-24s10.7-24 24-24zm40-208a32 32 0 1 1 0 64 32 32 0 1 1 0-64z"/></svg>',
-    // xmark：叉 —— 「收起看板娘」
-    quit: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 384 512"><path d="M342.6 150.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192 210.7 86.6 105.4c12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L146.7 256 41.4 361.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192 301.3 297.4 406.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.3 256 342.6 150.6z"/></svg>',
+    'switch-model': icon('M16 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0ZM4 21v-2a8 8 0 0 1 16 0v2'),
+    'switch-texture': icon('m8 3-6 4 3 5 3-2v11h8V10l3 2 3-5-6-4a4 4 0 0 1-8 0Z'),
+    photo: icon('M8 5l2-2h4l2 2h5v15H3V5ZM16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z'),
+    info: icon('M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0ZM12 11v6M12 7h.01'),
+    quit: icon('m6 6 12 12M6 18 18 6'),
   };
   const TITLES = {
-    'switch-model': '更换看板娘',    // ACTIONS: 只有一套模型，提示"没有第二套"
-    'switch-texture': '换装',        // ACTIONS: 同上，没有第二套贴图
-    photo: '拍照',                   // ACTIONS: 把画布存成 PNG 下载
-    info: '关于',                    // ACTIONS: 如实报渲染层实现来源
-    quit: '收起看板娘',              // ACTIONS: 收起（写 waifu-display 时间戳）
+    'switch-model': '更换看板娘',
+    'switch-texture': '换装',
+    photo: '拍照',
+    info: '关于 Agent 项目',
+    quit: '收起看板娘',
   };
   const MSG = {
     welcome: '欢迎阅读<span>「$1」</span>',
@@ -178,8 +174,7 @@
         document.body.removeChild(a);
       },
       info: () => {
-        // 上游会 open 到别人的仓库；这里如实报自己的实现来源。
-        show('看板娘 泠月喵 · 渲染 pixi-live2d-display (MIT) + pixi.js (MIT)', 6000, 9);
+        g.open('https://github.com/BigLeopardCat/saudade-blog-agent', '_blank', 'noopener,noreferrer');
       },
       quit: () => {
         try { localStorage.setItem('waifu-display', Date.now().toString()); } catch (e) {}
@@ -201,19 +196,20 @@
       if (!bar) return;
       for (const name of TOOL_ORDER) {
         if (document.getElementById('waifu-tool-' + name)) continue;   // 幂等（重入保护）
-        const span = document.createElement('span');
-        span.id = 'waifu-tool-' + name;
-        span.innerHTML = ICONS[name] || '';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.id = 'waifu-tool-' + name;
+        button.innerHTML = ICONS[name] || '';
         // 提示与无障碍名同源：title 给鼠标，aria-label 给读屏（图标按钮没有可读文本）
         const label = TITLES[name] || '';
-        if (label) { span.title = label; span.setAttribute('aria-label', label); }
-        span.addEventListener('click', (e) => {
+        if (label) { button.title = label; button.setAttribute('aria-label', label); }
+        button.addEventListener('click', (e) => {
           e.stopPropagation();
           try { ACTIONS[name](); } catch (err) {
             if (g.__reportError) g.__reportError({ type: 'widget_tool_fail', message: name + ': ' + err });
           }
         });
-        bar.appendChild(span);
+        bar.appendChild(button);
       }
     };
 

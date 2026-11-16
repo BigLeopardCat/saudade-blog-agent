@@ -857,3 +857,31 @@
   content: ''; display: inline-block; width: 6px; height: 6px; margin-left: 6px;
   border-radius: 50%; background: #e85275; vertical-align: middle;
 }
+
+/* Host scene tokens keep the standalone widget palette as its fallback. */
+:root[data-scene] #waifu-chat {
+  --chat-paper: var(--scene-surface);
+  --chat-surface: var(--scene-surface);
+  --chat-soft: color-mix(in srgb, var(--scene-accent) 7%, var(--scene-surface));
+  --chat-rail: var(--scene-surface);
+  --chat-line: color-mix(in srgb, var(--scene-accent) 24%, var(--scene-surface));
+  --chat-ink: var(--scene-ink);
+  --chat-muted: var(--scene-muted);
+  --chat-accent: var(--scene-accent);
+  --chat-accent-hover: var(--scene-accent);
+  --chat-accent-ink: var(--scene-ink);
+  --chat-button-ink: #fff;
+  --chat-user-ink: var(--scene-ink);
+  --chat-user-gradient: linear-gradient(var(--chat-soft), var(--chat-soft));
+  --chat-gradient: linear-gradient(var(--scene-accent), var(--scene-accent));
+  --chat-accent-soft: var(--chat-soft);
+  --chat-code: var(--chat-soft);
+  --chat-highlight: var(--scene-accent);
+  --chat-focus: var(--scene-accent);
+  --chat-notch-bg: var(--scene-surface);
+  --chat-notch-edge: var(--chat-line);
+  background-image: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+:root[data-scene-dark='true'] #waifu-chat { --chat-button-ink: #292331; }
