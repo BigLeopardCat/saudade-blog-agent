@@ -84,7 +84,8 @@ def test_model_tool_message_has_public_display_fields_without_identity_or_extra_
                 {
                     "name": "get_article_detail",
                     "id": "read",
-                    "args": tool_args({"article_id": 23, "max_chars": 1, "view": view}),
+                    "args": tool_args({"article_id": 23, "view": view,
+                                       **({"max_chars": 1} if view == "full_text" else {})}),
                 }
             ],
         ),

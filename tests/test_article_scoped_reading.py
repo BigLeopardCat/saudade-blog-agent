@@ -405,6 +405,7 @@ def test_model_schema_exposes_only_fields_supported_by_each_read_mode():
     {"kind": "full_text", "offset": 6000},
     {"kind": "outline", "section": "Steps"},
     {"kind": "metadata", "offset": 1},
+    {"kind": "metadata", "max_chars": 1},
 ])
 def test_impossible_read_modes_are_rejected_by_the_tool_schema(article, selection):
     _, _, calls = article
