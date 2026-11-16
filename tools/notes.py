@@ -137,7 +137,8 @@ def get_article_detail(
 ) -> str | ToolResult:
     """Read a known public document. Select question for a specific fact/topic
     (returns verified passages), summary for a complete document summary/analysis
-    (reads every page and synthesizes within the task budget), full_text to start
+    (returns complete original text when it fits, otherwise a complete derived summary),
+    full_text to start
     reading original text, source_range for exact source coordinates, outline for
     headings, metadata for author/title/tags. Source IDs or unique heading titles
     select section subtrees. A known source version is bound

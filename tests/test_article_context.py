@@ -111,7 +111,9 @@ def test_budget_and_sdk_receive_one_body_for_parallel_full_read_and_summary(monk
         assert result.reply.startswith("Summary.") and len(requests) == 2
         wire = [m for m in requests[-1]["messages"] if m["role"] == "tool"]
         assert [m["tool_call_id"] for m in wire] == ["a", "b"]
-        assert json.loads(wire[0]["content"])["noteContent"] == BODY
+        data = json.loads(wire[0]["content"])
+        assert data["noteContent"] == BODY
+        assert list(data).index("sourceUrl") < list(data).index("noteContent")
         assert json.loads(wire[1]["content"])["body_in_tool_call"] == "a"
         budget_tools = [m for m in reserved[-1] if isinstance(m, ToolMessage)]
         assert [m.content for m in budget_tools] == [m["content"] for m in wire]
