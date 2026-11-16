@@ -1,6 +1,6 @@
 {
   "_note": "Pinned Mypy and Python target; production source scope and interpreter must match. Per-file findings may only decrease.",
-  "mypy_version": "2.4.0",
+  "mypy_version": "2.4.1",
   "python_target": "3.12",
   "targets": [
     "agent",

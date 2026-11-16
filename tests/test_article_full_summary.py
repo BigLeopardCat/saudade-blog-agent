@@ -1,4 +1,4 @@
-"""Whole-source synthesis must cover every page without depending on chat compaction."""
+"""Deliver complete sources or bounded synthesis without losing coverage evidence."""
 
 import json
 from urllib.parse import parse_qs, urlsplit
@@ -60,19 +60,84 @@ def invoke(budget=None):
         return notes.get_article_detail.invoke(ARGS)
 
 
-def test_short_article_uses_one_source_pass_and_one_model_request(source):
+def test_complete_source_within_observation_budget_needs_no_internal_model(source):
     state, model = source
     budget = TaskBudget()
     result = invoke(budget)
-    assert result.kind == "ok" and result.data["strategy"] == "stuff"
-    assert state["body"] in model.prompts[0][-1].content
-    assert len(model.prompts) == budget.model_calls == 1
-    assert budget.tokens == 112
+    assert result.kind == "ok" and result.data["view"] == "body"
+    assert result.data["noteContent"] == state["body"]
+    assert model.prompts == [] and budget.model_calls == budget.tokens == 0
     assert len(state["requests"]) == 1
-    coverage = result.data["coverage"]
-    assert coverage["complete"] and coverage["start"] == 0
-    assert coverage["end"] == coverage["total_chars"] == len(state["body"])
-    assert "summary" not in result.data["coverage"]
+    assert result.data["readComplete"] and result.data["readOffset"] == 0
+    assert result.data["source"]["end"] == result.data["totalChars"] == len(state["body"])
+
+
+def test_source_above_observation_budget_uses_standard_synthesis(source, monkeypatch):
+    state, model = source
+    state["body"] = "正文材料。" * 2000
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 1500)
+    result = invoke()
+    assert result.kind == "ok" and result.data["strategy"] == "stuff"
+    assert len(model.prompts) == 1 and len(state["requests"]) == 1
+    assert result.data["coverage"]["end"] == len(state["body"])
+
+
+def test_native_full_source_uses_two_model_requests(source, tmp_path, monkeypatch):
+    from _framework_fixture import call, model_replies
+
+    from agent.runtime.message_content import estimate_tokens
+    from eval.golden_evaluation import check_gold
+    from utils import trace
+
+    state, summarizer = source
+    state["body"] = "完整原文包含开篇论点与末尾限制。" * 500
+    recorder = trace.start_trace("source-delivery", 7, "test", dir=str(tmp_path))
+    try:
+        with model_replies({"tool_calls": [call("get_article_detail", **ARGS)]},
+                           {"content": "完整总结。[Source](/article/19)"}) as (model, requests):
+            monkeypatch.setattr(type(model), "get_num_tokens_from_messages",
+                                lambda _self, messages, **_kwargs: estimate_tokens(messages))
+            tools = {notes.get_article_detail.name: notes.get_article_detail}
+            session = ToolSession(model, {}, tools, {}, middleware=(ArticleMiddleware,))
+            result = session.run([HumanMessage("总结全文")])
+            assert len(requests) == 2 and summarizer.prompts == []
+            message = next(m for m in requests[-1]["messages"] if m["role"] == "tool")
+            data = json.loads(message["content"])
+            assert data["noteContent"] == state["body"]
+            assert data["readComplete"] and data["sourceUrl"].endswith("/article/19")
+            assert check_gold({"require_body_reads": [{"article_id": ARTICLE}],
+                               "max_article_body_chars": len(state["body"])}, {
+                "text": result.reply, "commands": [], "tool_calls": [], "exec_rows": [],
+                "native_events": recorder.events}) == []
+            failures = check_gold({"max_article_body_chars": len(state["body"]) - 1}, {
+                "text": result.reply, "commands": [], "tool_calls": [], "exec_rows": [],
+                "native_events": recorder.events})
+            assert any("正文读量超过场景验收上限" in item for item in failures)
+            reads = [e for e in recorder.events if e.get("event") == "article_observation"]
+            assert reads[-1]["operation"] == "body"
+            assert reads[-1]["returned_chars"] == len(state["body"])
+    finally:
+        trace.finish_trace("source-delivery", "test", 0.0)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("readComplete", False), ("totalChars", 999), ("contentRevision", "a" * 64),
+    ("sectionSchema", "unknown"), ("selectedScope", "section_subtree"),
+    ("noteContent", ["invalid"]), ("noteId", 20),
+])
+def test_summary_source_rejects_incomplete_or_inconsistent_frames(source, field, value):
+    from langchain_core.messages import ToolMessage
+
+    result = invoke()
+    data = {**result.data, field: value}
+    session = ToolSession(None, {}, {}, {})
+    middleware = ArticleMiddleware(session)
+    message = ToolMessage(content=str(result), tool_call_id="summary",
+                          artifact={"kind": "ok", "data": data})
+    rendered = middleware.render_result({"name": "get_article_detail", "args": ARGS,
+                                        "id": "summary"}, message, 100000)
+    assert rendered.status == "error" and rendered.artifact["data"] is None
+    assert middleware.evidence.summary_failures == {ARTICLE}
 
 
 def test_multi_page_source_is_joined_in_order_with_one_bound_revision(source):
@@ -140,12 +205,41 @@ def test_no_summary_is_published_for_failed_or_inconsistent_continuation(source,
 
 @pytest.mark.parametrize("finish,text", [("length", "被截断的摘要"), ("stop", "")])
 def test_truncated_or_empty_model_output_is_not_complete_evidence(source, finish, text):
-    _, model = source
+    state, model = source
+    state["body"] = "完整材料。" * 7000
     model.finish, model.text = finish, text
     budget = TaskBudget()
     result = invoke(budget)
     assert result.kind == "unavailable" and result.data is None
     assert budget.model_calls == 1 and budget.tokens == 112
+
+
+@pytest.mark.parametrize("receipt,finish,accepted", [
+    (200, "stop", True), (257, "stop", False), (200, "length", False),
+    (None, "stop", False), (0, "stop", False),
+])
+def test_summary_output_validation_uses_actual_usage_before_conservative_estimates(
+    source, monkeypatch, receipt, finish, accepted
+):
+    state, model = source
+    state["body"] = "完整材料。" * 7000
+    from agent.runtime.message_content import estimate_tokens
+
+    text = " documentation" * 100
+    assert estimate_tokens([HumanMessage(content=text)]) > settings.agent_summary_output_tokens
+    original = model.invoke
+
+    def answer(messages, **kwargs):
+        response = original(messages, **kwargs)
+        return response.model_copy(update={"content": text,
+            "response_metadata": {"finish_reason": finish},
+            "usage_metadata": None if receipt is None else {
+                "input_tokens": 100, "output_tokens": receipt, "total_tokens": 100 + receipt}})
+
+    monkeypatch.setattr(model, "invoke", answer)
+    result = invoke()
+    assert (result.kind == "ok") is accepted
+    assert len(model.prompts) == 1
 
 
 def test_budget_exhaustion_does_not_publish_an_intermediate_refinement(source):
@@ -171,6 +265,8 @@ def test_cancellation_propagates_instead_of_returning_a_complete_summary(source,
 
 
 def test_summary_has_separate_provenance_and_failed_summary_cannot_be_replaced_by_passages(source):
+    state, _ = source
+    state["body"] = "完整材料。" * 7000
     result = invoke()
     evidence = ArticleEvidence()
     evidence.observe("get_article_detail", ARGS, result)
@@ -183,6 +279,69 @@ def test_summary_has_separate_provenance_and_failed_summary_cannot_be_replaced_b
     restored.documents[ARTICLE] = "A previously read passage"
     assert restored.issue("根据片段得出全文结论", "https://example.test") == (
         "article_summary_incomplete")
+
+
+@pytest.mark.parametrize("read_path", ["complete", "gap", "revision", "section"])
+def test_failed_summary_requires_complete_same_revision_document_read_to_recover(source, read_path):
+    state, summarizer = source
+    state["body"] = "# Section\n" + "完整正文材料。" * 100
+    evidence = ArticleEvidence()
+    evidence.observe("get_article_detail", ARGS, unavailable("incomplete"))
+
+    def read(selection):
+        args = {"article_id": ARTICLE, "selection": selection}
+        result = notes.get_article_detail.invoke(args)
+        assert result.kind == "ok"
+        evidence.observe("get_article_detail", args, result)
+        return result.data
+
+    page = read({"kind": "full_text", "max_chars": 100})
+    assert evidence.summary_failures == {ARTICLE}
+    if read_path == "revision":
+        state["body"] = state["body"][:-1] + "改"
+        page = read({"kind": "metadata"})
+    locator = {"revision": page["contentRevision"], "section_schema": page["sectionSchema"]}
+    selection = ({"section": "s1"} if read_path == "section" else
+                 {"offset": 101 if read_path == "gap" else 100})
+    read({"kind": "source_range", **selection, **locator})
+    restored = ArticleEvidence.restore(json.loads(json.dumps(evidence.snapshot())))
+    issue = restored.issue("依据原文总结。[Source](/article/19)", "https://example.test")
+    assert issue == (None if read_path == "complete" else "article_summary_incomplete")
+    assert not summarizer.prompts and not restored.summaries
+
+
+def test_native_tool_loop_recovers_after_truncated_summary_by_reading_the_whole_source(source):
+    state, summarizer = source
+    state["body"] = "完整材料。" * 7000
+    summarizer.finish = "length"
+
+    class AgentModel:
+        max_tokens = 256
+
+        def __init__(self):
+            self.prompts = []
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            self.prompts.append(prompt)
+            if len(self.prompts) < 4:
+                selection = ({"kind": "full_text"} if len(self.prompts) == 2 else
+                             {"kind": "source_range", "offset": 32768})
+                args = ARGS if len(self.prompts) == 1 else {
+                    "article_id": ARTICLE, "selection": selection}
+                return AIMessage(content="", tool_calls=[{
+                    "name": "get_article_detail", "args": args,
+                    "id": f"read-{len(self.prompts)}"}])
+            return AIMessage(content="依据读完的原文总结。[Source](/article/19)")
+
+    model = AgentModel()
+    session = ToolSession(model, {}, {notes.get_article_detail.name: notes.get_article_detail},
+                          {}, middleware=(ArticleMiddleware,))
+    result = session.run([HumanMessage("总结全文")])
+    assert result.reply == "依据读完的原文总结。[Source](/article/19)"
+    assert len(model.prompts) == 4 and len(summarizer.prompts) == 1
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -247,6 +406,8 @@ def test_standard_model_callbacks_count_internal_usage_once(source, monkeypatch,
     from eval import usage
     from utils import trace
 
+    state, _ = source
+    state["body"] = "完整材料。" * 7000
     budget = TaskBudget()
     model = FakeMessagesListChatModel(responses=[AIMessage(content="摘要", usage_metadata={
         "input_tokens": 100, "output_tokens": 12, "total_tokens": 112})],
@@ -260,7 +421,8 @@ def test_standard_model_callbacks_count_internal_usage_once(source, monkeypatch,
         assert budget.model_calls == measured["calls"] == 1
         assert budget.tokens == 112 and measured["in"] == 100 and measured["out"] == 12
         assert [e["event"] for e in recorder.events if e["node"] == "article_summary"] == [
-            "source_page", "llm_start", "llm_done", "completed"]
+            *["source_page"] * result.data["coverage"]["pages"],
+            "llm_start", "llm_done", "completed"]
     finally:
         trace.finish_trace("summary-usage", "test", 0.0)
 

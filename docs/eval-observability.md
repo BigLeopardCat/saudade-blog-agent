@@ -103,7 +103,9 @@ python -m eval.release_readiness --help
 重复读取仅作诊断，不自动判失败；相关性、回答支持度与补读必要性仍由证据标注或语义复核判断。
 
 全文总结的 `article_summary.source_page` 记录实际遍历的同版本文档范围，
-`completed` 记录完整源覆盖、策略与段数，`incomplete` 保留失败原因。
+`source_delivered` 表示完整原文直接交给主模型，由普通正文观测记录实际交付量；
+`completed` 记录派生摘要的完整源覆盖、策略与段数，`incomplete` 保留失败原因。
+读量统计区分直接交付与内部合成，避免把同一份原文重复计入两次。
 内部 `llm_start/done/error` 沿用用量和延迟聚合，包含每个 refine 步骤；
 `article_observation.operation=summary` 的原文交付量为零，表示聊天模型收到派生摘要，
 不能据此认为汇总工作流没有读取原文。完整源覆盖和摘要分别于运行时证据、工具结果中核对；

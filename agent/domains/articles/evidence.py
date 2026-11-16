@@ -77,6 +77,29 @@ def _read_range(data, article_id):
     }
 
 
+def _complete_document(rows):
+    """Only contiguous whole-document ranges of one revision can replace a failed summary."""
+    versions = {}
+    for row in rows:
+        start, end, total = (row.get(key) for key in ("start", "end", "selected_total_chars"))
+        revision = row.get("revision")
+        if (row.get("selected_scope") != "document" or row.get("section_id")
+                or not all(type(value) is int for value in (start, end, total))
+                or not 0 <= start < end <= total or end - start != row.get("visible_chars")
+                or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)):
+            continue
+        versions.setdefault((revision, total), []).append((start, end))
+    for (_, total), spans in versions.items():
+        covered = 0
+        for start, end in sorted(spans):
+            if start > covered:
+                break
+            covered = max(covered, end)
+            if covered == total:
+                return True
+    return False
+
+
 def _article_links(text):
     urls = [
         *re.findall(r"\]\((/article/\d+[^)]*)\)", text),
@@ -160,7 +183,9 @@ class ArticleEvidence:
             if isinstance(value, ToolMessage)
             else str(value)
         )
-        if name == "get_article_detail" and is_summary(args):
+        if (name == "get_article_detail" and is_summary(args)
+                and (kind != "ok" or not isinstance(payload(value), dict)
+                     or payload(value).get("view") != "body")):
             self._observe_summary(args.get("article_id"), kind, payload(value))
             return
         search_operation = (name in SEARCH_TOOLS
@@ -300,6 +325,8 @@ class ArticleEvidence:
             self.continuations[ident] = cursor
         if observed not in ranges:
             ranges.append(observed)
+        if ident in self.summary_failures and _complete_document(ranges):
+            self.summary_failures.discard(ident)
         self.references.update(_article_links(body))
 
     def _observe_metadata(self, ident: int, data: dict) -> None:
