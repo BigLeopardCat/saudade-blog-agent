@@ -47,7 +47,7 @@ flowchart TD
 | 检索与证据读取 | BM25S 与可选 pgvector 混合检索、可选本地 embedding；核验公开性、正文版本及章节范围，区分候选、局部证据与全文摘要。[RAG](docs/rag-design.md) |
 | 前后端状态一致 | SSE 传递正文与类型化事件；客户端动作等待有界回报，后台结果绑定来源会话。[聊天协议](docs/chat-stream-protocol.md) |
 
-框架接线入口是 [`agent/runtime/execution.py`](agent/runtime/execution.py)，业务能力位于 [`agent/domains/`](agent/domains/)，博客人设与产品装配位于 [`agent/products/`](agent/products/)。新增领域的契约、登记和测试方式见[领域扩展](docs/product-extensions.md)。
+源码入口：[框架执行接线](agent/runtime/execution.py)、[领域执行器登记](agent/domains/registry.py)、[博客产品装配](agent/products/blog/application.py)。新增领域的契约、登记和测试方式见[领域扩展](docs/product-extensions.md)。
 
 ## 发布验证
 
