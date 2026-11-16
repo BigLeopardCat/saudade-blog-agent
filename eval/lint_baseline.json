@@ -1,6 +1,6 @@
 {
   "_note": "Pinned scanner findings by file; unregistered files and per-file increases fail. Tighten this ledger when findings decrease.",
-  "ruff_version": "0.14.4",
+  "ruff_version": "0.17.4",
   "line_length": 100,
   "select": [
     "E",

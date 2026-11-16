@@ -5,7 +5,11 @@ message_file="$(mktemp)"
 trap 'rm -f "$message_file"' EXIT
 if [[ "${EVENT_NAME:-push}" == pull_request ]]; then
   printf '%s\n' "${PR_TITLE:-}" > "$message_file"
-  bash .githooks/commit-msg "$message_file" --title
+  title_mode=--title
+  if [[ "${PR_AUTHOR:-}" == 'dependabot[bot]' ]]; then
+    title_mode=--dependabot-title
+  fi
+  bash .githooks/commit-msg "$message_file" "$title_mode"
   exit 0
 fi
 head="${HEAD_SHA:-HEAD}"
