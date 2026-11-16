@@ -14,6 +14,7 @@ from config import settings
 from rag import DEFAULT_TOP_K, MAX_TOP_K
 from rag.reading import article_frame_text, search_frame, search_text
 from rag.reading_requests import ArticleQuestion, ArticleSummary, ReadSelection
+from rag.source import MAX_DOCUMENT_CHARS
 from tools import base as _base
 from tools.result import (
     ToolResult,
@@ -163,8 +164,8 @@ def get_article_detail(
                           view=selection.kind, **selection.model_dump(exclude={"kind"}))
 
 
-def _read_document(article_id, *, view, doc_type, section, offset, max_chars,
-                   revision, section_schema):
+def _read_document(article_id, *, view, doc_type, section="", offset=0,
+                   max_chars=MAX_DOCUMENT_CHARS, revision="", section_schema=""):
     from urllib.parse import urlencode
 
     from agent.domains.articles.reading import project
@@ -201,12 +202,11 @@ def _read_document(article_id, *, view, doc_type, section, offset, max_chars,
             invalidate_document(article_id, revision)
         return data
     try:
-        return _shape(
-            project(
-                data, doc_type, article_id, section, offset, max_chars,
-                revision, section_schema, wire_view
-            )
-        )
+        data = project(data, doc_type, article_id, section, offset, max_chars,
+                       revision, section_schema, wire_view)
+        if doc_type == "note":
+            data["sourceUrl"] = f"{_base.SITE_BASE}/article/{article_id}"
+        return _shape(data)
     except (ValueError, TypeError, KeyError):
         return unavailable(
             "Document range or provenance could not be verified; no body was recorded."

@@ -15,7 +15,7 @@ from eval.fixtures.document_reads import RevisionChanged, article_page, document
 from rag.reading import render_article_result
 from rag.reading_requests import tool_args
 from tools import notes
-from tools.result import ok, unavailable
+from tools.result import invalid_args, ok, unavailable
 
 ARTICLE = 19
 BODY = "A verified article body with enough text for several pages."
@@ -146,6 +146,20 @@ def test_visible_directory_binds_sections_and_its_exact_next_page():
         assert state.bind_read_args(unseen) == unseen
     restored = ArticleEvidence.restore(json.loads(json.dumps(state.snapshot())))
     assert restored.bind_read_args(next_page) == {**next_page, **guards}
+
+
+def test_argument_failure_does_not_erase_a_verified_directory_cursor():
+    body = "".join(f"## Chapter {n}\nparagraph {n}\n" for n in range(30))
+    page = project(document_page("note", ARTICLE, "Source", body, {"view": "outline"}),
+                   "note", ARTICLE, "", 0, 24000, "", "", view="outline")
+    state = ArticleEvidence()
+    state.observe("get_article_detail", {"article_id": ARTICLE, "view": "outline"},
+                  ok("outline", data=page))
+    state.observe("get_article_detail", {"article_id": ARTICLE}, invalid_args("invalid scope"))
+    args = {"article_id": ARTICLE, "view": "outline", "offset": page["nextSectionsOffset"]}
+    assert state.bind_read_args(args)["revision"] == page["contentRevision"]
+    state.observe("get_article_detail", args, unavailable("source changed"))
+    assert state.bind_read_args(args) == args
 
 
 @pytest.mark.parametrize("changed", [False, True])

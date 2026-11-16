@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog.article_context import source_references
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
 from rag.reading import (
@@ -180,6 +181,8 @@ class ArticleMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         self._recover(request.state)
+        request = request.override(messages=source_references(
+            request.messages, round_index=getattr(self.session, "_round_index", None)))
         result = handler(request)
         response = result.result[-1]
         if response.tool_calls or response.invalid_tool_calls:

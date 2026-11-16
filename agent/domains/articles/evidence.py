@@ -236,10 +236,11 @@ class ArticleEvidence:
                                 "source": passage.source.model_dump()})
         elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
               and type(args.get("article_id")) is int):
-            self.continuations.pop(args["article_id"], None)
             if kind == "ok":
+                self.continuations.pop(args["article_id"], None)
                 self._observe_detail(args.get("article_id"), payload(value))
-            else:
+            elif kind != "invalid_args":
+                self.continuations.pop(args["article_id"], None)
                 self.read_targets = [target for target in self.read_targets
                                      if target["article_id"] != args["article_id"]]
 

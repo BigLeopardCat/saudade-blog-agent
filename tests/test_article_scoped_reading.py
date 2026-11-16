@@ -18,7 +18,7 @@ from agent.runtime.service import AgentRuntime
 from models.llm import get_llm
 from rag import search
 from rag.corpus import content_revision
-from rag.reading import candidate_text, render_article_result
+from rag.reading import article_frame_text, candidate_text, render_article_result
 from rag.reading_requests import document_args, tool_args
 from rag.sections import PARSER_VERSION
 from tools import base, notes
@@ -203,12 +203,10 @@ def test_outline_cursors_require_the_view_and_matching_version(article):
         == "invalid_args"
     )
     assert calls == []
-    assert (
+    with pytest.raises(ValidationError):
         notes.get_article_detail.invoke(
             tool_args({"article_id": ARTICLE, "view": "outline", "section": "s22"})
-        ).kind
-        == "invalid_args"
-    )
+        )
     stale = notes.get_article_detail.invoke(
         tool_args({
             "article_id": ARTICLE,
@@ -234,7 +232,7 @@ def test_outline_cursors_require_the_view_and_matching_version(article):
 def test_outline_budgeting_returns_parseable_pages_and_never_skips_unseen_entries(article):
     _, _, _ = article
     raw = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, "view": "outline"}))
-    cap = len(str(raw)) - 150
+    cap = len(article_frame_text(raw.data)) - 150
     text, visible = render_article_result(raw.data, str(raw), cap)
     assert visible == json.loads(text) and len(text) <= cap
     assert 0 < len(visible["sections"]) < len(raw.data["sections"])
@@ -391,6 +389,30 @@ def test_read_scope_is_required_before_any_body_fetch(article):
     assert calls == []
 
 
+def test_model_schema_exposes_only_fields_supported_by_each_read_mode():
+    schema = notes.get_article_detail.args_schema.model_json_schema()
+    variants = schema["properties"]["selection"]["anyOf"]
+    definitions = [schema["$defs"][item["$ref"].rsplit("/", 1)[-1]] for item in variants]
+    fields = {item["properties"]["kind"]["const"]: set(item["properties"])
+              for item in definitions}
+    assert "section" not in fields["full_text"] and "offset" not in fields["full_text"]
+    assert "section" not in fields["outline"] and "offset" in fields["outline"]
+    assert not {"section", "offset", "max_chars"}.intersection(fields["metadata"])
+
+
+@pytest.mark.parametrize("selection", [
+    {"kind": "full_text", "section": "Steps"},
+    {"kind": "full_text", "offset": 6000},
+    {"kind": "outline", "section": "Steps"},
+    {"kind": "metadata", "offset": 1},
+])
+def test_impossible_read_modes_are_rejected_by_the_tool_schema(article, selection):
+    _, _, calls = article
+    with pytest.raises(ValidationError):
+        notes.get_article_detail.invoke({"article_id": ARTICLE, "selection": selection})
+    assert calls == []
+
+
 @pytest.mark.parametrize("selection", [
     {"kind": "question", "query": ""},
     {"kind": "question", "query": "  "},
@@ -414,11 +436,18 @@ def test_question_scope_does_not_search_a_different_resource_kind(article):
 @pytest.mark.parametrize("arguments", [
     {"view": "full_text", "section": "s22"},
     {"view": "full_text", "offset": 100},
-    {"view": "source_range"},
 ])
 def test_read_scope_rejects_conflicting_or_missing_locators_before_http(article, arguments):
     _, _, calls = article
-    result = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, **arguments}))
+    with pytest.raises(ValidationError):
+        notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE, **arguments}))
+    assert calls == []
+
+
+def test_source_range_requires_a_known_locator_before_http(article):
+    _, _, calls = article
+    result = notes.get_article_detail.invoke(tool_args({"article_id": ARTICLE,
+                                                      "view": "source_range"}))
     assert result.kind == "invalid_args" and calls == []
 
 

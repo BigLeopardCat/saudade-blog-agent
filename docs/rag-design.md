@@ -171,6 +171,13 @@ BM25S 的文章段落语料和 PG 距离查询的 WHERE 中生效，先限定再
 原文阅读使用以下范围：
 `full_text` 从文首读取原文，`source_range` 按已知小节或续读坐标读取。单页最多 32768 字符，使用 offset、max_chars、revision，
 返回 contentRevision、readOffset、nextOffset、totalChars、readComplete、source 和小节 ID。
+每种读取模式只公开实际支持的参数；全文不接受小节或偏移，目录偏移沿用返回的
+nextSectionsOffset，元数据不接受正文选择。参数错误不撤销先前已验证的目录和续读坐标；
+来源版本或读取状态失效时仍清除这些绑定。
+同一原生工具交换内，相同版本、范围和内容只向模型交付一份正文，其余工具结果引用
+该交换中先前的工具调用。保留全部调用 ID 和 checkpoint 原始结果，跨交换或版本不复用。
+该视图在框架 middleware 中提供给预算与模型；追加新轮次不改写历史请求前缀。
+来源链接和版本元数据位于正文之前，`article_context_reused` 记录复用范围及减少的输入字符。
 工具将两种正文范围映射到宿主的 `view=body`；question 与 `rag_search(article_id=...)` 共用检索、版本验证和正文证据，
 不因文章编号已知而默认取整篇。已绑定版本的来源范围可以从文档偏移 0 开始。
 续读范围或按小节 ID 读取必须带版本，防止编辑后跨版本拼接。
