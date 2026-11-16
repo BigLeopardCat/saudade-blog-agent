@@ -5,10 +5,12 @@ import json
 import pytest
 from pydantic import ValidationError
 
+from agent.domains.articles.evidence import ArticleEvidence
 from rag.passages import attach_passages
 from rag.reading import candidate_text
 from rag.sections import PARSER_VERSION, outline, reading_revision
 from rag.source import BodyPassage
+from tools.result import ok
 
 
 def passage(*, offset=0, end=None, cap=12000):
@@ -52,3 +54,17 @@ def test_invalid_lengths_cannot_authorize_section_completeness(length):
     hit, _ = passage()
     with pytest.raises(ValidationError):
         BodyPassage.model_validate({**hit["passages"][0], "section_chars": length})
+
+
+@pytest.mark.parametrize("cap,complete", [(12000, True), (5, False)])
+def test_trace_records_section_extent_without_promoting_it_to_whole_document(cap, complete):
+    hit, total = passage(cap=cap)
+    evidence = ArticleEvidence()
+    evidence.summary_failures.add(41)
+    evidence.observe("rag_search", {}, ok("retrieved", data=[hit], meta={
+        "body_evidence": {"verified": True}}))
+    row = evidence.provenance("https://example.test")["body_reads"][0]["ranges"][0]
+    assert row["selected_total_chars"] == total
+    assert row["selected_range_reaches_end"] is complete
+    assert row["selected_scope"] == "section_range"
+    assert 41 in evidence.summary_failures
