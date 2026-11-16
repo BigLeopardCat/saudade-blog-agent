@@ -347,6 +347,9 @@ def test_real_sdk_searches_the_known_article_then_reads_only_the_evidence(
     assert frame["body_evidence"]["verified"] is True
     passages = frame["documents"][0]["passages"]
     assert FACT in "".join(p["text"] for p in passages)
+    assert all(p["section_chars"] >= p["range"]["end"] for p in passages)
+    assert all(p["section_complete"] == (p["range"]["offset"] == 0
+               and p["range"]["end"] == p["section_chars"]) for p in passages)
     assert any(p["range"]["section_id"] == "s22" and p["path"][-1] == "重复标题"
                for p in passages)
     assert frame["documents"][0]["read_requests"] == []

@@ -36,6 +36,7 @@ class BodyPassage(BaseModel):
 
     source: SourceRange
     text: Annotated[StrictStr, Field(min_length=1, max_length=24000)]
+    section_chars: Annotated[StrictInt, Field(ge=1)] | None = None
 
     @model_validator(mode="after")
     def exact_source_length(self):
@@ -44,6 +45,7 @@ class BodyPassage(BaseModel):
         if (
             self.source.section_schema != PARSER_VERSION
             or self.source.end - self.source.offset != len(self.text)
+            or (self.section_chars is not None and self.source.end > self.section_chars)
         ):
             raise ValueError("passage does not match its source range")
         return self

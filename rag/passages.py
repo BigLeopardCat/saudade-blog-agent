@@ -49,6 +49,7 @@ def attach_passages(hits, sources, corpus_revision, *, max_chars=12000):
                     end=end,
                 ),
                 text=section["text"][start:end],
+                section_chars=len(section["text"]),
             )
             passages.append(passage.model_dump())
             remaining -= len(passage.text)

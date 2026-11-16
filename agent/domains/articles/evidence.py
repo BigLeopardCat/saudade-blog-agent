@@ -233,6 +233,7 @@ class ArticleEvidence:
                             self._observe_detail(row["id"], {
                                 "noteTitle": row["title"], "sectionText": passage.text,
                                 "selectedScope": "section_range",
+                                "totalChars": passage.section_chars,
                                 "source": passage.source.model_dump()})
         elif (name == "get_article_detail" and args.get("doc_type", "note") == "note"
               and type(args.get("article_id")) is int):

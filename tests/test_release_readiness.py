@@ -59,6 +59,20 @@ def test_complete_http_evidence_passes_without_claiming_browser_or_write_executi
     assert got["separate_evidence_required"]
 
 
+def test_case_efficiency_findings_remain_in_the_release_report(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path)
+    document = json.loads(report.read_text())
+    document["cases"][0]["result"]["rounds"][0]["efficiency_findings"] = [
+        {"metric": "max_article_body_chars", "observed": 7178, "target": 4000}]
+    report.write_text(json.dumps(document))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "http_checks_passed"
+    assert {"gate": "0.max_article_body_chars", "detail": {
+        "round": 1, "metric": "max_article_body_chars", "observed": 7178, "target": 4000,
+    }} in got["efficiency_findings"]
+
+
 def test_missing_semantic_review_is_unverified(tmp_path):
     report, profile, _, _ = fixture(tmp_path)
     got = assess(report, profile_path=profile)

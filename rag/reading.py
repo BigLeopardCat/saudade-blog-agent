@@ -147,6 +147,10 @@ def candidate_view(index, hit):
                 "path": next((match.get("section_path", []) for match in hit.get("matches", [])
                               if match["section_id"] == passage.source.section_id), []),
                 "text": passage.text,
+                **({"section_chars": passage.section_chars,
+                    "section_complete": passage.source.offset == 0
+                    and passage.source.end == passage.section_chars}
+                   if passage.section_chars is not None else {}),
             }
         )
     candidate = {

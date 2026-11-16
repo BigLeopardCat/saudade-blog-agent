@@ -323,6 +323,13 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
     metrics = _metrics(report)
     failures, missing = _quality(report, semantic, profile)
     costs, budget_failures, budget_missing = _budget_metrics(metrics, profile)
+    for case in report["cases"]:
+        outcome = case.get("result") or {}
+        for index, rnd in enumerate(outcome.get("rounds") or [outcome], 1):
+            costs["efficiency_findings"].extend(
+                {"gate": f"{case['id']}.{finding['metric']}",
+                 "detail": {"round": index, **finding}}
+                for finding in rnd.get("efficiency_findings", []))
     failures.extend(budget_failures)
     missing.extend([*metrics["missing"], *budget_missing])
     profile_digest = hashlib.sha256(profile_body).hexdigest()

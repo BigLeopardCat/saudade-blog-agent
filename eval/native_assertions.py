@@ -433,16 +433,28 @@ def _body_read_failures(gold, events):
             "article_id" in wanted and wanted["article_id"] not in found]
 
 def _outcome_failures(gold, result, events):
+    diagnostic, findings, budget = set(gold.get("diagnostic_limits", [])), [], []
+
+    def exceeded(key, value, maximum, message):
+        if key in diagnostic:
+            findings.append({"metric": key, "observed": value, "target": maximum})
+        else:
+            budget.append(message)
+
     limit = gold.get("max_model_calls")
     attempts = sum(event.get("event") == "llm_start" for event in events)
-    budget = ([f"模型调用超过场景验收上限：{attempts} > {limit}"]
-              if limit is not None and attempts > limit else [])
+    if limit is not None and attempts > limit:
+        exceeded("max_model_calls", attempts, limit,
+                 f"模型调用超过场景验收上限：{attempts} > {limit}")
     if (body_limit := gold.get("max_article_body_chars")) is not None:
         size = _body_chars(events)
         if size is None:
             budget.append("[未评估] 缺少可核对的正文读取范围，不能验证读量上限")
         elif size > body_limit:
-            budget.append(f"正文读量超过场景验收上限：{size} > {body_limit}")
+            exceeded("max_article_body_chars", size, body_limit,
+                     f"正文读量超过场景验收上限：{size} > {body_limit}")
+    if diagnostic:
+        result["efficiency_findings"] = findings
     for name, maximum in gold.get("max_tool_calls", {}).items():
         requested = sum(event.get("event") == "tool_requested" and event.get("name") == name
                         for event in events)
@@ -584,7 +596,7 @@ def _single_confirmation_intent(wanted, result):
 
 def check(gold, result):
     keys = {
-        "max_model_calls", "max_tool_calls", "max_article_body_chars",
+        "max_model_calls", "max_tool_calls", "max_article_body_chars", "diagnostic_limits",
         "require_observations", "require_body_reads",
         "require_observations_any",
         "require_todo_schedule",

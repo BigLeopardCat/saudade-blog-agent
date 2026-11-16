@@ -10,6 +10,7 @@ from rag.corpus import content_revision
 from rag.passages import attach_passages
 from rag.reading import render_search_result, search_frame
 from rag.search import RagIndex
+from rag.sections import outline
 from rag.source import BodyPassage
 from tools.result import ok
 
@@ -41,7 +42,12 @@ def test_verified_snapshot_supplies_exact_body_without_another_fetch(source):
     )
     assert evidence.documents == {41: document["title"]}
     assert evidence.read_ranges[41][0]["visible_chars"] == len(passage.text)
-    assert evidence.read_ranges[41][0]["selected_total_chars"] is None
+    section = next(row for row in outline(document["content"], document["title"])
+                   if row["section_id"] == passage.source.section_id)
+    observed = evidence.read_ranges[41][0]
+    assert observed["selected_total_chars"] == len(section["text"])
+    assert observed["selected_scope"] == "section_range"
+    assert observed["selected_range_reaches_end"] == (passage.source.end == len(section["text"]))
     assert evidence.continuations == {}  # A retrieved passage never claims a full-body cursor.
 
 
