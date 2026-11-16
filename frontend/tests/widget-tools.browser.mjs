@@ -23,6 +23,19 @@ export async function assertWidgetTools(browser) {
     await tools.last().waitFor();
     assert.deepEqual(await tools.evaluateAll(elements => elements.map(element => element.id)),
       ['switch-model', 'switch-texture', 'photo', 'info', 'quit'].map(name => 'waifu-tool-' + name));
+    await page.waitForFunction(() => document.querySelector('#waifu-canvas').getBoundingClientRect().bottom <= innerHeight);
+    for (const width of [1440, 390]) {
+      await page.setViewportSize({width, height: 900});
+      const bounds = await page.evaluate(() => {
+        const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}; };
+        return {model:rect('#waifu-canvas'), tools:rect('#waifu-tool')};
+      });
+      const modelMiddle = (bounds.model.top + bounds.model.bottom) / 2;
+      const toolMiddle = (bounds.tools.top + bounds.tools.bottom) / 2;
+      assert.ok(Math.abs(modelMiddle - toolMiddle) < 2, JSON.stringify(bounds));
+      assert.ok(bounds.tools.top >= 0 && bounds.tools.bottom <= 900 && bounds.tools.right <= width, JSON.stringify(bounds));
+    }
+    await page.setViewportSize({width:1440,height:900});
     await page.locator('#waifu-tool-info').focus();
     assert.equal(await page.locator('#waifu-tool').evaluate(element => getComputedStyle(element).opacity), '1');
     await page.keyboard.press('Enter');

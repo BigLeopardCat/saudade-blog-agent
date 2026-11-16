@@ -885,3 +885,24 @@
   -webkit-backdrop-filter: none;
 }
 :root[data-scene-dark='true'] #waifu-chat { --chat-button-ink: #292331; }
+
+/* Wide article pages reserve the left margin for an optional conversation. */
+@media (min-width: 1320px) {
+  #waifu-chat[data-reader-docked='true']:not([data-window-mode='docked']) {
+    position: fixed;
+    left: 24px !important;
+    top: 100px !important;
+    right: auto !important;
+    bottom: auto !important;
+    width: clamp(280px, calc((100vw - var(--reader-width, min(760px, 48vw))) / 2 - 48px), 420px);
+    max-width: none;
+    max-height: calc(100dvh - 124px);
+    transform: none;
+    z-index: 1000;
+  }
+  #waifu-chat[data-reader-docked='true']:not([data-window-mode='docked']):not([data-window-mode='collapsed']) {
+    height: calc(100dvh - 124px) !important;
+  }
+  #waifu-chat[data-reader-docked='true'] .chat-header,
+  #waifu-chat[data-reader-docked='true'] .chat-drag-bar-t { cursor: default; }
+}

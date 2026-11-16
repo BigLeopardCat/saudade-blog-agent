@@ -1,3 +1,4 @@
+import {assertReaderLayout} from './reader-layout.browser.mjs';
 import {assertWidgetTools} from './widget-tools.browser.mjs';
 import { assertChatScroll } from './chat-scroll.browser.mjs';
 // Real-browser checks. No model, production API, or Live2D vendor required.
@@ -395,6 +396,7 @@ try {
     assert.ok(bounds.history.right <= bounds.composer.left + 1, JSON.stringify(bounds));
     assert.ok(bounds.messages.width >= 150, JSON.stringify(bounds));
   };
+  await assertReaderLayout({page,reset,streamCount,passed});
   await assertChatScroll({page,reset,passed});
   if (!process.argv.includes('--scroll-only')) {
   await reset();

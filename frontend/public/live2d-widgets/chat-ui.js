@@ -36,6 +36,7 @@
     const headerObserver = new ResizeObserver(alignHeader);
     [header, heading, scheduled, paused].forEach(element => headerObserver.observe(element));
     const windowUI = initWindow(panel);
+    initReaderLayout(panel, windowUI);
     ctx.ui.expandChat = () => windowUI?.setMode('expanded');
     g.__waifuTaskUI?.init(ctx, engine);
     const status = panel.querySelector('#chat-status');
@@ -221,6 +222,42 @@
     observer.observe(panel.querySelector('#chat-img-preview'), { childList: true });
     resize(); refresh();
   };
+  function initReaderLayout(panel, windowUI) {
+    if (!windowUI) return;
+    const wide = window.matchMedia('(min-width: 1320px)');
+    let snapshot = null, lastAutoArticle = '';
+    const sync = () => {
+      const article = document.documentElement.dataset.readerArticle;
+      if (article && wide.matches) {
+        if (!snapshot) {
+          snapshot = {parent: panel.parentNode, style: panel.style.cssText,
+            mode: windowUI.mode(), active: panel.classList.contains('active'), detached: panel.dataset.detached};
+          windowUI.setMode('expanded');
+          panel.dataset.readerDocked = 'true';
+          // The mascot is transformed; a viewport dock must live outside that containing block.
+          document.body.appendChild(panel);
+        }
+        if (lastAutoArticle !== article) {
+          panel.classList.add('active');
+          lastAutoArticle = article;
+        }
+      } else if (snapshot) {
+        const previous = snapshot;
+        snapshot = null;
+        delete panel.dataset.readerDocked;
+        windowUI.setMode(previous.mode);
+        previous.parent.appendChild(panel);
+        panel.style.cssText = previous.style;
+        if (previous.detached === undefined) delete panel.dataset.detached;
+        else panel.dataset.detached = previous.detached;
+        panel.classList.toggle('active', previous.active);
+      }
+      if (!article) lastAutoArticle = '';
+    };
+    window.addEventListener('reader-layout-change', sync);
+    wide.addEventListener('change', sync);
+    sync();
+  }
   // Keep the conversation mounted: minimizing must preserve drafts and live replies.
   function initWindow(panel) {
     const minimize = panel.querySelector('#chat-minimize');
@@ -232,7 +269,7 @@
     let transitionTimer;
     const mode = () => panel.dataset.windowMode || 'expanded';
     const fit = () => {
-      if (!panel.classList.contains('active') || mode() === 'docked') return;
+      if (!panel.classList.contains('active') || mode() === 'docked' || panel.dataset.readerDocked) return;
       const rect = panel.getBoundingClientRect();
       const left = Math.max(8, Math.min(rect.left, innerWidth - rect.width - 8));
       const top = Math.max(8, Math.min(rect.top, innerHeight - rect.height - 8));
@@ -247,7 +284,7 @@
       const returnFocus = panel.contains(document.activeElement);
       clearTimeout(transitionTimer);
       if (previous === 'docked') {
-        home.appendChild(panel);
+        (panel.dataset.readerDocked ? document.body : home).appendChild(panel);
         panel.style.cssText = dockStyle;
       }
       if (previous === 'expanded') {
@@ -302,7 +339,7 @@
         setMode(mode() === 'expanded' ? 'collapsed' : 'expanded');
     });
     panel.addEventListener('pointerdown', e => {
-      if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
+      if (panel.dataset.readerDocked || mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
           || !e.target.closest('.chat-header, .chat-drag-bar-t')) return;
       e.preventDefault(); e.stopPropagation();
       dragged = false;

@@ -94,7 +94,10 @@
     color: #0099cc;
 }
 
+#waifu-canvas { width: 300px; height: 300px; }
+
 #live2d {
+    display: block;
     cursor: grab;
     height: 300px;
     position: relative;
@@ -112,7 +115,8 @@
   opacity: 0;
   position: absolute;
   right: -10px;
-  top: 70px;
+  top: 50%;
+  transform: translateY(-50%);
   padding: 5px;
   border-radius: 16px;
   border: 1px solid var(--scene-edge, rgba(255,255,255,.7));
@@ -1756,15 +1760,13 @@
     transform: translateX(-34px) scale(.5);
     transform-origin: left bottom;
   }
-  /* 工具条跟着缩小的角色重锚（原 `right:-10px` 锚的是 300px 盒的右缘，缩完就飘在空处）。
-     x88 起、贴住角色右缘外侧（角色墨迹到 x98，工具条落在 x103..134）；
-     y120 让六个钮（6×25 + 5×5 = 175px）从上往下排完落在 y659..834，不出盒底。
-     `#waifu-tips` **不用管**：本仓这条 `display: none !important`（:408），
-     提示语整个走对话面板，移动端没有第二条气泡要重新定位。 */
   #waifu-tool {
+    display: grid;
+    grid-template-columns: repeat(2, 34px);
+    gap: 4px;
     right: auto;
     left: 88px;
-    top: 120px;
+    top: calc(100% - 75px);
   }
   /* 缩完之后 300×300 的盒子里**只剩左下角**那点墨迹是有内容的，其余全透。
      不关掉命中测试的话，正文在那 300×300 的矩形内一律点不到（移动端尤其致命：
