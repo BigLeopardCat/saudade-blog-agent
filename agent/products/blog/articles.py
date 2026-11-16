@@ -103,7 +103,8 @@ class ArticleMiddleware(AgentMiddleware):
 
     def render_result(self, call, value, limit):
         artifact = value.artifact if isinstance(value.artifact, dict) else {}
-        if value.status == "error":
+        if value.status == "error" and artifact.get("kind") not in {
+                "invalid_args", "unavailable", "not_found"}:
             artifact = {**artifact, "kind": "error"}
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"

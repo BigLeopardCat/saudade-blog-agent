@@ -149,3 +149,35 @@ def test_checkpoint_retains_raw_sources_and_followup_keeps_the_same_model_view(m
         list(runtime.stream_events({"messages": [HumanMessage("Continue")]}, config()))
         second = [m for m in requests[-1]["messages"] if m["role"] == "tool"]
         assert len(requests) == 3 and first == second
+
+
+def test_schema_error_keeps_directory_guards_for_the_next_native_call(monkeypatch):
+    from _framework_fixture import call, model_replies
+
+    body_text = "".join(f"## Chapter {n}\nparagraph {n}\n" for n in range(30))
+    reads = []
+
+    def get(path, **kwargs):
+        query = {key: values[0] for key, values in parse_qs(urlsplit(path).query).items()}
+        reads.append(query)
+        return document_page("note", 19, "Source", body_text, query)
+
+    monkeypatch.setattr(notes, "_get", get)
+    with model_replies(
+        {"tool_calls": [call("get_article_detail", ident="directory", article_id=19,
+                             selection={"kind": "outline"})]},
+        {"tool_calls": [call("get_article_detail", ident="bad", article_id=19,
+                             selection={"kind": "full_text", "section": "s1"})]},
+        {"tool_calls": [call("get_article_detail", ident="next", article_id=19,
+                             selection={"kind": "outline", "offset": 12})]},
+        {"content": "Read next directory page."},
+    ) as (model, requests):
+        session = ToolSession(model, {}, {notes.get_article_detail.name: notes.get_article_detail},
+                              {}, middleware=(ArticleMiddleware,))
+        session.run([HumanMessage("Read the directory")])
+        assert len(requests) == 4 and [r["offset"] for r in reads] == ["0", "12"]
+        assert len(reads[-1]["revision"]) == 64
+        assert reads[-1]["section_schema"] == PARSER_VERSION
+        failed = next(m for m in session.framework_state["messages"]
+                      if isinstance(m, ToolMessage) and m.tool_call_id == "bad")
+        assert failed.status == "error" and failed.artifact["kind"] == "invalid_args"
