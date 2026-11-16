@@ -11,7 +11,7 @@ export function bindToolbar(ctx, engine) {
                 return;
             }
             hitokotoBtn = document.createElement('button');
-            hitokotoBtn.type = 'button';
+            hitokotoBtn.setAttribute('type', 'button');
             hitokotoBtn.id = 'waifu-tool-hitokoto';
             hitokotoBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M21 11a8 8 0 0 1-8 8H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4ZM7 8h10M7 12h6"/></svg>';
             toolBar.appendChild(hitokotoBtn);
