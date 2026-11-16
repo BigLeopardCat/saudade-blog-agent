@@ -1,6 +1,6 @@
 # 路线图
 
-当前正式版本为 0.2.0，后续版本按真实任务反馈推进；发布结果见 [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)。
+后续版本按真实任务反馈推进；发布结果见 [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)。
 
 ## 近期维护
 
