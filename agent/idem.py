@@ -2,8 +2,9 @@
 
 The runtime binds each operation key to the signed user, conversation, operation ID,
 tool and arguments. Production uses PostgresLedger through writes.ledger_for.
-An unfinished intent has an unknown outcome and must not be retried automatically.
-Keep ledger retention aligned with retained checkpoints and confirmation records."""
+Legacy intents and dispatched writes have unknown outcomes. Only explicitly recoverable
+tools may reconcile through a business-owned idempotency protocol. Preserve operation keys
+for at least as long as their approvals and recovery records can be presented."""
 
 import json
 
@@ -26,8 +27,8 @@ _NOREPLAY_FRAME = ToolResult(
 def unknown_frame(name: str) -> ToolResult:
     """Report an unfinished write intent without granting permission to retry."""
     return error_frame(f"__ERROR__: 写操作结果未知[{REASON_OUTCOME_UNKNOWN}]"
-            f"（{name} 上一次已经发出，进程在拿到返回之前中断了——**不要重试**，"
-            f"重试可能把它做第二遍。先读一次确认它到底成没成，再把结果如实告诉主人）",
+            f"（{name} 上次请求可能已经送达，无法确认是否完成。请勿重新执行，"
+            f"以免产生第二次副作用；先查询真实状态，再如实说明结果）",
             REASON_OUTCOME_UNKNOWN)
 
 
@@ -52,6 +53,6 @@ def _split_row(row) -> tuple[str, tuple | None]:
     if row is None:
         # A disappearing claim has an unknown outcome; do not authorize a retry.
         raise RuntimeError("幂等账行状态不可判定（插入被忽略但回读为空）")
-    if row[0] not in ("done", "intent"):
+    if row[0] not in ("done", "intent", "claimed", "dispatched", "recoverable", "cancelled"):
         raise RuntimeError(f"幂等账行状态认不出：{row[0]!r}")
     return row[0], (row[0], row[2], row[3], row[4])

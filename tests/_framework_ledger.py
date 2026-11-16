@@ -21,6 +21,14 @@ class Ledger:
         with closing(SQLiteLedger(self.path)) as ledger:
             return ledger.lookup(*args, **kwargs)
 
+    def dispatch(self, *args, **kwargs):
+        with closing(SQLiteLedger(self.path)) as ledger:
+            return ledger.dispatch(*args, **kwargs)
+
+    def cancel_claim(self, *args, **kwargs):
+        with closing(SQLiteLedger(self.path)) as ledger:
+            return ledger.cancel_claim(*args, **kwargs)
+
     def replace(self, *args, **kwargs):
         with closing(SQLiteLedger(self.path)) as ledger:
             return ledger.replace(*args, **kwargs)

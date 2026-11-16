@@ -39,6 +39,7 @@ def announcements(monkeypatch):
         "writes": 0,
         "requests": [],
         "revision": 0,
+        "operations": {},
     }
 
     def plan(intent):
@@ -72,12 +73,28 @@ def announcements(monkeypatch):
 
     def handle(request):
         state["requests"].append(request)
+        if request.method == "GET" and "/announcement-operations/" in request.url.path:
+            if state.get("lookup_missing"):
+                return httpx.Response(404, json={"code": 404, "message": "not found"})
+            if state.get("lookup_unavailable"):
+                raise httpx.ReadTimeout("receipt query unavailable")
+            identifier = request.url.path.rsplit("/", 1)[1]
+            value = ({"status": "completed", "receipt": state["operations"][identifier]}
+                     if identifier in state["operations"] else
+                     {"status": "absent", "operationId": identifier})
+            return httpx.Response(200, json={"code": 200, "data": value})
         payload = json.loads(request.content)
         if request.url.path.endswith("/prepare"):
             prepared = plan(payload)
             if state.get("wrong_plan"):
                 prepared["after"]["title"] = "unrequested"
             return httpx.Response(200, json={"code": 200, "data": prepared})
+        identifier = payload.get("operationId")
+        if identifier:
+            payload = payload["change"]
+            if identifier in state["operations"]:
+                return httpx.Response(200, json={"code": 200,
+                                                "data": state["operations"][identifier]})
         if state.get("race"):
             state["revision"] += 1
         current = plan(payload["intent"])
@@ -89,8 +106,6 @@ def announcements(monkeypatch):
             state["rows"][current["after"]["id"]] = copy.deepcopy(current["after"])
         else:
             state["rows"].pop(current["before"]["id"])
-        if state.get("lost"):
-            raise httpx.ReadTimeout("response lost after commit")
         result = {
             "changed": current["before"] != current["after"],
             "beforeVersion": payload["version"],
@@ -98,6 +113,14 @@ def announcements(monkeypatch):
         }
         if state.get("wrong_result"):
             result["state"]["notificationCount"] += 1
+        if identifier:
+            from agent.domains.announcements.recovery import fingerprint
+
+            result = {"operationId": identifier, "requestHash": fingerprint(payload),
+                      "outcome": result}
+            state["operations"][identifier] = copy.deepcopy(result)
+        if state.get("lost"):
+            raise httpx.ReadTimeout("response lost after commit")
         return httpx.Response(200, json={"code": 200, "data": result})
 
     with httpx.Client(transport=httpx.MockTransport(handle)) as client:
@@ -187,9 +210,144 @@ def test_lost_or_mismatched_result_is_not_repeated(announcements, tmp_path, mode
     signed = grant(prepare("update", announcement_id=11, content="新的正文"))
     announcements[mode] = True
     ledger = Ledger(str(tmp_path / "unknown.sqlite3"))
-    for _ in range(2):
-        assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
+    first = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    assert bool(first["receipts"]) is (mode == "lost")
+    recovered = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    assert bool(recovered["receipts"]) is (mode == "lost")
     assert announcements["writes"] == 1 and announcements["rows"][11]["content"] == "新的正文"
+
+
+def test_lost_response_and_unavailable_lookup_recover_after_restart(announcements, tmp_path):
+    from contextlib import closing
+
+    signed = grant(prepare("create", title="新公告", content="原文"))
+    announcements.update(lost=True, lookup_unavailable=True)
+    path = str(tmp_path / "recover.sqlite3")
+    with closing(Ledger(path)) as ledger:
+        first = transactions.execute(signed, admin_config(), None, ledger=ledger)
+        assert not first["receipts"] and first["operation_outcome"]["operation_id"]
+    announcements["lookup_unavailable"] = False
+    with closing(Ledger(path)) as ledger:
+        recovered = transactions.execute(signed, admin_config(), None, ledger=ledger)
+    assert recovered["receipts"] and announcements["writes"] == 1
+    posts = [r for r in announcements["requests"] if r.url.path.endswith("announcement-operations")]
+    assert len(posts) == 1
+
+
+@pytest.mark.parametrize("replay_only", [False, True])
+def test_crash_before_keyed_request_can_only_retry_with_valid_approval(
+    announcements, tmp_path, replay_only
+):
+    signed = grant(prepare("create", title="新公告", content="原文"))
+    spec = signed["specs"][0]
+    key = writes.operation_key(signed, spec["tool"], spec["args"])
+    ledger = Ledger(str(tmp_path / "before-http.sqlite3"))
+    ledger.claim(key, spec["tool"], signed["jti"], pending=True)
+    assert ledger.dispatch(key, recoverable=True)
+    cfg = admin_config(confirmation_replay_only=replay_only)
+    result = transactions.execute(signed, cfg, None, ledger=ledger)
+    assert bool(result["receipts"]) is not replay_only
+    assert announcements["writes"] == (0 if replay_only else 1)
+    posts = [r for r in announcements["requests"] if r.url.path.endswith("announcement-operations")]
+    if posts:
+        assert json.loads(posts[0].content)["operationId"] == key
+
+
+@pytest.mark.parametrize("field", ["operationId", "requestHash"])
+def test_recovery_rejects_other_operations_and_payloads(announcements, tmp_path, field):
+    signed = grant(prepare("update", announcement_id=11, content="新的正文"))
+    announcements.update(lost=True, lookup_unavailable=True)
+    ledger = Ledger(str(tmp_path / "bound.sqlite3"))
+    assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
+    announcements["lookup_unavailable"] = False
+    saved = next(iter(announcements["operations"].values()))
+    saved[field] = "0" * 64
+    assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
+    assert announcements["writes"] == 1
+
+
+def test_operation_lookup_is_read_only_and_available_only_to_admins(announcements, tmp_path):
+    from agent.domains.announcements.recovery import get_announcement_operation
+
+    signed = grant(prepare("update", announcement_id=11, content="新的正文"))
+    ledger = Ledger(str(tmp_path / "query.sqlite3"))
+    transactions.execute(signed, admin_config(), None, ledger=ledger)
+    identifier = next(iter(announcements["operations"]))
+    args = {"operation_id": identifier}
+    count = len(announcements["requests"])
+    assert get_announcement_operation.invoke(args, config=config()).kind == "unavailable"
+    assert len(announcements["requests"]) == count
+    result = get_announcement_operation.invoke(args, config=admin_config())
+    assert result.data["status"] == "completed" and announcements["writes"] == 1
+    absent = get_announcement_operation.invoke({"operation_id": "0" * 64}, config=admin_config())
+    assert absent.data["status"] == "absent" and announcements["writes"] == 1
+
+
+def test_operation_receipt_is_discovered_and_read_through_product_middleware(
+    announcements, tmp_path, monkeypatch,
+):
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    from agent.products.blog.capabilities import ToolCatalog
+    from agent.products.blog.tool_policy import BlogToolMiddleware
+    from agent.runtime.session import ToolSession
+
+    signed = grant(prepare("create", title="新公告", content="原文"))
+    transactions.execute(signed, admin_config(), None,
+                         ledger=Ledger(str(tmp_path / "tool.sqlite3")))
+    identifier = next(iter(announcements["operations"]))
+    announcements["requests"].clear()
+    prompts = []
+
+    class Model:
+        def __init__(self):
+            self.messages = iter([
+                AIMessage(content="", tool_calls=[{"id": "load", "args": {},
+                    "name": "load_admin_announcements_info_tools"}]),
+                AIMessage(content="", tool_calls=[{"id": "read",
+                    "args": {"operation_id": identifier}, "name": "get_announcement_operation"}]),
+                AIMessage(content="已核对历史回执。"),
+            ])
+
+        def bind_tools(self, schemas, **kwargs):
+            return self
+
+        def invoke(self, messages):
+            prompts.append(messages)
+            return next(self.messages)
+
+    cfg = admin_config()
+    domain = ToolCatalog().domains(cfg, False)["admin_announcements"]
+    assert set(domain) == {"get_announcement_operation"}
+    result = ToolSession(Model(), cfg, {}, {"admin_announcements": domain},
+        middleware=(BlogToolMiddleware,)).run([HumanMessage(content="核对刚才公告操作的历史回执")])
+    message = next(row for row in prompts[-1] if isinstance(row, ToolMessage)
+                   and row.name == "get_announcement_operation")
+    assert result.reply == "已核对历史回执。"
+    assert json.loads(message.content)["receipt"]["operationId"] == identifier
+    assert len(announcements["requests"]) == 1
+    assert announcements["requests"][0].method == "GET" and announcements["writes"] == 1
+
+
+def test_missing_host_endpoint_never_authorizes_a_write_retry(announcements, tmp_path):
+    signed = grant(prepare("create", title="新公告", content="原文"))
+    spec = signed["specs"][0]
+    key = writes.operation_key(signed, spec["tool"], spec["args"])
+    ledger = Ledger(str(tmp_path / "old-host.sqlite3"))
+    ledger.claim(key, spec["tool"], signed["jti"], pending=True)
+    ledger.dispatch(key, recoverable=True)
+    announcements["lookup_missing"] = True
+    assert not transactions.execute(signed, admin_config(), None, ledger=ledger)["receipts"]
+    assert announcements["writes"] == 0
+    assert not any(r.url.path.endswith("/announcement-actions") for r in announcements["requests"])
+
+
+def test_fingerprint_matches_host_unicode_vector():
+    from agent.domains.announcements.recovery import fingerprint
+
+    assert fingerprint({"version": "a" * 64, "intent": {"action": "create", "fields": {
+        "title": "原文😀", "content": " 保留\n正文 "}}}) == (
+            "50e3522ecbed43bdf7cff76b32fe7fbee5e9f6c1385f403060545539b38ccbe3")
 
 
 def test_cancelled_card_is_durable_and_cannot_write(announcements, tmp_path, monkeypatch):

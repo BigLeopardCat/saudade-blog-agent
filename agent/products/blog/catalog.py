@@ -48,7 +48,8 @@ DOMAIN_DESCRIPTIONS = {
     "Missing mute duration uses admin_accounts; custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
-    "also removes recipients' copies.",
+    "also removes recipients' copies. Read historical operation receipts by the real operation ID; "
+    "an absent receipt does not prove that a write was never executed.",
     "admin_categories": "Category dictionary; prepare or schedule creation, editing and deletion.",
     "admin_work_queue": "用户待办 (business to-dos), batch deletion, quota applications/reset; "
     "not private planning.",

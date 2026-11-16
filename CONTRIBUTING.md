@@ -25,7 +25,7 @@ node --test frontend/tests/*.test.mjs
 
 `deployment-rehearsal` 仅在 GitHub 托管的可丢弃 Linux 运行机执行，安装临时 systemd 服务，验证真实发布、回滚和数据库还原，不向模型或博客发送业务请求。不要在维护机或生产服务器手工执行该脚本。
 
-PostgreSQL 测试只使用显式 `SAUDADE_CKPT_TEST_DSN`、`SAUDADE_SCHEDULING_TEST_DSN` 或 `SAUDADE_RAG_TEST_DSN` 指向的可丢弃实例；会创建和清理数据，不能使用部署 DSN。CI 提供临时服务。
+PostgreSQL 测试只使用显式 `SAUDADE_CKPT_TEST_DSN`、`SAUDADE_SCHEDULING_TEST_DSN`、`SAUDADE_RAG_TEST_DSN` 或 `SAUDADE_TASK_INPUT_TEST_DSN` 指向的可丢弃实例；会创建和清理数据，不能使用部署 DSN。CI 提供临时服务。
 
 聊天布局检查已纳入公开 CI。使用 Node 24.22.1，在 `frontend` 下执行 `npm ci`、`npx playwright install --with-deps chromium` 和 `npm run test:browser`；该入口使用 `frontend/tests/chat-ui.browser.mjs`。也支持 `PLAYWRIGHT_MODULE` 和 `CHROMIUM_EXECUTABLE` 指向已有安装。不访问模型和线上 API。
 

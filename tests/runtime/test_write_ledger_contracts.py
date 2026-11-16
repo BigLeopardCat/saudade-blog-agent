@@ -38,7 +38,7 @@ def test_write_intent_survives_process_restart_and_preserves_verified_result(tmp
         def check_intent():
             key = writes.operation_key(GRANT, NAME, ARGS)
             state, _ = ledger.claim(key, NAME, GRANT["jti"])
-            assert state == "intent", "external invocation must follow durable intent"
+            assert state == "dispatched", "external invocation must follow durable dispatch marker"
 
         tool = Operation(before_call=check_intent)
         first = invoke(ledger, tool)

@@ -83,7 +83,7 @@ def fault_site(monkeypatch):
                                              connect_timeout=3) as effect:
                             assert effect.execute(
                                 "SELECT status FROM agent_write_idem WHERE key=%s",
-                                (state["key"],)).fetchone() == ("intent",)
+                                (state["key"],)).fetchone() == ("dispatched",)
                             effect.execute("INSERT INTO effect VALUES(%s,%s)", (7, 19))
                             # Only terminate the fresh ledger connection owned by this fixture.
                             terminated = effect.execute(
@@ -170,7 +170,7 @@ def test_committed_http_effect_survives_lost_ledger_connection_without_blind_rep
             replay = transactions.execute(grant, config, None, tools=tools, ledger=rebuilt)
             assert replay["receipts"] == [] and replay["blocked"]
             assert replay["operation_outcome"]["status"] == "unverified"
-            assert rebuilt.lookup(key)[0] == "intent"
+            assert rebuilt.lookup(key)[0] == "dispatched"
         with fresh.connection() as conn:
             assert conn.execute("SELECT count(*) FROM effect").fetchone()[0] == 1
         assert site["requests"] == 1
