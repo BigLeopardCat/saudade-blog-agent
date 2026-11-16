@@ -894,7 +894,7 @@
     top: 100px !important;
     right: auto !important;
     bottom: auto !important;
-    width: clamp(280px, calc((100vw - var(--reader-width, min(760px, 48vw))) / 2 - 48px), 420px);
+    width: clamp(280px, calc((100vw - var(--reader-width, min(760px, 48vw))) / 2 - 48px), 420px) !important;
     max-width: none;
     max-height: calc(100dvh - 124px);
     transform: none;

@@ -254,6 +254,9 @@
       }
       if (!article) lastAutoArticle = '';
     };
+    panel.querySelector('#chat-close')?.addEventListener('click', () => {
+      if (snapshot) snapshot.active = false;
+    });
     window.addEventListener('reader-layout-change', sync);
     wide.addEventListener('change', sync);
     sync();
