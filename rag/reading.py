@@ -56,6 +56,12 @@ def article_frame_text(data):
     body = data.get("noteContent")
     if isinstance(body, str) and body:
         data = {key: value for key, value in data.items() if key != "content" or value != body}
+    header = ("view", "sourceUrl", "noteId", "noteTitle", "contentRevision", "sectionSchema",
+              "source")
+    bodies = ("noteContent", "sectionText", "content", "summary")
+    data = {**{key: data[key] for key in header if key in data},
+            **{key: value for key, value in data.items() if key not in (*header, *bodies)},
+            **{key: data[key] for key in bodies if key in data}}
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
 
 
@@ -258,7 +264,7 @@ def render_search_result(data, meta, cap):
 
 def _outline_frame(data, cap):
     """Shorten the directory page, never an individual locator or its revision."""
-    fields = ("view", "noteId", "noteTitle", "id", "title", "contentRevision",
+    fields = ("view", "sourceUrl", "noteId", "noteTitle", "id", "title", "contentRevision",
               "sectionSchema", "readOffset", "nextOffset", "totalChars", "readComplete",
               "sectionCount", "sectionsOffset", "source")
     base = {key: data[key] for key in fields if key in data}
@@ -315,6 +321,7 @@ def render_article_result(data, text: str, cap: int) -> tuple[str, dict | None]:
         "totalChars",
         "readComplete",
         "source",
+        "sourceUrl",
         "omittedViews",
         "authorName",
         "authorNameTruncated",

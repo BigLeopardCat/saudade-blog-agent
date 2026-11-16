@@ -25,7 +25,7 @@ def _output(result, response_format):
     return result, None
 
 
-def framework_tool(original):
+def framework_tool(original, *, on_error=None):
     """Preserve the tool schema; let ToolNode own validation, injection and callbacks."""
     if not isinstance(original, StructuredTool):
         return original
@@ -36,10 +36,19 @@ def framework_tool(original):
 
     def invalid(error):
         record("native", "tool_failed", name=original.name, error="invalid_arguments")
-        return str(validation_result(error))
+        result = validation_result(error)
+        if on_error is not None:
+            on_error(result)
+        return str(result)
+
+    def tool_error(error):
+        result = invalid_args(str(error))
+        if on_error is not None:
+            on_error(result)
+        return str(result)
 
     updates = {"response_format": "content_and_artifact", "handle_validation_error": invalid,
-               "handle_tool_error": lambda error: str(invalid_args(str(error)))}
+               "handle_tool_error": tool_error}
     if original.func is not None:
         @wraps(original.func)
         def invoke(*args, **kwargs):

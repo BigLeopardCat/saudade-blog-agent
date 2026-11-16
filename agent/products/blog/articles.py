@@ -7,6 +7,7 @@ from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
+from agent.products.blog.article_context import source_references
 from agent.runtime.message_content import text_content
 from agent.runtime.tool_execution import result_limit
 from rag.reading import (
@@ -102,7 +103,8 @@ class ArticleMiddleware(AgentMiddleware):
 
     def render_result(self, call, value, limit):
         artifact = value.artifact if isinstance(value.artifact, dict) else {}
-        if value.status == "error":
+        if value.status == "error" and artifact.get("kind") not in {
+                "invalid_args", "unavailable", "not_found"}:
             artifact = {**artifact, "kind": "error"}
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"
@@ -180,6 +182,8 @@ class ArticleMiddleware(AgentMiddleware):
 
     def wrap_model_call(self, request, handler):
         self._recover(request.state)
+        request = request.override(messages=source_references(
+            request.messages, round_index=getattr(self.session, "_round_index", None)))
         result = handler(request)
         response = result.result[-1]
         if response.tool_calls or response.invalid_tool_calls:

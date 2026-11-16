@@ -89,22 +89,29 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     session.calls_used += 1
     tool_state.use(session, name, prompt)
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
+    failures = []
     with native_tool(session.budget), tool_evidence.scope(call, round_index):
-        output = handler(request.override(tool=framework_tool(session.execution_tools[name])))
+        output = handler(request.override(tool=framework_tool(
+            session.execution_tools[name], on_error=failures.append)))
     command = output if isinstance(output, Command) else None
     messages = output.update["messages"] if command else [output]
     message = next((m for m in messages if isinstance(m, ToolMessage)
                     and m.tool_call_id == call["id"]), None)
     if message is None:
         raise ValueError("Tool response does not match the framework call ID")
+    if failures:
+        failure = failures[-1]
+        message = message.model_copy(update={"artifact": {
+            "kind": failure.kind, "data": failure.data, "meta": failure.meta}})
     attachments.extend(m for m in messages if m is not message)
     prepared = prepared_result(message)
     if prepared is not None:
         session._prepared_result(prepared, call, prompt, round_index)
         return command
     artifact = message.artifact if isinstance(message.artifact, dict) else {}
-    kind = (artifact.get("kind", "ok")
-            if message.status != "error" else "error")
+    kind = artifact.get("kind", "ok")
+    if message.status == "error" and kind not in {"invalid_args", "unavailable", "not_found"}:
+        kind = "error"
     original = message
     message = session.render_result(call, message, result_limit(message))
     rendered_kind = (message.artifact or {}).get("kind")

@@ -21,18 +21,37 @@ class ArticleSummary(BaseModel):
         strip_whitespace=True, min_length=1, max_length=1000)] = "按原文结构总结全文。"
 
 
-class DocumentRead(BaseModel):
+class SourceVersion(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    kind: Literal["full_text", "source_range", "outline", "metadata"]
-    section: Annotated[StrictStr, Field(max_length=1024)] = ""
-    offset: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] = 0
-    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS)] = MAX_DOCUMENT_CHARS
     revision: Annotated[StrictStr, Field(max_length=64)] = ""
     section_schema: Annotated[StrictStr, Field(max_length=128)] = ""
 
 
+class FullTextRead(SourceVersion):
+    kind: Literal["full_text"]
+    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS)] = MAX_DOCUMENT_CHARS
+
+
+class SourceRangeRead(SourceVersion):
+    kind: Literal["source_range"]
+    section: Annotated[StrictStr, Field(max_length=1024)] = ""
+    offset: Annotated[StrictInt, Field(ge=0, le=2_147_483_647)] = 0
+    max_chars: Annotated[StrictInt, Field(ge=1, le=MAX_DOCUMENT_CHARS)] = MAX_DOCUMENT_CHARS
+
+
+class OutlineRead(SourceVersion):
+    kind: Literal["outline"]
+    offset: Annotated[StrictInt, Field(
+        ge=0, le=2_147_483_647, description="Use the returned nextSectionsOffset for paging")] = 0
+
+
+class MetadataRead(SourceVersion):
+    kind: Literal["metadata"]
+
+
 ReadSelection = Annotated[
-    ArticleQuestion | ArticleSummary | DocumentRead, Field(discriminator="kind")]
+    ArticleQuestion | ArticleSummary | FullTextRead | SourceRangeRead | OutlineRead | MetadataRead,
+    Field(discriminator="kind")]
 
 
 def is_question(args):
@@ -56,6 +75,12 @@ def document_args(args):
 
 def tool_args(args):
     """Publish a source read as the tool's typed request."""
+    selected = {k: v for k, v in args.items() if k not in {"article_id", "doc_type", "view"}}
+    defaults = {"section": "", "offset": 0, "max_chars": MAX_DOCUMENT_CHARS}
+    unused = {"full_text": ("section", "offset"), "outline": ("section", "max_chars"),
+              "metadata": ("section", "offset", "max_chars")}
+    for key in unused.get(args["view"], ()):
+        if type(selected.get(key)) is type(defaults[key]) and selected[key] == defaults[key]:
+            selected.pop(key)
     return {"article_id": args["article_id"], "doc_type": args.get("doc_type", "note"),
-            "selection": {"kind": args["view"], **{k: v for k, v in args.items()
-                if k not in {"article_id", "doc_type", "view"}}}}
+            "selection": {"kind": args["view"], **selected}}
