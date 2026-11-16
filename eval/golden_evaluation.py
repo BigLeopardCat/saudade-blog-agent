@@ -823,7 +823,7 @@ def login_demand_hit(text: str) -> "re.Match | None":
 
 # Explicit assertion keys reject misspellings instead of silently skipping checks.
 GOLD_ASSERT_KEYS = frozenset({
-    "max_model_calls", "max_tool_calls", "max_article_body_chars",
+    "max_model_calls", "max_tool_calls", "max_article_body_chars", "diagnostic_limits",
     "require_observations", "require_body_reads", "require_observations_any",
     "require_todo_schedule",
     "require_automation_schedule", "require_confirm_intent",

@@ -70,6 +70,13 @@ def fixture_account_eligibility(case):
 
 def _call_limits(gold, case_id):
     """Validate evaluation ceilings before any model or business request."""
+    diagnostic = gold.get("diagnostic_limits", [])
+    if (not isinstance(diagnostic, list)
+            or any(not isinstance(key, str)
+                   or key not in {"max_model_calls", "max_article_body_chars"}
+                   or key not in gold for key in diagnostic)
+            or len(diagnostic) != len(set(diagnostic))):
+        raise ValueError(f"invalid diagnostic limits: {case_id}")
     for key in ("max_model_calls", "max_article_body_chars"):
         maximum = gold.get(key)
         if key in gold and (type(maximum) is not int or maximum < 0):
