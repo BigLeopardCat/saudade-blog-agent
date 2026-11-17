@@ -22,6 +22,12 @@ export async function assertReaderLayout({page, reset, streamCount, passed}) {
   assert.equal(Math.round(bounds.y), 100);
   assert.equal(Math.round(bounds.height), 880);
   assert.equal(await panel.evaluate(el => getComputedStyle(el).zIndex), '1001', 'Detached reader chat paints above the mascot');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('darkmode-change',{detail:true})));
+  await page.waitForFunction(() => document.querySelector('#waifu-chat').classList.contains('washiDark'));
+  assert.equal(await panel.locator('.chat-input-row').evaluate(el=>getComputedStyle(el).backgroundColor),
+    'rgb(51, 43, 62)','Detached reader composer retains its dark surface');
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('darkmode-change',{detail:false})));
+  await page.waitForFunction(() => !document.querySelector('#waifu-chat').classList.contains('washiDark'));
   const chatAboveModel = await page.evaluate(() => {
     const model = document.createElement('div');
     model.style.cssText = 'position:absolute;inset:0;pointer-events:auto';

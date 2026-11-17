@@ -62,6 +62,17 @@ export async function assertHeaderFocusTheme(page,reset) {
       },dark);
       await page.waitForFunction(dark => document.getElementById('waifu-chat')
         .classList.contains('washiDark')===dark,dark);
+      const composer = await page.locator('#chat-input').evaluate(el => {
+        const row = el.closest('.chat-input-row');
+        return {background:getComputedStyle(row).backgroundColor, text:getComputedStyle(el).color,
+          placeholder:getComputedStyle(el,'::placeholder').color};
+      });
+      const composerSurface = channels(composer.background).slice(0,3);
+      for (const color of [composer.text,composer.placeholder]) {
+        assert.ok(contrast(channels(color).slice(0,3),composerSurface)>=4.5,
+          `Composer text must stay readable in ${dark?'dark':'light'} mode: ${JSON.stringify(composer)}`);
+      }
+      assert.equal(luminance(composerSurface)<.2,dark,'Composer background must follow the active theme');
       const expanded = await metrics(page);
       titleContrast(expanded,dark,'expanded');
       // A focused composer followed by pointer toggles previously framed the entire header.

@@ -6,6 +6,8 @@
   --side-w: 0px;
   --chat-gradient: var(--washi-grad, linear-gradient(100deg, #ff7fc0 0%, #b06ee8 52%, #63b8e8 100%));
   --chat-paper: rgb(255 253 250 / 94%);
+  --chat-bg: #fff7fc;
+  color-scheme: light;
   --chat-surface: #ffffff;
   --chat-soft: #faf2f9;
   --chat-rail: #faf0f7;
@@ -57,6 +59,7 @@
 [data-theme='dark'] #waifu-chat,
 .dark #waifu-chat {
   --chat-paper: rgb(43 35 55 / 92%);
+  --chat-bg: #332b3e;
   --chat-surface: rgb(64 51 75 / 62%);
   --chat-soft: rgb(70 53 80 / 62%);
   --chat-rail: rgb(57 43 68 / 60%);
