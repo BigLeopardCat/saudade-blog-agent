@@ -99,9 +99,11 @@ uv run --frozen uvicorn agent.main:app --host 127.0.0.1 --port 8010
 
 ## 文档
 
-[文档索引](docs/README.md) · [架构](docs/agent-architecture.md) · [配置与部署](docs/deployment.md) · [会话与缓存](docs/conversation-memory.md) · [领域扩展](docs/product-extensions.md) · [评测](docs/eval-observability.md)
+[文档索引](docs/README.md) · [Wiki 教程](https://github.com/BigLeopardCat/saudade-blog-agent/wiki) · [本地起步](docs/getting-started.md) · [配置](docs/configuration.md) · [代码导读](docs/code-reading.md) · [排障](docs/troubleshooting.md)
 
-使用步骤见[博客使用指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/docs/user-guide.md)。版本相关能力和运维说明保存在仓库；Wiki 适合放更长的操作教程，引用这些文档即可，不另维护一套配置表。
+Wiki 按阅读、确认、写作和后台计划组织教程，[源稿](docs/wiki/Home.md)随 PR 维护。
+架构、接口、配置和运维契约保留在仓库，按所用版本查阅；博客安装与站点管理见
+[博客文档](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/docs/README.md)。
 
 ## 参与与许可
 

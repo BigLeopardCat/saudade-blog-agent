@@ -3,6 +3,7 @@
 | 决策 | 状态 |
 | --- | --- |
 | [ADR-0038：通用 Agent 长期架构与正式版优先级](adr-0038-general-agent-and-release-priorities.md) | 已采纳范围取舍；通用任务协调暂不实施 |
+| [ADR-0039：条件任务的预授权与后台执行](adr-0039-conditional-task-authorization.md) | 采纳设计；通用委托授权尚未实现，当前调度范围以 scheduling 为准 |
 
 当前实现与契约见[架构](../agent-architecture.md)、[会话与记忆](../conversation-memory.md)、
 [身份与写入](../identity-and-permissions.md)、[RAG](../rag-design.md)和[后台计划](../scheduling.md)。
