@@ -339,7 +339,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                         div.dataset.finished = '1';
                         delete ctx.state.live[roundId];
                         broadcast({ t: 'done', id: finalItem.id, fullText, time: finalItem.time,
-                            process: reply.steps.map(window.__waifuWorkProgress.snapshot), roundId });
+                            process: reply.steps.map(window.__waifuWorkProgress.snapshot), turn_id: roundState.turnId, roundId });
                         saveHistory();
                         clearFailedRound(roundState.turnId);
                     }
