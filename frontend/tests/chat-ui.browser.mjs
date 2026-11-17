@@ -204,6 +204,13 @@ const server = createServer(async (req, res) => {
               {id:801001,role:'assistant',content:'离线测试回复：已收到你的消息。',time:Date.now(),images:[],turn_id:body.turn_id}];
           }
           if (mode === 'confirmation-malformed') card.details={sections:[{label:'正文',text:'<script>',format:'html'}]};
+          if (mode === 'confirmation-doc') {
+            card.q='发布这条全站公告？';
+            card.opts=[{value:'yes',label:'确认发布'},{value:'no',label:'取消'}];
+            card.notices=[{kind:'info',text:'批准后才执行；关闭窗口不会撤销已提交的操作。'}];
+            card.details={fields:[{label:'标题',value:'维护通知'},{label:'影响范围',value:'全站公告与关联个人通知'}],
+              sections:[{label:'正文',text:'今晚进行例行维护，请提前保存草稿。',format:'plain'}]};
+          }
           if (mode !== 'confirmation-replay') {
             pendingConfirmation = card;
             if (!next) staleConfirmation = card;
@@ -1514,6 +1521,19 @@ try {
   assert.equal(await savedFailures(),null);
   assert.equal(requests.filter(r=>r.path==='/api/chat/stream').at(-1).body.resume_task,failedTask);
   passed('repeated provider failures keep one pause card and successful resume clears it');
+
+  await page.setViewportSize({width:1280,height:900});
+  await reset();
+  await page.locator('#waifu-chat').evaluate(panel=>{
+    panel.dataset.detached='true';
+    Object.assign(panel.style,{position:'fixed',left:'24px',top:'24px',bottom:'auto',
+      width:'680px',height:'820px',maxHeight:'calc(100dvh - 48px)'});
+  });
+  await send('准备维护公告，先让我确认正文。','confirmation-doc');
+  await page.getByRole('button',{name:'确认发布',exact:true}).waitFor({state:'visible'});
+  await page.locator('#chat-messages').evaluate(node=>{node.scrollTop=0;});
+  await page.evaluate(async()=>{await document.fonts.ready;});
+  await page.locator('#waifu-chat').screenshot({path:path.join(output,'wiki-announcement-confirmation.png'),animations:'disabled'});
 
   }
   assert.deepEqual(errors, []);
