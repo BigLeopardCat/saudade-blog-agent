@@ -1,6 +1,9 @@
 # 发布验收
 
-正式版的固定提交、配套博客版本、测试结果及已知限制随 [v0.2.0 release](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.2.0) 发布。
+各发行版的固定提交、配套博客版本、测试结果及已知限制见
+[Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)。
+[v0.3.0](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0)附件记录该版的冻结验收；
+后续源码或实际部署是否达到相同结果须分别验证，不能沿用旧成绩。
 
 - `release-acceptance.json`：确定性与语义检查、模型用量、缓存、端到端耗时及未达效率目标。
 - `release-provenance.json`：源码与宿主版本、CI、部署和回滚核对，以及私有原始报告的指纹。

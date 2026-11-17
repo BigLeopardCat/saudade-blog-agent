@@ -54,3 +54,21 @@ def test_broken_page_and_image_are_detected(tmp_path):
     (tmp_path / "assets").mkdir()
     (tmp_path / "assets/missing.png").write_bytes(b"fixture")
     assert broken_links(tmp_path, [document]) == []
+
+
+def test_wiki_navigation_and_repository_references():
+    directory = ROOT / "docs/wiki"
+    pages = {path.stem for path in directory.glob("*.md") if not path.name.startswith("_")}
+    prefix = "https://github.com/BigLeopardCat/saudade-blog-agent/"
+    for name in ("Home.md", "_Sidebar.md"):
+        linked = {unquote(urlsplit(link).path).rsplit("/", 1)[-1]
+                  for link in document_links(directory / name) if link.startswith(prefix + "wiki/")}
+        assert pages - {"Home"} <= linked, f"Unlisted Wiki tutorials in {name}"
+    for page in directory.glob("*.md"):
+        for link in document_links(page):
+            target = unquote(link).split("#", 1)[0]
+            if target.startswith(prefix + "wiki/"):
+                assert target.rsplit("/", 1)[-1] in pages, (page.name, link)
+            for kind in ("blob/main/", "tree/main/"):
+                if target.startswith(prefix + kind):
+                    assert (ROOT / target.removeprefix(prefix + kind)).exists(), (page.name, link)
