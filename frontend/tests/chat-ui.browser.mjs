@@ -340,9 +340,9 @@ try {
     nextMode = mode;
     const before = streamCount();
     await page.locator('#chat-input').fill(text);
+    const accepted = page.waitForResponse(response => response.url() === origin + '/api/chat/stream' && response.request().method() === 'POST');
     await page.locator('#chat-send').click();
-    await page.waitForFunction(() => window.__chatTest.ctx.state.isSending);
-    await page.waitForTimeout(50);
+    await accepted;
     assert.equal(streamCount(), before + 1);
     if (!['hold', 'hold-empty', 'steering', 'steering-pause','work-hold'].includes(mode)) await idle();
   };

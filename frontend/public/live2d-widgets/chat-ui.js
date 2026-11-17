@@ -236,11 +236,15 @@
           panel.dataset.readerDocked = 'true';
           // The mascot is transformed; a viewport dock must live outside that containing block.
           document.body.appendChild(panel);
-          const contentWidth = document.querySelector('.readContent')?.getBoundingClientRect().width || Math.min(980, innerWidth * .5);
-          const width = Math.max(280, Math.min(420, (innerWidth - contentWidth) / 2 - 64));
-          Object.assign(panel.style, {position: 'fixed', left: '24px', top: '100px', right: 'auto', bottom: 'auto',
-            width: width + 'px', height: (innerHeight - 124) + 'px', maxWidth: 'calc(100vw - 32px)',
-            maxHeight: 'calc(100dvh - 32px)', transform: 'none'});
+          Object.assign(panel.style, {position: 'fixed', left: 'var(--reader-edge, 24px)',
+            top: 'var(--reader-top, 100px)', right: 'auto', bottom: 'auto',
+            width: 'var(--reader-chat-width, clamp(300px, 23vw, 420px))',
+            height: 'calc(100dvh - var(--reader-top, 100px) - 20px)',
+            maxWidth: 'calc(100vw - 32px)', maxHeight: 'calc(100dvh - 32px)', transform: 'none'});
+          panel.classList.add('active');
+          const initial = panel.getBoundingClientRect();
+          Object.assign(panel.style, {left: initial.left + 'px', top: initial.top + 'px',
+            width: initial.width + 'px', height: initial.height + 'px'});
           panel.dataset.detached = 'true';
           windowUI.adoptGeometry();
         }

@@ -7,7 +7,8 @@ export async function assertReaderLayout({page, reset, streamCount, passed}) {
   await page.locator('#page-search').focus();
   await page.evaluate(() => {
     document.querySelector('#waifu-chat').style.width = '600px';
-    document.documentElement.style.setProperty('--reader-width', 'min(760px, 48vw)');
+    document.documentElement.style.setProperty('--reader-chat-width', '320px');
+    document.documentElement.style.setProperty('--reader-edge', '24px');
     document.documentElement.dataset.readerArticle = '/article/7';
     window.dispatchEvent(new Event('reader-layout-change'));
   });
@@ -16,7 +17,23 @@ export async function assertReaderLayout({page, reset, streamCount, passed}) {
   assert.equal(await panel.evaluate(el => el.parentElement === document.body), true);
   const bounds = await panel.boundingBox();
   assert.ok(bounds.x >= 0 && bounds.y >= 0 && bounds.y + bounds.height <= 1000, JSON.stringify(bounds));
-  assert.ok(bounds.x + bounds.width < (1440 - Math.min(760, 1440 * .48)) / 2, JSON.stringify(bounds));
+  assert.equal(Math.round(bounds.width), 320);
+  assert.equal(Math.round(bounds.x), 24);
+  assert.equal(Math.round(bounds.y), 100);
+  assert.equal(Math.round(bounds.height), 880);
+  assert.equal(await panel.evaluate(el => getComputedStyle(el).zIndex), '1001', 'Detached reader chat paints above the mascot');
+  const chatAboveModel = await page.evaluate(() => {
+    const model = document.createElement('div');
+    model.style.cssText = 'position:absolute;inset:0;pointer-events:auto';
+    document.querySelector('#waifu').appendChild(model);
+    const a = model.getBoundingClientRect(), b = document.querySelector('#waifu-chat').getBoundingClientRect();
+    const x = (Math.max(a.left, b.left) + Math.min(a.right, b.right)) / 2;
+    const y = (Math.max(a.top, b.top) + Math.min(a.bottom, b.bottom)) / 2;
+    const above = document.querySelector('#waifu-chat').contains(document.elementFromPoint(x, y));
+    model.remove(); return above;
+  });
+  assert.equal(chatAboveModel, true, 'The mascot hit region cannot cover conversation controls');
+
   assert.equal(await page.locator('#page-search').evaluate(el => document.activeElement === el), true);
   assert.equal(streamCount(), requests, 'Opening the article must not send a model request');
   const header = panel.locator('.chat-header');

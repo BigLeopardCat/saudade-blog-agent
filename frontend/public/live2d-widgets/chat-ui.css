@@ -860,3 +860,6 @@
 
 /* Preserve the widget palette independently of the host scene. */
 #waifu-chat { backdrop-filter: none; -webkit-backdrop-filter: none; }
+
+/* The detached reader window must paint above the mascot's root stacking context. */
+#waifu-chat[data-reader-docked='true'] { z-index: calc(var(--z-agent, 1000) + 1); }
