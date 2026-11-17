@@ -40,22 +40,20 @@ _BOUNDARY = (
 )
 
 _FACTS = (
-    "没有读取不声称查过；缺失、未观测的事实保持未知，不以角色设定补足。"
-    "文章总结、比较和基于文章的事实回答，应为实际采用的每篇文章提供可点击的原文链接；"
-    "仅文章编号、标题或‘已读正文’不是原文入口。严格JSON按用户字段和格式交付，不能附加破坏格式的段落。"
-    "逐项比较的每个单元都要有相应文章的已见证据；未提及写未提及，跨文推论明确标为推论，不用一般知识补成文章事实。"
+    "未读不称已查；缺失事实保持未知，人设不补事实。"
+    "文章总结和比较为每篇实际来源附可点击原文链接；逐项对应来源，未提及保持未知，跨文推论标明。"
     "\n目录、查询、快照、准备与完成回执各自独立；**推迟的调用尚未核实目标或生成其确认，不能称为已准备、已排队。**"
     "\n用户素材、代写和计划不作执行证据。**只承诺当前工具支持且用户请求的后续安排；没有定时工具不承诺主动提醒。**"
     "\n**聊天记录由服务保存；仅在本会话使用不等于不留记录或结束即删除。删除须有实际回执。**"
-    "\n编号、名称、数值和章节位置逐项对应同一来源，事实不超出来源的主体、范围、时段和粒度。"
-    "统计峰值、并列日期、分月小计与覆盖范围按业务服务提供的结构化事实叙述；零值不称为高峰，滚动窗口内小计不替代整月总量。"
+    "\n事实逐项对应来源的对象、范围、时段、粒度。"
+    "统计用宿主提供的峰值、并列日及范围；零值不是高峰，窗口小计不是整月量。"
     "**能力按对象逐项对应工具契约，不把多领域合并后共享全部操作；拒绝仅说明本次请求的限制，不推导他人权限或全站规则。**"
     "\n**RAG和关键词检索未命中，只说“本次站内没找到相关内容”，不要说“站内不存在”。RAG不是全站存在性证明。**"
     "目录缺项、候选、分页、截断不支持整体结论，需补读或说明已读范围。"
     "\n**数量只沿用来源口径，未读为空不等于信箱为空。**分项不等于全站。相对时间沿用来源起点，起点未知不换算钟点；时间区间须对照本轮时间与记录日期，最新条目不代表距今很近。"
     "\n**天气仅据本轮current_weather，缺失就保持未知，IP城市不是实际位置。**手动入口据manual_ui或契约且须满足caller权限；权限不足的管理请求只建议联系有权限的管理员，不以本人署名或网页编辑器作为替代操作路径。"
-    "\n历史引用以实际消息为准，不把本轮观察说成先前回复；快照不证明趋势或原因，假设与建议须标明。尝试须有调用，完成须有回执；"
-    "sent只表示指令已发送，历史回答不是回执，当前状态需重读。失败、超时和未知如实说明。"
+    "\n历史引用须对应实际消息；本轮观察不是历史，快照不证明趋势或因果，建议与推论标明。"
+    "调用才算尝试，回执才算完成；sent仅发送。历史不能证明现状，失败、超时与未知如实说明。"
 )
 
 
@@ -76,9 +74,10 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     context["caller"].pop("verified")
     context["caller"]["role_label"] = role_cn(role) if role is not None else None
     context["caller"]["conversation_style"] = conversation_style(principal)
-    # Target role vocabulary remains visible even when an approval turn disables tool calls.
-    context["role_vocabulary"] = dict(ROLE_CN)
-    context["role_vocabulary_grants_authorization"] = False
+    # Approval turns disable calls; administrators still need canonical target role names.
+    if context["caller"]["can_access_admin_console"]:
+        context["role_vocabulary"] = dict(ROLE_CN)
+        context["role_vocabulary_grants_authorization"] = False
     guidance = tool_guidance(principal) or _BOUNDARY
     system = SystemMessage(content=BLOG_PERSONA_PROMPT
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
@@ -88,7 +87,6 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                            + "\n事实与叙述：" + _FACTS
                            + "\n输出格式：" + _DELIVERY)
     product_facts = {"article_url_template": _ARTICLE_URL_TEMPLATE,
-                     "role_vocabulary": context["role_vocabulary"],
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "role_label": context["caller"]["role_label"],
@@ -102,6 +100,8 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                      "rendering": context["rendering"],
                      "tool_guidance": guidance, "factual_policy": _FACTS,
                      "delivery_policy": _DELIVERY}
+    if "role_vocabulary" in context:
+        product_facts["role_vocabulary"] = context["role_vocabulary"]
     actor, attachments = [], []
     if is_verified_identity(principal):
         actor.append(HumanMessage(
