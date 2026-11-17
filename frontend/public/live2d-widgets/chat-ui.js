@@ -231,11 +231,18 @@
       if (article && wide.matches) {
         if (!snapshot) {
           snapshot = {parent: panel.parentNode, style: panel.style.cssText,
-            mode: windowUI.mode(), active: panel.classList.contains('active'), detached: panel.dataset.detached};
+            mode: windowUI.mode(), geometry: windowUI.snapshot(), active: panel.classList.contains('active'), detached: panel.dataset.detached};
           windowUI.setMode('expanded');
           panel.dataset.readerDocked = 'true';
           // The mascot is transformed; a viewport dock must live outside that containing block.
           document.body.appendChild(panel);
+          const contentWidth = document.querySelector('.readContent')?.getBoundingClientRect().width || Math.min(980, innerWidth * .5);
+          const width = Math.max(280, Math.min(420, (innerWidth - contentWidth) / 2 - 64));
+          Object.assign(panel.style, {position: 'fixed', left: '24px', top: '100px', right: 'auto', bottom: 'auto',
+            width: width + 'px', height: (innerHeight - 124) + 'px', maxWidth: 'calc(100vw - 32px)',
+            maxHeight: 'calc(100dvh - 32px)', transform: 'none'});
+          panel.dataset.detached = 'true';
+          windowUI.adoptGeometry();
         }
         if (lastAutoArticle !== article) {
           panel.classList.add('active');
@@ -248,6 +255,7 @@
         windowUI.setMode(previous.mode);
         previous.parent.appendChild(panel);
         panel.style.cssText = previous.style;
+        windowUI.restoreGeometry(previous.geometry);
         if (previous.detached === undefined) delete panel.dataset.detached;
         else panel.dataset.detached = previous.detached;
         panel.classList.toggle('active', previous.active);
@@ -272,7 +280,7 @@
     let transitionTimer;
     const mode = () => panel.dataset.windowMode || 'expanded';
     const fit = () => {
-      if (!panel.classList.contains('active') || mode() === 'docked' || panel.dataset.readerDocked) return;
+      if (!panel.classList.contains('active') || mode() === 'docked') return;
       const rect = panel.getBoundingClientRect();
       const left = Math.max(8, Math.min(rect.left, innerWidth - rect.width - 8));
       const top = Math.max(8, Math.min(rect.top, innerHeight - rect.height - 8));
@@ -342,7 +350,7 @@
         setMode(mode() === 'expanded' ? 'collapsed' : 'expanded');
     });
     panel.addEventListener('pointerdown', e => {
-      if (panel.dataset.readerDocked || mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
+      if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
           || !e.target.closest('.chat-header, .chat-drag-bar-t')) return;
       e.preventDefault(); e.stopPropagation();
       dragged = false;
@@ -371,7 +379,16 @@
     panel.addEventListener('pointerup', endDrag);
     panel.addEventListener('pointercancel', endDrag);
     window.addEventListener('resize', fit);
-    return { setMode, mode };
+    const cancelTransition = () => { clearTimeout(transitionTimer); delete panel.dataset.windowTransition; };
+    return { setMode, mode,
+      snapshot: () => ({expandedHeight, expandedSize, dockStyle}),
+      adoptGeometry: () => {
+        cancelTransition();
+        expandedHeight = panel.style.height;
+        expandedSize = parseFloat(expandedHeight) || panel.getBoundingClientRect().height;
+      },
+      restoreGeometry: saved => { cancelTransition(); ({expandedHeight, expandedSize, dockStyle} = saved); },
+    };
   }
   g.__waifuChatUI = { init, deriveState, shouldSubmit };
 })(typeof window !== 'undefined' ? window : globalThis);

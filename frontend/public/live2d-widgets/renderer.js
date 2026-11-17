@@ -101,16 +101,18 @@
       if (!model || !app) return;
       const im = model.internalModel;
       if (!im || !im.width || !im.height) return;
-      // 等比缩放到画布内、居中。锚点归零后 position 即左上角，居中量手算——
-      // 不用 anchor.set(0.5,0.5)：那会让 pivot 随 internalModel 尺寸浮动，
-      // 换模型/换贴图后要重算，不如每次装填都显式摆一次。
-      const s = Math.min(app.screen.width / im.width, app.screen.height / im.height);
+      // Keep model scale/page coordinates in the original host frame; trim only empty letterboxing.
+      const host = document.getElementById('waifu');
+      const width = host?.clientWidth || 300, height = host?.clientHeight || 300;
+      const scale = Math.min(width / im.width, height / im.height);
+      const x = (width - im.width * scale) / 2;
+      const inset = Math.max(0, Math.floor(x));
+      host.style.setProperty('--waifu-canvas-inset', inset + 'px');
+      host.dataset.canvasInset = String(inset);
+      app.renderer.resize(width - inset, height);
       model.anchor.set(0, 0);
-      model.scale.set(s);
-      model.position.set(
-        (app.screen.width - im.width * s) / 2,
-        (app.screen.height - im.height * s) / 2
-      );
+      model.scale.set(scale);
+      model.position.set(x - inset, (height - im.height * scale) / 2);
     };
 
     const startPixi = async (canvas) => {
@@ -124,9 +126,7 @@
         backgroundAlpha: 0,          // 透明：页面底色透过来，与上游一致
         antialias: true,
         resolution: g.devicePixelRatio || 1,
-        // ★ autoDensity 必须是 false：置 true 会写内联 canvas.style.width/height，
-        //   内联样式压过 widget.css 的 `#live2d{width:300px;height:300px}`（ID 选择器也
-        //   赢不了内联），看板娘被拉成两倍大——而静态检查与单测都抓不到，只有真渲染才发现。
+        // CSS owns the cropped viewport; backing resolution must not override its size.
         autoDensity: false,
         // 拍照按钮要 canvas.toDataURL()：WebGL 默认不保留绘制缓冲，出了 rAF 就是空白图
         preserveDrawingBuffer: true,
@@ -164,7 +164,16 @@
         const canvas = document.getElementById('live2d');
         if (!canvas) return;
         let url = '';
-        try { url = canvas.toDataURL('image/png'); } catch (e) { return; }
+        try {
+          const inset = Number(document.getElementById('waifu')?.dataset.canvasInset) || 0;
+          if (inset > 0) {
+            const ratio = canvas.width / canvas.clientWidth;
+            const frame = document.createElement('canvas');
+            frame.width = Math.round(canvas.width + inset * ratio); frame.height = canvas.height;
+            frame.getContext('2d').drawImage(canvas, inset * ratio, 0);
+            url = frame.toDataURL('image/png');
+          } else url = canvas.toDataURL('image/png');
+        } catch (e) { return; }
         const a = document.createElement('a');
         a.style.display = 'none';
         a.href = url;

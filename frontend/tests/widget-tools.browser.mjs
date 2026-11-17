@@ -13,12 +13,23 @@ export async function assertWidgetTools(browser) {
   try {
     await page.goto('http://widget.test/');
     await page.addStyleTag({content: css});
+    await page.evaluate(() => {
+      const model = {internalModel: {width: 1728, height: 2304}, anchor: {set() {}},
+        scale: {set(value) {this.x = value}}, position: {set(x, y) {this.x = x; this.y = y}}};
+      window.PIXI = {Application: class {
+        constructor({view, width, height}) {
+          this.view = view; this.screen = {width, height}; this.stage = {addChild() {}};
+          this.renderer = {resize: (width, height) => {view.width = width; view.height = height; this.screen = {width, height}}, render() {}};
+        }
+      }, live2d: {Live2DModel: {from: async () => model}}};
+    });
     await page.addScriptTag({content: renderer});
     await page.evaluate(() => {
       window.__toolOpened = [];
       window.open = (...args) => { window.__toolOpened.push(args); return null; };
       window.__waifuRenderer().init();
     });
+    await page.waitForFunction(() => document.querySelector('#waifu')?.dataset.canvasInset === '37');
     const tools = page.locator('#waifu-tool button');
     await tools.last().waitFor();
     assert.deepEqual(await tools.evaluateAll(elements => elements.map(element => element.id)),
@@ -35,7 +46,22 @@ export async function assertWidgetTools(browser) {
       assert.ok(Math.abs(modelMiddle - toolMiddle) < 2, JSON.stringify(bounds));
       assert.ok(bounds.tools.top >= 0 && bounds.tools.bottom <= 900 && bounds.tools.right <= width, JSON.stringify(bounds));
     }
+    await page.evaluate(() => {
+      const button = document.createElement('button'); button.id = 'sidebar-action'; button.textContent = '后台入口';
+      button.style.cssText = 'position:fixed;left:0;bottom:80px;width:48px;height:140px';
+      button.onclick = () => window.__sidebarClicked = true; document.body.appendChild(button);
+    });
     await page.setViewportSize({width:1440,height:900});
+    const coordinates = await page.evaluate(() => {
+      const c = document.querySelector('#live2d'), m = window.__waifuModel;
+      return {canvas: c.getBoundingClientRect().left, model: m.position.x, scale: m.scale.x, host: document.querySelector('#waifu').getBoundingClientRect().left};
+    });
+    assert.equal(coordinates.host, 15, 'Mascot default anchor is unchanged');
+    assert.ok(Math.abs(coordinates.canvas + coordinates.model - 52.5) < .1, JSON.stringify(coordinates));
+    assert.equal(coordinates.scale, 300 / 2304, 'Cropping cannot change model scale');
+    await page.mouse.click(32, 730);
+    assert.equal(await page.evaluate(() => window.__sidebarClicked), true, 'Blank left side must pass clicks to dashboard');
+
     await page.locator('#waifu-tool-info').focus();
     assert.equal(await page.locator('#waifu-tool').evaluate(element => getComputedStyle(element).opacity), '1');
     await page.keyboard.press('Enter');
