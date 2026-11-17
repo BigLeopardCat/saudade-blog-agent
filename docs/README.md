@@ -37,6 +37,7 @@
 | [评测与观测](eval-observability.md) | 分层验证、真实模型、trace 与指标 |
 | [发布验收](release-acceptance.md) | 质量、安全、成本及证据要求 |
 | [离线改进](offline-improvement.md) | 反馈复核、独立验收集和候选比较 |
+| [教程截图](screenshots.md) | 图片来源、步骤对应、重拍与 Wiki 发布 |
 
 ## 文档归属
 
