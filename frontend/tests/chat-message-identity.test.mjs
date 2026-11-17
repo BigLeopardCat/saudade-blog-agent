@@ -67,3 +67,17 @@ test('two user turns of the same durable task retain independent recovery identi
     {...feedback,kind:'stopped'},original,
   ]);
 });
+
+
+test('user delivery is restored from server history while local pending input stays unconfirmed', () => {
+  const {mapDbItems,migrateItem}=globalThis.__waifuChatCore;
+  const rows=[{id:1,role:'user',content:'服务器已接收',turn_id:'turn_1'},
+    {id:2,role:'assistant',content:'回复',turn_id:'turn_1'}];
+  const items=mapDbItems(rows,()=>undefined);
+  assert.equal(items[0].delivery,'read');assert.equal(items[1].delivery,undefined);
+  for(const delivery of ['pending','unknown','read']) {
+    assert.equal(migrateItem({type:'user',text:'本地输入',delivery}).delivery,delivery);
+  }
+  assert.equal(migrateItem({type:'user',text:'仅本地缓存'}).delivery,undefined);
+  assert.equal(migrateItem({type:'user',text:'不可信状态',delivery:'accepted'}).delivery,undefined);
+});
