@@ -1531,7 +1531,11 @@ try {
   });
   await send('准备维护公告，先让我确认正文。','confirmation-doc');
   await page.getByRole('button',{name:'确认发布',exact:true}).waitFor({state:'visible'});
-  await page.locator('#chat-messages').evaluate(node=>{node.scrollTop=0;});
+  await page.locator('#chat-ask').scrollIntoViewIfNeeded();
+  const cardActions=await page.locator('#chat-ask-btns').boundingBox();
+  const readingArea=await page.locator('#chat-messages').boundingBox();
+  assert.ok(cardActions.y >= readingArea.y && cardActions.y + cardActions.height <= readingArea.y + readingArea.height,
+    'Tutorial approval buttons must be completely visible');
   await page.evaluate(async()=>{await document.fonts.ready;});
   await page.locator('#waifu-chat').screenshot({path:path.join(output,'wiki-announcement-confirmation.png'),animations:'disabled'});
 
