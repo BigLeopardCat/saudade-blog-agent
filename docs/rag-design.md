@@ -133,6 +133,43 @@ langchain-classic 只提供此 retriever，不装配第二套运行时。
 RRF 是相对排名，不是相关性置信度。启用前比较固定语料上的命中、噪声、证据获取、
 回答支持度与延迟/成本；文章篇数不能单独证明收益。
 
+## 检索与全文总结的选择
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant Agent as Agent 工具接入
+    participant Index as RAG 索引
+    participant Host as 公开文档接口
+    participant Summary as 有界摘要链
+    participant Model as 主模型
+    User->>Agent: 提问或要求总结指定文章
+    alt 局部问题或跨文章找线索
+        Agent->>Index: 词法或混合检索候选
+        Agent->>Host: 核对候选当前公开性与修订
+        Host-->>Agent: 可用原文片段与准确坐标
+        Agent->>Model: 仅交付经过核验的证据
+    else 指定文章的全文总结
+        loop 从文首按同一修订连续读取
+            Agent->>Host: 原文页与版本绑定的续读坐标
+            Host-->>Agent: 正文、nextOffset、totalChars、修订
+        end
+        Agent->>Agent: 检查从 0 到全文末尾无缺口
+        alt 完整原文可直接交付
+            Agent->>Model: 完整原文与来源
+        else 材料需有界汇总
+            Agent->>Summary: 按原文顺序处理全部内容
+            Summary-->>Agent: 派生摘要与覆盖记录
+            Agent->>Model: 派生摘要、来源与范围
+        end
+    end
+    Model-->>User: 回答并标明来源与限制
+```
+
+局部检索命中不证明全文覆盖。全文路径在读取版本变化、缺页、预算不足、取消或摘要失败时
+明确未完成，不把已有局部材料冒充全文。覆盖校验只证明原文进入处理链，不证明模型摘要
+语义忠实；有界汇总也不表示主模型在同一请求里看到了全部原始正文。实现细节见下一节。
+
 ## 6. 正文、小节和范围
 
 已知文章内的局部问题可以用 `rag_search(article_id=...)` 获取经核验的正文片段；

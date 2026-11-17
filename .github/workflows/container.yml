@@ -47,6 +47,7 @@ jobs:
           import hashlib, json, os, tomllib
           from pathlib import Path
           root = Path('release-assets')
+          (root / '.gitignore').unlink(missing_ok=True)
           version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
           data = {'schema_version': 1, 'version': version, 'source_revision': os.environ['GITHUB_SHA'],
                   'python': 'CPython 3.12+', 'dependencies': 'requirements.txt contains locked production versions and hashes',

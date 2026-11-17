@@ -24,6 +24,38 @@ flowchart LR
 5. 用户批准后，确定性代码重新校验目标并通过执行账防重复调用。模型可以叙述真实结果，不能自行宣布写入成功。
 6. 完整轮次提交至会话状态；SSE 交付进度、正文和结构化卡片。HTTP 断开不等于远端模型或业务请求已经停止。
 
+## 一次聊天的时序
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant UI as 看板娘面板
+    participant Host as Rust 宿主
+    participant API as Agent API
+    participant Runtime as 共享运行时
+    participant Model as 模型与工具循环
+    participant Store as PostgreSQL checkpoint
+    User->>UI: 提交问题或任务
+    UI->>Host: 已登录聊天请求与会话坐标
+    Host->>Host: 验证当前登录态与会话归属
+    Host->>API: 短期身份断言与受限页面观察
+    API->>API: 验签并取得会话执行许可
+    API->>Runtime: 产品配置、可信身份与任务预算
+    Runtime->>Store: 加载或建立执行状态
+    Runtime->>Model: 框架循环与当前可见工具
+    loop 按任务需要查询或准备操作
+        Model->>Runtime: 工具调用
+        Runtime->>Runtime: 参数、权限、预算与取消检查
+        Runtime-->>Model: 结果、证据或明确错误
+    end
+    Runtime->>Store: 保存执行状态或持久暂停
+    Runtime-->>UI: 经宿主转发的 SSE 正文、进度或卡片
+```
+
+这是逻辑时序，不表示所有结果都等到最后才流式发送。领域发现按当前身份投影目录，
+再按需加载工具 schema，不要求另起一个意图分类模型。确认写入和浏览器回报有各自的
+暂停/接续边界，详见[身份与写入](identity-and-permissions.md)和[聊天协议](chat-stream-protocol.md)。
+
 ## 代码导航
 
 | 目录 | 职责 |
