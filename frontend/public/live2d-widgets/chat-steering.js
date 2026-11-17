@@ -63,7 +63,7 @@
       }
       const id = 'd' + entry.message_id;
       if (!ctx.state.items.some(x => x.id === id)) {
-        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts, parent_turn_id: entry.turn_id });
+        const item = ctx.core.migrateItem({ id, type: 'user', text: entry.text, time: entry.ts, parent_turn_id: entry.turn_id, delivery: 'read' });
         ctx.state.items = ctx.core.mergeItems(ctx.state.items, [item]);
         const element = engine.appendMsg(item);
         const live = ctx.state.live[ctx.state.activeRound?.roundId]?.el;

@@ -19,6 +19,7 @@
       id: (it && it.id) || genId(),
       type: (it && it.type) || 'agent',
       text: (it && it.text) || '',
+      ...(['pending', 'read', 'unknown'].includes(it?.delivery) ? {delivery: it.delivery} : {}),
       turn_id: it?.turn_id || undefined,
       parent_turn_id: it?.parent_turn_id || undefined,
       time: (it && it.time) || 0,
@@ -32,6 +33,7 @@
     const dbRowToItem = (row) => ({
       id: 'd' + row.id,
       type: row.role === 'user' ? 'user' : 'agent',
+      ...(row.role === 'user' ? {delivery: 'read'} : {}),
       text: row.content,
       turn_id: row.turn_id || undefined,
       parent_turn_id: row.parent_turn_id || undefined,
