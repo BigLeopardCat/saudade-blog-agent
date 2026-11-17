@@ -100,8 +100,9 @@ def test_chat_only_identity_keeps_the_same_fact_policy_as_tool_enabled_users():
     policies = [text.split('事实与叙述：', 1)[1].split('\n输出格式：', 1)[0]
                 for text in messages]
     assert len(set(policies)) == 1
-    assert '没有读取不声称查过' in policies[0]
-    assert 'sent只表示指令已发送' in policies[0]
+    assert '未读不称已查' in policies[0]
+    assert 'sent仅发送' in policies[0]
+    assert '回执才算完成' in policies[0]
     assert '后续安排' in policies[0]
     assert '不提供任何站内读取、页面操作或业务变更工具' in messages[-1]
     assert '本轮已提供的资料与展示能力仍可直接使用' in messages[-1]
