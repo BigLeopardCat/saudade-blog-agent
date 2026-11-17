@@ -59,7 +59,7 @@ wheel 不包含 systemd 发布脚本和博客服务。容器快速安装包由�
 
 本仓根目录的 `Dockerfile` 构建 Python 3.12、锁定生产依赖的 Agent 镜像，以 UID/GID `10002:10002` 运行，入口 `agent.main:app`，内部端口 8010。完整提交通过构建参数 `REVISION` 写入 `DEPLOY_SHA`，供 `/version` 核对；凭据和 `.env` 不进入镜像。容器 CI 检查无网络、无凭据时的导入和镜像用户。
 
-完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
+完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。 scheduler 的 Compose 健康检查在 DBOS 初始化及队列注册完成后检查进程标记；它证明启动与进程存活，不证明数据库持续可用或任务处理时延。探针不调用模型和博客接口，原生 systemd worker 不启用容器标记。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
 
 容器网络中配置 `BLOG_INTERNAL_API_BASE=http://backend:3000/api/public` 供服务器请求，`BLOG_API_BASE=https://blog.example.com/api/public` 仍决定公开导航。已有原生部署不填写内部覆盖值时维持原行为。只读根文件系统、运行凭据和卷由宿主编排负责，不在镜像启动时执行全量升级或覆盖配置。
 

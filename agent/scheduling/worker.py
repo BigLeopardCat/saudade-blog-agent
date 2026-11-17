@@ -1,5 +1,6 @@
 """Run with python -m agent.scheduling.worker, independently of the HTTP workers."""
 
+import os
 import signal
 from contextlib import ExitStack
 from datetime import datetime
@@ -21,6 +22,7 @@ from agent.scheduling.backend import (
 from agent.scheduling.factory import configured_dsn
 from agent.scheduling.host import BlogHost, HostOutcomeUnverified
 from agent.scheduling.models import Definition, utc_now
+from agent.scheduling.readiness import READY_FILE, ready
 from agent.scheduling.readonly import ReadOnlyRunner
 from config.settings import settings
 from utils.logging import setup_logging
@@ -139,7 +141,9 @@ def main():
             DBOS.register_queue(CONTROL_QUEUE, worker_concurrency=100)
             DBOS.register_queue(EXECUTION_QUEUE, worker_concurrency=1, global_concurrency=1)
             DBOS.register_queue(REMINDER_QUEUE, worker_concurrency=2, global_concurrency=2)
-            stop.wait()
+            marker = READY_FILE if os.environ.get("SCHEDULER_CONTAINER_READINESS") == "1" else None
+            with ready(marker):
+                stop.wait()
         finally:
             # Stop is cooperative; allow the bounded model request to leave its checkpoint
             # before closing resources. Pending durable timers resume on the next worker.

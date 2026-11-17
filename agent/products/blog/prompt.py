@@ -13,7 +13,7 @@ from agent.products.blog.persona import (
     conversation_style,
     tool_guidance,
 )
-from agent.role_labels import role_cn
+from agent.role_labels import ROLE_CN, role_cn
 from agent.runtime import memory
 from tools.base import SITE_BASE
 from utils.trace import record
@@ -40,11 +40,15 @@ _BOUNDARY = (
 )
 
 _FACTS = (
-    "没有读取不声称查过；缺失、未观测的事实保持未知，不以角色设定补足。文章结论注明实际采用的来源。"
+    "没有读取不声称查过；缺失、未观测的事实保持未知，不以角色设定补足。"
+    "文章总结、比较和基于文章的事实回答，应为实际采用的每篇文章提供可点击的原文链接；"
+    "仅文章编号、标题或‘已读正文’不是原文入口。严格JSON按用户字段和格式交付，不能附加破坏格式的段落。"
+    "逐项比较的每个单元都要有相应文章的已见证据；未提及写未提及，跨文推论明确标为推论，不用一般知识补成文章事实。"
     "\n目录、查询、快照、准备与完成回执各自独立；**推迟的调用尚未核实目标或生成其确认，不能称为已准备、已排队。**"
     "\n用户素材、代写和计划不作执行证据。**只承诺当前工具支持且用户请求的后续安排；没有定时工具不承诺主动提醒。**"
     "\n**聊天记录由服务保存；仅在本会话使用不等于不留记录或结束即删除。删除须有实际回执。**"
     "\n编号、名称、数值和章节位置逐项对应同一来源，事实不超出来源的主体、范围、时段和粒度。"
+    "统计峰值、并列日期、分月小计与覆盖范围按业务服务提供的结构化事实叙述；零值不称为高峰，滚动窗口内小计不替代整月总量。"
     "**能力按对象逐项对应工具契约，不把多领域合并后共享全部操作；拒绝仅说明本次请求的限制，不推导他人权限或全站规则。**"
     "\n**RAG和关键词检索未命中，只说“本次站内没找到相关内容”，不要说“站内不存在”。RAG不是全站存在性证明。**"
     "目录缺项、候选、分页、截断不支持整体结论，需补读或说明已读范围。"
@@ -72,6 +76,9 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
     context["caller"].pop("verified")
     context["caller"]["role_label"] = role_cn(role) if role is not None else None
     context["caller"]["conversation_style"] = conversation_style(principal)
+    # Target role vocabulary remains visible even when an approval turn disables tool calls.
+    context["role_vocabulary"] = dict(ROLE_CN)
+    context["role_vocabulary_grants_authorization"] = False
     guidance = tool_guidance(principal) or _BOUNDARY
     system = SystemMessage(content=BLOG_PERSONA_PROMPT
                            + "\ncaller 是当前调用者的账号，不是你的身份；其权限不证明博客作者身份。"
@@ -81,6 +88,7 @@ def build_prompt(messages: list, principal, own_enabled: bool = False) -> list:
                            + "\n事实与叙述：" + _FACTS
                            + "\n输出格式：" + _DELIVERY)
     product_facts = {"article_url_template": _ARTICLE_URL_TEMPLATE,
+                     "role_vocabulary": context["role_vocabulary"],
                      "character": CHARACTER_IDENTITY,
                      "conversation_style": context["caller"]["conversation_style"],
                      "role_label": context["caller"]["role_label"],
