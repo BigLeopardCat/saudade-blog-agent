@@ -2,10 +2,11 @@
 
 import os
 import stat
+import tempfile
 from contextlib import contextmanager
 from pathlib import Path
 
-READY_FILE = Path("/tmp/saudade-scheduler.ready")
+READY_FILE = Path(tempfile.gettempdir()) / f"saudade-scheduler-{os.geteuid()}.ready"
 
 
 @contextmanager
