@@ -41,6 +41,7 @@ export async function assertWidgetTools(browser) {
         const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return {top:r.top,bottom:r.bottom,left:r.left,right:r.right}; };
         return {model:rect('#waifu-canvas'), tools:rect('#waifu-tool')};
       });
+      assert.ok(Math.abs(bounds.model.bottom - 900) < 1, 'Default mascot canvas rests at the viewport bottom: ' + JSON.stringify(bounds));
       const modelMiddle = (bounds.model.top + bounds.model.bottom) / 2;
       const toolMiddle = (bounds.tools.top + bounds.tools.bottom) / 2;
       assert.ok(Math.abs(modelMiddle - toolMiddle) < 2, JSON.stringify(bounds));

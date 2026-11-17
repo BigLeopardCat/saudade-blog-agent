@@ -35,7 +35,7 @@
     height: 300px;
     width: 300px;
     pointer-events: none;
-    transform: translateY(-15px);
+    transform: none;
     transition: transform .3s ease-in-out, bottom .8s ease-in-out;
     z-index: var(--z-agent, 1000);
     /* 字号自包含：宿主页面 body 字号不接管看板娘 UI（device-console body 14px
@@ -62,9 +62,7 @@
 }
 
 #waifu:hover {
-    /* 与基态**同值** = 刻意的「hover 不抬升」（看板娘这一块贴着视口下缘，抬一下
-       反而像在抖）。改上面那条 transform 时这里一起改，否则鼠标一移上去就跳。 */
-    transform: translateY(-15px);
+    transform: none;
 }
 
 #waifu-tips {
