@@ -10,7 +10,7 @@ const version='a'.repeat(64);
 const row={kind:'task',id:'run_1',conversationId:42,version,reported:false};
 afterEach(()=>mock.restoreAll());
 function scenario(data={unread:1,conversations:[{id:42,unread:1}],items:[row]}) {
-  let token='owner', now=1000, readError=0, readHold=null, pulls=0;
+  let token='owner', now=1000, readError=0, readHold=null, pulls=0, historyAvailable=true;
   const requests=[],sends=[],toggles=[],nodes=[];
   mock.method(Date,'now',()=>now);
   const badge={hidden:true,setAttribute(){}};
@@ -36,7 +36,9 @@ function scenario(data={unread:1,conversations:[{id:42,unread:1}],items:[row]}) 
     }
     return {ok:true,status:200,json:async()=>({code:200,data})};
   };
-  const inbox=createCompletionInbox(ctx,async options=>{sends.push(options);return true;}, {pullHistory:async()=>{pulls++;}});
+  const inbox=createCompletionInbox(ctx,async options=>{sends.push(options);return true;}, {
+    pullHistory:async()=>{pulls++;return historyAvailable;},
+  });
   const show=async(event=row,{bottom=90,finished=true}={})=>{
     const turn=await completionTurnId(event.kind,event.id,event.version);
     const item=core.migrateItem(core.dbRowToItem({id:nodes.length+1,role:'assistant',turn_id:turn,content:'完成报告',time:1}));
@@ -46,6 +48,7 @@ function scenario(data={unread:1,conversations:[{id:42,unread:1}],items:[row]}) 
   };
   return {ctx,badge,requests,sends,toggles,inbox,show,pulls:()=>pulls,logout:()=>{token='';},
     advance:(ms=601)=>{now+=ms;}, snapshot:value=>{data=value;},error:status=>{readError=status;},hold:value=>{readHold=value;},
+    historyAvailable:value=>{historyAvailable=value;},
     read:async()=>{await inbox.tick();now+=601;await inbox.tick();}};
 }
 const reported=(items=[row],conversations=[{id:42,unread:items.length}])=>({unread:conversations.reduce((n,c)=>n+c.unread,0),conversations,items:items.map(r=>({...r,reported:true}))});
@@ -90,6 +93,15 @@ test('an HTTP failure preserves unread and retries the same exact report',async(
   const f=scenario(reported());await f.show();await f.inbox.tick();f.advance();f.error(503);
   await assert.rejects(f.inbox.tick(),/completion_http_503/);assert.equal(f.badge.hidden,false);
   f.error(0);f.advance(5001);await f.inbox.tick();assert.equal(f.badge.hidden,true);
+});
+test('a history fallback retries the unchanged report after backoff',async()=>{
+  const f=scenario(reported());f.historyAvailable(false);
+  await f.inbox.tick();await f.inbox.tick();
+  assert.equal(f.pulls(),1);assert.equal(f.badge.hidden,false);
+  f.historyAvailable(true);f.advance(5001);await f.inbox.tick();
+  assert.equal(f.pulls(),2);
+  await f.show();await f.read();
+  assert.equal(f.badge.hidden,true);
 });
 test('a new version arriving during the read receipt remains unread',async()=>{
   const f=scenario(reported());await f.show();await f.inbox.tick();f.advance();
