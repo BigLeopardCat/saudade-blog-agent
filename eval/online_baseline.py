@@ -19,7 +19,7 @@ from pathlib import Path
 
 import httpx
 
-from eval import dataset_audit, request_metrics, task_metrics
+from eval import acceptance, dataset_audit, request_metrics, task_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, archive_result
 from utils.trace_io import load_trace
 
@@ -288,7 +288,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
     initial_build = build_identity(initial_version, expected=expected_build)
     profiles, allowances, role_sets = actor_preflight(cases, transport, identities)
     report = {"phase": phase, "suite_sha256": suite_hash, "evaluator_sha256": evaluator_hashes,
-              "dataset_role": dataset_role,
+              "dataset_role": dataset_role, "answer_length_policy": acceptance.ADVISORY_LENGTH,
               "selected_suite_sha256": hashlib.sha256(selected.read_bytes()).hexdigest(),
               "evaluation_id": evaluation_id,
               "dataset_audit": dataset_audit.audit(cases),

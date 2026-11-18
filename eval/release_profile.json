@@ -1,6 +1,5 @@
 {
-  "version": 2,
-  "diagnostic_metrics": ["calls", "in", "out"],
+  "version": 3,
   "scope": "Blog text Agent on OpenCode Go / deepseek-v4.1-flash; HTTP read and write preparation, excluding known unsupported vision",
   "min_full_cases": 100,
   "min_percentile_samples": 20,

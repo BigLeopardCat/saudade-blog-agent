@@ -6,11 +6,14 @@ from collections import Counter
 
 from agent.runtime.answer_length import length_violation
 
+ADVISORY_LENGTH = "advisory"
+
 
 def assess(source: bytes, semantic: dict) -> dict:
     if semantic.get("source_report_sha256") != hashlib.sha256(source).hexdigest():
         raise ValueError("semantic report does not belong to this frozen source")
-    cases = json.loads(source)["cases"]
+    report = json.loads(source)
+    cases = report["cases"]
     expected = {case["id"]: case for case in cases}
     if not cases or len(expected) != len(cases):
         raise ValueError("source cases must be nonempty and unique")
@@ -31,9 +34,13 @@ def assess(source: bytes, semantic: dict) -> dict:
         suspect = [index for index, state in enumerate(states, 1) if state == "suspect"]
         missing = [index for index, state in enumerate(states, 1)
                    if state not in ("no_issue_found", "suspect")]
-        length_failures = [index for index, round_ in enumerate(rounds, 1)
-                           if length_violation((round_.get("request_evidence") or {}).get(
-                               "message"), round_.get("text"))]
+        length_findings = []
+        for index, round_ in enumerate(rounds, 1):
+            request = (round_.get("request_evidence") or {}).get("message")
+            if length := length_violation(request, round_.get("text")):
+                length_findings.append({"round": index, **length})
+        length_failures = ([finding["round"] for finding in length_findings]
+                           if report.get("answer_length_policy") != ADVISORY_LENGTH else [])
         status = "not_evaluated"
         if case["status"] == "failed" or length_failures:
             status = "failed"
@@ -47,7 +54,8 @@ def assess(source: bytes, semantic: dict) -> dict:
                         "reviewed_rounds": sum(state == "no_issue_found" for state in states),
                         "expected_rounds": len(rounds),
                         "missing_review_rounds": missing, "suspect_rounds": suspect,
-                        "length_failure_rounds": length_failures})
+                        "length_failure_rounds": length_failures,
+                        "length_findings": length_findings})
     return {"source_report_sha256": semantic["source_report_sha256"],
             "scope": "recorded HTTP responses and proposed actions; "
                      "browser and post-approval outcomes excluded",

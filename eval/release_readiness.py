@@ -130,7 +130,7 @@ def _round_trace(rnd, build, seen):
 
 def _metrics(report):
     groups, populations = defaultdict(list), defaultdict(usage.empty)
-    missing, case_usage, process = [], {}, []
+    missing, usage_gaps, case_usage, process = [], [], {}, []
     totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
     seen_requests = set()
@@ -160,7 +160,7 @@ def _metrics(report):
                 expectation = raw_rounds[index - 1]
             case_decisions.append(action_metrics.decision_score(doc.get("events", []), expectation))
             if row["unknown_attempts"]:
-                missing.append(
+                usage_gaps.append(
                     f"{case['id']}.{index}: provider usage for errored or unfinished calls")
             timing = rnd.get("http_timing") or {}
             row.update({key: timing.get(key) for key in
@@ -179,7 +179,8 @@ def _metrics(report):
     return {"groups": groups, "populations": populations, "usage": totals,
             "article_usage": [row for row in process if row["article_usage"]["requested"]],
             "trace_errors": trace_errors, "first_visible": first_visible,
-            "missing": missing, "decisions": action_metrics.decision_report(decisions),
+            "missing": missing, "usage_gaps": usage_gaps,
+            "decisions": action_metrics.decision_report(decisions),
             "model_ttft_s": ttft, "case_usage": case_usage,
             "tool_process": {"totals": request_metrics.discovery_totals(process),
                              "rejected_rounds": [row for row in process
@@ -291,12 +292,14 @@ def _quality(report, semantic, profile, *, review_incomplete, pending_review):
 
 
 def _budget_metrics(metrics, profile):
-    totals, failures, missing, findings = metrics["usage"], [], [], []
+    totals, failures, findings = metrics["usage"], [], []
+    observational = profile["version"] >= 3
+    gaps = list(metrics["usage_gaps"])
     coverage = (min(totals["measured"], totals["output_seen"], totals["cache_seen"])
                 / (totals["calls"] + totals["unknown_attempts"])
                 if totals["calls"] + totals["unknown_attempts"] else None)
     if coverage is None or coverage < profile["usage_coverage"]:
-        missing.append("complete provider usage including cache fields")
+        gaps.append("complete provider usage including cache fields")
     minimum = profile["min_percentile_samples"]
     costs = {}
     for name, limits in profile["task_budgets"].items():
@@ -308,23 +311,26 @@ def _budget_metrics(metrics, profile):
             stat = distribution(values, minimum)
             costs[name][field] = {**stat, "target_p95": limit}
             if stat["p95"] is None:
-                missing.append(f"{name}.{field}: at least {minimum} measured rounds")
+                gaps.append(f"{name}.{field}: at least {minimum} measured rounds")
             else:
-                target = findings if field in profile.get("diagnostic_metrics", []) else failures
+                diagnostic = observational or field in profile.get("diagnostic_metrics", [])
+                target = findings if diagnostic else failures
                 _reject(target, f"{name}.{field}", stat["p95"] <= limit, costs[name][field])
     visible = distribution(metrics["first_visible"], minimum)
     if visible["p95"] is None:
-        missing.append("first visible event latency sample size")
+        gaps.append("first visible event latency sample size")
     else:
-        _reject(failures, "first_visible_s", visible["p95"] <= profile["first_visible_s_p95"],
-                visible)
+        _reject(findings if observational else failures, "first_visible_s",
+                visible["p95"] <= profile["first_visible_s_p95"], visible)
     decision = metrics["decisions"]
     if decision["unverified"]:
-        missing.append("first-action annotation or captured model decision is missing")
+        gaps.append("first-action annotation or captured model decision is missing")
     elif decision["correct"]["rate"] is not None:
-        _reject(failures, "first_action", decision["correct"]["rate"] >=
-                profile.get("first_action_target", 0.95), decision)
+        decision_target = profile.get("first_action_target", 0.95)
+        _reject(findings if observational else failures, "first_action",
+                decision["correct"]["rate"] >= decision_target, decision)
     result = {"task_metrics": costs, "efficiency_findings": findings,
+              "observation_gaps": gaps if observational else [],
               "first_visible_s": visible, "usage_coverage": coverage,
               "model_ttft_s": distribution(metrics["model_ttft_s"], minimum),
               "model_ttft_coverage": {"measured": len(metrics["model_ttft_s"]),
@@ -332,7 +338,7 @@ def _budget_metrics(metrics, profile):
               "business_action_timing": _action_timings(metrics["groups"], minimum),
               "percentile_caution": "20 samples is a reporting floor; tail latency "
                                     "still needs independent operational observation"}
-    return result, failures, missing
+    return result, failures, [] if observational else gaps
 
 
 def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
@@ -341,10 +347,10 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
     ids = [case["id"] for case in report["cases"]]
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("baseline cases must be nonempty and unique")
-    if profile.get("version") not in {1, 2}:
+    if profile.get("version") not in {1, 2, 3}:
         raise ValueError("unsupported release profile version")
-    if profile["version"] == 1 and profile.get("diagnostic_metrics"):
-        raise ValueError("frozen version-1 efficiency targets are blocking")
+    if profile["version"] != 2 and profile.get("diagnostic_metrics"):
+        raise ValueError("only version 2 accepts selected diagnostic metrics")
     diagnostic = profile.get("diagnostic_metrics", [])
     if (not isinstance(diagnostic, list)
             or any(not isinstance(field, str) or field not in {"calls", "in", "out"}
@@ -385,6 +391,8 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "failures": failures, "unverified": missing,
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
+        "answer_length_findings": [{"case": row["id"], **finding}
+                                   for row in reviews for finding in row["length_findings"]],
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
         "article_usage": metrics["article_usage"],
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),

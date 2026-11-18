@@ -30,9 +30,10 @@ def recorded(tmp_path, *, trace_extra=None, text="通知正文", **result_extra)
     return {"id": "notice", "status": "passed", "result": {"rounds": [result]}}
 
 
-def run(tmp_path, case, model):
+def run(tmp_path, case, model, **report_fields):
     path = tmp_path / "report.json"
-    path.write_text(json.dumps({"cases": [case], "service_version": {"sha": "fixture"}}))
+    path.write_text(json.dumps({"cases": [case], "service_version": {"sha": "fixture"},
+                                **report_fields}))
     before = path.read_bytes()
     result = online_judge.review(path, tmp_path / "semantic", model)
     assert path.read_bytes() == before
@@ -68,6 +69,17 @@ def test_overlength_reply_never_reaches_the_semantic_judge(tmp_path, monkeypatch
     row = result["rows"][0]
     assert row["status"] == "suspect"
     assert row["deterministic_findings"] == [
+        {"kind": "answer_length", "limit": 3, "actual": 4}]
+
+
+def test_advisory_overage_preserves_semantic_review_and_measured_length(tmp_path):
+    case = recorded(tmp_path, text="一二三四", trace_extra={
+        "input": {"message": "请用3字以内回答。", "principal_role": "user"}})
+    model = Model({"unsupported": [], "answered": True, "verdict": "ok", "reason": "内容齐备"})
+    report = run(tmp_path, case, model, answer_length_policy="advisory")
+    assert len(model.messages) == 1
+    assert report["rows"][0]["status"] == "no_issue_found"
+    assert report["rows"][0]["deterministic_findings"] == [
         {"kind": "answer_length", "limit": 3, "actual": 4}]
 
 

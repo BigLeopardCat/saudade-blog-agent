@@ -33,7 +33,6 @@ from agent.runtime.tool_execution import append_result
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from models.errors import error_fields
-from models.llm import text_only_options
 from utils.trace import record
 
 
@@ -230,15 +229,8 @@ class SessionMiddleware(AgentMiddleware):
         extra_inputs = input_additions(session, request.state)
         if extra_inputs:
             request = request.override(messages=[*request.messages, *extra_inputs])
-        length_correction = bool(request.messages
-                                 and response_validation.length_feedback(request.messages[-1]))
         limit = session.state["answer_character_limit"]
-        correction = (response_validation.correction_prompt(
-            request.messages, request.state.get("context_anchor"), limit)
-            if length_correction and len(request.messages) >= 2 else None)
-        if correction:
-            request = request.override(system_message=correction[0], messages=correction[1])
-        elif limit is not None and request.system_message is not None:
+        if limit is not None and request.system_message is not None:
             request = request.override(system_message=response_validation.length_instruction(
                 request.system_message, limit))
         session.framework_state = {**request.state, "messages": list(request.messages)}
@@ -255,7 +247,7 @@ class SessionMiddleware(AgentMiddleware):
         selected_model = _model_name(model)
         reviewing = bool(session.outcome and (
             session.outcome.execution or {}).get("pending_confirm"))
-        menu = [] if length_correction else session.menu
+        menu = session.menu
         trace_context.tools(menu, session.traced_contracts)
         started, response, invoked = time.monotonic(), None, False
         error = None
@@ -264,11 +256,9 @@ class SessionMiddleware(AgentMiddleware):
             row.get("background_work") for row in session.receipts)
         tool_choice = ("none" if reviewing or background else "auto") if menu else None
         options = {**request.model_settings, **model_options(settings.llm_timeout)}
-        if length_correction:
-            options = text_only_options(model, options)
         if session.output_budget is not None:
             output_limit, selection = session.output_budget.select(
-                session, request, prompt, concise=reviewing or background or length_correction)
+                session, request, prompt, concise=reviewing or background)
             key = "max_completion_tokens" if "max_completion_tokens" in options else "max_tokens"
             options[key] = output_limit
             record("native", "output_budget", round=session._round_index, **selection)
@@ -340,14 +330,6 @@ class SessionMiddleware(AgentMiddleware):
         if repair:
             session._round_index += 1
             return {**capture(session), "messages": repair, "jump_to": "model"}
-        repair_length, blocked = response_validation.enforce_length(
-            session, response, state["messages"][-2] if len(state["messages"]) > 1 else None)
-        if blocked is not None:
-            session.outcome = blocked
-            return {**capture(session), "jump_to": "end"}
-        if repair_length is not None:
-            session._round_index += 1
-            return {**capture(session), "messages": [repair_length], "jump_to": "model"}
         calls, outcome = session._validate_response(response)
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]
