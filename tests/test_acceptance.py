@@ -39,6 +39,16 @@ def test_judge_cannot_overturn_deterministic_failure_or_missing_evidence(origina
     assert assess(body, semantic(body, ["no_issue_found"] * 2))["counts"] == {expected: 1}
 
 
+def test_historical_judge_pass_cannot_override_the_recorded_character_limit():
+    report = json.loads(source(turns=1))
+    report["cases"][0]["result"]["rounds"][0] = {
+        "request_evidence": {"message": "请用3字以内回答。"}, "text": "**一二三四**"}
+    body = json.dumps(report).encode()
+    result = assess(body, semantic(body, ["no_issue_found"]))
+    assert result["counts"] == {"failed": 1}
+    assert result["cases"][0]["length_failure_rounds"] == [1]
+
+
 def test_deterministic_failure_keeps_unresolved_rounds_visible():
     body = source(status="failed", turns=3)
     result = assess(body, semantic(body, ["no_issue_found", "suspect"]))
