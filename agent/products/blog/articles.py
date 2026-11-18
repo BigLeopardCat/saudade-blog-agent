@@ -2,13 +2,14 @@
 
 from dataclasses import replace
 
-from langchain.agents.middleware import AgentMiddleware, AgentState
+from langchain.agents.middleware import AgentMiddleware, AgentState, ExtendedModelResponse
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.article_context import source_references
 from agent.runtime.message_content import text_content
+from agent.runtime.response_validation import incomplete_response
 from agent.runtime.tool_context import current_observation
 from agent.runtime.tool_execution import result_limit
 from rag.reading import (
@@ -190,9 +191,11 @@ class ArticleMiddleware(AgentMiddleware):
             request.messages, round_index=getattr(self.session, "_round_index", None)))
         result = handler(request)
         response = result.result[-1]
-        if response.tool_calls or response.invalid_tool_calls:
+        if response.tool_calls or incomplete_response(response):
             return result
         reply = text_content(response.content)
+        if not reply.strip():
+            return result
         evidence = self.evidence
         if self._has_evidence():
             record("native", "article_evidence", provenance=evidence.provenance(SITE_BASE))
@@ -207,5 +210,10 @@ class ArticleMiddleware(AgentMiddleware):
                      "答复中的部分文章引用无法核实，本轮暂时无法提供可靠来源。"
                      if issue == "unread_article_reference" else
                      "暂时无法核实文章正文，不能据此回答文章内容。请重新指定要阅读的文章。")
-        return replace(result, result=[*result.result[:-1], response.model_copy(
+        result = replace(result, result=[*result.result[:-1], response.model_copy(
             update={"content": reply})])
+        if issue and not request.state.get("proposal"):
+            stopped = self.session.blocked_result(reply, issue)
+            return ExtendedModelResponse(model_response=result, command=Command(update={
+                "terminal": {"reply": stopped.reply, "execution": stopped.execution}}))
+        return result

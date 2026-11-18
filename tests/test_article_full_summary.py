@@ -440,8 +440,42 @@ def test_native_tool_loop_recovers_after_truncated_summary_by_reading_the_whole_
     assert len(model.prompts) == 4 and len(summarizer.prompts) == 1
 
 
-@pytest.mark.parametrize("failed", [False, True])
-def test_toolnode_workflow_delivers_only_a_complete_summary_or_explicit_failure(source, failed):
+@pytest.mark.parametrize("old_range", ["previous_revision", "previous_parser", "missing_parser"])
+def test_old_complete_read_cannot_clear_a_current_summary_failure(source, old_range):
+    state, _ = source
+    evidence = ArticleEvidence()
+    state["body"] = "旧版本的首段和末段材料。" * 30
+
+    def read(selection):
+        args = {"article_id": ARTICLE, "selection": selection}
+        result = notes.get_article_detail.invoke(args)
+        assert result.kind == "ok"
+        evidence.observe("get_article_detail", args, result)
+        return result.data
+
+    original = read({"kind": "full_text"})
+    evidence.observe("get_article_detail", ARGS, unavailable("incomplete"))
+    saved = json.loads(json.dumps(evidence.snapshot()))
+    old = saved["read_ranges"][str(ARTICLE)][0]
+    if old_range == "previous_revision":
+        state["body"] = state["body"].replace("旧", "新")
+    elif old_range == "previous_parser":
+        old["section_schema"] = "older-parser"
+    else:
+        del old["section_schema"]
+    evidence = ArticleEvidence.restore(saved)
+    partial = read({"kind": "full_text", "max_chars": 50})
+    assert partial["totalChars"] == original["totalChars"]
+    assert evidence.issue("全文总结", "https://example.test") == "article_summary_incomplete"
+    read({"kind": "source_range", "offset": partial["nextOffset"],
+          "revision": partial["contentRevision"], "section_schema": partial["sectionSchema"]})
+    assert evidence.issue("全文总结", "https://example.test") is None
+
+
+@pytest.mark.parametrize("failed,finish", [(False, "stop"), (True, "stop"), (True, "length")])
+def test_toolnode_workflow_delivers_only_a_complete_summary_or_explicit_failure(
+    source, failed, finish
+):
     state, summarizer = source
     state["body"] = "全文材料。" * 9000
     if failed:
@@ -461,7 +495,8 @@ def test_toolnode_workflow_delivers_only_a_complete_summary_or_explicit_failure(
             if len(self.prompts) == 1:
                 return AIMessage(content="", tool_calls=[{
                     "name": "get_article_detail", "args": ARGS, "id": "summary-call"}])
-            return AIMessage(content="完整总结。[Source](/article/19)")
+            return AIMessage(content="完整总结。[Source](/article/19)",
+                             response_metadata={"finish_reason": finish})
 
     model = AgentModel()
     session = ToolSession(model, {}, {notes.get_article_detail.name: notes.get_article_detail},
@@ -472,10 +507,14 @@ def test_toolnode_workflow_delivers_only_a_complete_summary_or_explicit_failure(
     observation = read_observation({"name": "get_article_detail", "args": ARGS,
                                     "id": "summary-call"}, message)
     assert observation["operation"] == "summary" and observation["ranges"] == []
-    if failed:
+    if finish == "length":
+        assert (result.execution or {}).get("blocked") == [{"reason": "answer_truncated"}]
+    elif failed:
         assert "全文总结尚未完成" in result.reply and summarizer.prompts == []
         assert message.status == "error"
+        assert (result.execution or {}).get("blocked") == [{"reason": "article_summary_incomplete"}]
     else:
+        assert not (result.execution or {}).get("blocked")
         assert "全文材料。" not in message.content
         assert json.loads(message.content)["coverage"]["complete"]
         assert message.artifact["article_evidence"]["summaries"][ARTICLE]["coverage"]["complete"]

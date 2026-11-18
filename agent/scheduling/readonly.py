@@ -13,6 +13,7 @@ from agent.products.blog.catalog import initial_tools
 from agent.runtime.budget import BudgetLimits, TaskBudget
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
 from agent.runtime.control import RequestControl, request_scope
+from agent.runtime.results import turn_phase
 from agent.runtime.service import AgentRuntime
 from agent.runtime.task_scope import background_thread
 from config.settings import settings
@@ -30,16 +31,20 @@ class ReadOnlyBlogApplication(BlogApplication):
 
     def tools(self, config, snapshot, pending, saver, available):
         initial = self.catalog.initial_tools(True)
-        initial.pop("pause_task", None)
         domains = self.catalog.domains(config, can_prepare=False)
         domains.pop("devices", None)
-        for group in domains.values():
-            for name in ("navigate_page", "set_page_appearance", "get_chat_history"):
+        for group in (initial, *domains.values()):
+            for name in ("pause_task", "navigate_page", "set_page_appearance", "get_chat_history"):
                 group.pop(name, None)
+        domains = {name: group for name, group in domains.items() if group}
         return initial_tools(initial, domains), domains
 
 
 class ReadOnlyRunner:
+    @staticmethod
+    def _status(phase):
+        return "completed" if phase == "responded" else "incomplete"
+
     def __init__(self, resources, stop_event=None):
         self.stop_event = stop_event or Event()
         saver = checkpoint.build_checkpointer(
@@ -80,7 +85,7 @@ class ReadOnlyRunner:
             )
             if answer:
                 return {
-                    "status": "completed" if saved.last_outcome == "responded" else "incomplete",
+                    "status": self._status(saved.last_outcome),
                     "text": answer,
                     "thread_id": thread,
                     "reused": True,
@@ -116,16 +121,10 @@ class ReadOnlyRunner:
         try:
             with request_scope(control):
                 result = list(self.runtime.stream_events(state, config))[-1]
-            if (result.execution or {}).get("blocked"):
-                return {
-                    "status": "incomplete",
-                    "text": result.reply,
-                    "thread_id": thread,
-                    "trace_id": identifier,
-                    "spent": control.budget.spent(),
-                }
-            reason = "complete"
+            status = self._status(turn_phase(result))
+            reason = "complete" if status == "completed" else "incomplete"
             return {
+                "status": status,
                 "text": result.reply,
                 "thread_id": thread,
                 "trace_id": identifier,

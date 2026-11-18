@@ -103,14 +103,17 @@ class ToolSession:
         self.menu = [convert_to_openai_tool(tool) for tool in [*initial, *discovery, *loaded]]
 
     def _stop_turn(self, reason, **data):
-        if self.receipts:
-            record("native", "task_stopped", reason=reason, **data)
-            return self._result("工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。")
-        if self.calls_used:
-            record("native", "task_stopped", reason=reason, **data)
-            return self._result("本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。")
         record("native", "task_stopped", reason=reason, **data)
-        return self._result("本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。")
+        if self.receipts:
+            reply = "工具操作结果已保留；其余请求尚未完成，请继续指定要处理的事项。"
+        elif self.calls_used:
+            reply = "本轮查询已停止，暂时没能完成请求。请明确下一步要处理的事项。"
+        else:
+            reply = "本轮未能完成请求，没有执行未核实的操作。请补充目标或稍后重试。"
+        return self.blocked_result(reply, reason)
+
+    def blocked_result(self, reply, reason):
+        return self._with_receipts(TurnResult(reply, {"blocked": [{"reason": reason}]}))
 
     def _result(self, reply):
         return self._with_receipts(TurnResult(reply))
@@ -124,9 +127,9 @@ class ToolSession:
 
     def _budget_stop(self, reason, **data):
         record("native", "budget_stop", reason=reason, **data)
-        self.outcome = self._with_receipts(TurnResult(
+        self.outcome = self.blocked_result(
             "任务已达到执行预算上限，已停止后续处理。已完成结果会保留，请缩小范围后重新发起。",
-            {"blocked": [{"reason": reason}]}))
+            reason)
         return self.outcome
 
     def _accept_calls(self, calls, round_index):
@@ -199,8 +202,7 @@ class ToolSession:
                 reply = "已有操作回执已保留；后续工具请求未完整，未执行新的操作。"
             record("native", event, round=self._round_index,
                    count=len(getattr(response, "invalid_tool_calls", ()) or ()))
-            return None, self._with_receipts(TurnResult(
-                reply, {"blocked": [{"reason": event}]}))
+            return None, self.blocked_result(reply, event)
         calls = getattr(response, "tool_calls", None) or []
         if not calls:
             reply = text_content(response.content)

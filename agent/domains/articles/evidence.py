@@ -11,6 +11,7 @@ from langchain_core.messages import ToolMessage
 from agent.domains.articles.reading import body_continuation, directory_targets
 from rag.reading import read_requests
 from rag.reading_requests import is_question, is_summary
+from rag.sections import PARSER_VERSION
 from rag.source import BodyPassage
 
 SEARCH_TOOLS = frozenset({"rag_search"})
@@ -67,6 +68,7 @@ def _read_range(data, article_id):
     total_known = located and type(total) is int and total >= end
     return {
         "revision": source.get("revision") if located else None,
+        "section_schema": source.get("section_schema") if located else None,
         "section_id": source.get("section_id") if located else None,
         "selected_scope": data.get("selectedScope") if located else None,
         "start": start if located else None,
@@ -77,27 +79,29 @@ def _read_range(data, article_id):
     }
 
 
-def _complete_document(rows):
-    """Only contiguous whole-document ranges of one revision can replace a failed summary."""
-    versions = {}
+def _complete_document(rows, current):
+    """Require contiguous coverage of the document version confirmed by this read."""
+    revision, total = current["revision"], current["selected_total_chars"]
+    if (current["selected_scope"] != "document" or current["section_id"]
+            or current["section_schema"] != PARSER_VERSION or type(total) is not int or total <= 0
+            or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)):
+        return False
+    spans = []
     for row in rows:
-        start, end, total = (row.get(key) for key in ("start", "end", "selected_total_chars"))
-        revision = row.get("revision")
+        start, end = row.get("start"), row.get("end")
         if (row.get("selected_scope") != "document" or row.get("section_id")
-                or not all(type(value) is int for value in (start, end, total))
-                or not 0 <= start < end <= total or end - start != row.get("visible_chars")
-                or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision)):
+                or row.get("revision") != revision or row.get("section_schema") != PARSER_VERSION
+                or row.get("selected_total_chars") != total or type(start) is not int
+                or type(end) is not int or not 0 <= start < end <= total
+                or end - start != row.get("visible_chars")):
             continue
-        versions.setdefault((revision, total), []).append((start, end))
-    for (_, total), spans in versions.items():
-        covered = 0
-        for start, end in sorted(spans):
-            if start > covered:
-                break
-            covered = max(covered, end)
-            if covered == total:
-                return True
-    return False
+        spans.append((start, end))
+    covered = 0
+    for start, end in sorted(spans):
+        if start > covered:
+            break
+        covered = max(covered, end)
+    return covered == total
 
 
 def _article_links(text):
@@ -327,7 +331,7 @@ class ArticleEvidence:
             self.continuations[ident] = cursor
         if observed not in ranges:
             ranges.append(observed)
-        if ident in self.summary_failures and _complete_document(ranges):
+        if ident in self.summary_failures and _complete_document(ranges, observed):
             self.summary_failures.discard(ident)
         self.references.update(_article_links(body))
 

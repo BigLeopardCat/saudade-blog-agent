@@ -19,7 +19,10 @@ from agent.scheduling.checkpoints import remove_run
 from config.settings import settings
 
 
-def test_background_agent_restores_observations_and_budget_on_real_checkpoint(monkeypatch):
+@pytest.mark.parametrize("reply,status", [("已核对隔离记录", "completed"), ("", "incomplete")])
+def test_background_agent_restores_observations_and_budget_on_real_checkpoint(
+    monkeypatch, reply, status
+):
     dsn = os.getenv("SAUDADE_SCHEDULING_TEST_DSN")
     if not dsn:
         pytest.skip("requires explicit disposable SAUDADE_SCHEDULING_TEST_DSN")
@@ -61,7 +64,7 @@ def test_background_agent_restores_observations_and_budget_on_real_checkpoint(mo
                     tool_calls=[{"name": "get_current_time", "args": {}, "id": "read-once"}],
                 )
             else:
-                yield AIMessageChunk(content="已核对隔离记录")
+                yield AIMessageChunk(content=reply)
 
     catalog = SimpleNamespace(
         initial_tools=lambda _: {"get_current_time": read_record}, domains=lambda *_, **__: {}
@@ -98,10 +101,14 @@ def test_background_agent_restores_observations_and_budget_on_real_checkpoint(mo
             recovered = readonly.ReadOnlyRunner(resources)
             recovered.runtime.application.catalog = catalog
             result = recovered.run(actor, run_id, "核对隔离记录")
-            assert result["text"] == "已核对隔离记录"
+            assert result["status"] == status and result["text"]
+            if reply:
+                assert result["text"] == reply
             assert result["spent"]["tool_calls"] == 1
             assert result["spent"]["model_calls"] >= 3
-            assert recovered.run(actor, run_id, "核对隔离记录")["reused"]
+            replay = recovered.run(actor, run_id, "核对隔离记录")
+            assert replay["reused"] and replay["status"] == status
+            assert replay["text"] == result["text"]
             remove_run(recovered.runtime.saver, actor.uid, run_id)
             remove_run(recovered.runtime.saver, actor.uid, run_id)
             assert not recovered.runtime.store.load(

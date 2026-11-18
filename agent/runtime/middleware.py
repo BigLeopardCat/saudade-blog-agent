@@ -316,6 +316,8 @@ class SessionMiddleware(AgentMiddleware):
         if not response.invalid_tool_calls:
             extra = input_additions(session, state, response=response)
             if extra:
+                # The new model decision supersedes this response's provisional terminal state.
+                session.state["terminal"] = None
                 session._round_index += 1
                 return {**capture(session), "messages": extra, "jump_to": "model"}
         if session.state["proposal"] is not None:
