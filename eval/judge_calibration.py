@@ -48,9 +48,7 @@ def evaluate(samples, llm, *, on_progress=None):
         if on_progress is not None:
             on_progress(rows)
         try:
-            verdict = semantic_judge.judge_one(
-                text, llm, instructions=online_judge.INSTRUCTIONS, diagnostics=row["diagnostics"])
-            online_judge.validate_excerpts(verdict, text)
+            verdict = online_judge.semantic_review(text, llm, diagnostics=row["diagnostics"])
             row.update(predicted_issue=bool(verdict["unsupported"] or not verdict["answered"]),
                        verdict=verdict)
         except (OpenAIError, ValueError, TypeError, KeyError) as exc:
@@ -90,7 +88,7 @@ def main():
     hashes[Path(__file__).name] = hashlib.sha256(driver).hexdigest()
     report = {"source_sha256": hashlib.sha256(body).hexdigest(),
               "evaluator_sha256": hashes,
-              "rubric_sha256": hashlib.sha256(online_judge.INSTRUCTIONS.encode()).hexdigest(),
+              "rubric_sha256": online_judge.rubric_digest(),
               "business_requests": 0, "automatic_retries": 0,
               "dataset_role": "calibration_development",
               "backend": semantic_judge.backend_identity(),

@@ -70,6 +70,9 @@ uv run --frozen python -m eval.judge_calibration \
 
 输出目录必须是新的私有目录；保留首次输出及失败材料，不靠重跑筛选通过。该集合只校准判据，不能当作独立验收集或生产正确率。
 
+`eval/fixtures/source_policy_claims.jsonl` 单独覆盖对比总结中的排他性断言和拒绝回复中的权限层级。
+核对时同时复判正确对照和已知误判，权限依据取自该轮冻结的产品事实或工具契约。
+
 语义材料中的 `runtime_preparation_context` 来自同次已准备调用的产品元数据，记录执行策略、触发时间语义和控件默认策略。它不替代 `validated_preparation_facts` 中的服务核实结果，也不证明业务已执行、页面已渲染或通知已经送达。未记录或超过证据上限时保持缺失或未评估，不用当前源码补造历史事实；确认卡正文仍是待审输出。
 
 线上先 POC，后全量，命令和目标见[发布验收](release-acceptance.md)。不得在普通 CI 默认运行线上写入或付费生图；生产材料交给外部 judge 前需脱敏和授权。
