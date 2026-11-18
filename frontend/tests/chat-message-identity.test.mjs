@@ -81,3 +81,18 @@ test('user delivery is restored from server history while local pending input st
   assert.equal(migrateItem({type:'user',text:'仅本地缓存'}).delivery,undefined);
   assert.equal(migrateItem({type:'user',text:'不可信状态',delivery:'accepted'}).delivery,undefined);
 });
+
+test('history acknowledges repeated text only for the matching user turn', () => {
+  const {mapDbItems, replaceWithIncoming}=globalThis.__waifuChatCore;
+  const newer={id:'l-new',type:'user',text:'再试一次',turn_id:'new',time:2000,delivery:'unknown'};
+  const old={id:1,role:'user',content:newer.text,turn_id:'old',time:1000};
+  const reply={id:2,role:'assistant',content:newer.text,turn_id:'new',time:2100};
+  const history=rows=>mapDbItems(rows,()=>undefined);
+  let visible=replaceWithIncoming([newer],history([old,reply]),3000);
+  assert.deepEqual(visible.filter(row=>row.type==='user').map(row=>[row.turn_id,row.delivery]),
+    [['old','read'],['new','unknown']]);
+  visible=replaceWithIncoming(visible,history([old,{...old,id:3,turn_id:'new',time:2000},reply]),3000);
+  assert.deepEqual(visible.filter(row=>row.type==='user').map(row=>[row.turn_id,row.delivery]),
+    [['old','read'],['new','read']]);
+  assert.equal(replaceWithIncoming([{...newer,turn_id:undefined}],history([old]),3000).length,1);
+});

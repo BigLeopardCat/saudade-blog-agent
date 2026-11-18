@@ -100,11 +100,11 @@
         }
       }
       for (const it of (local || [])) {
-        // 60s 'l' 保留窗口：内容已被 incoming 收录的 'l' 不追加（用 'd' 版即可）。
+        // 新消息按轮次和角色对账，旧缓存没有轮次时才按内容匹配。
         if (it.id && it.id.startsWith('l')
             && (it.time || 0) >= t - 60000
             && !incoming.some(inc => inc.type === it.type
-                && contentEq(inc.text, it.text))) {
+                && (it.turn_id ? inc.turn_id === it.turn_id : contentEq(inc.text, it.text)))) {
           out.push(it);
         }
       }

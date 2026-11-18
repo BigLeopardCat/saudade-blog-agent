@@ -12,7 +12,7 @@ export function createCompletionInbox(ctx, send, engine) {
     const panel = ctx.dom.chatPanel, messages = ctx.dom.messages;
     let scope = '', snapshot = {unread: 0, conversations: [], items: []};
     let fetching = false, dispatching = false, refreshAt = 0, retryAt = 0, forbidden = false;
-    let started = false, timer, historyKey = '', readRetryAt = 0;
+    let started = false, timer, historyKey = '', historyRetryAt = 0, readRetryAt = 0;
     const seen = new Map();
     const token = () => localStorage.getItem('tokenKey') || '';
     const current = () => token() + ':' + (ctx.state.conv || '');
@@ -110,10 +110,14 @@ export function createCompletionInbox(ctx, send, engine) {
             const {result, waiting, missing} = displayed(reported, ids);
             if (!result.length) {
                 const key = anchor + ':' + ids.join(',');
-                if (missing && !waiting && !busy() && historyKey !== key) {
-                    historyKey = key;
-                    try { await engine.pullHistory(); schedule(); }
-                    catch (error) { historyKey = ''; throw error; }
+                if (missing && !waiting && !busy() && historyKey !== key
+                        && Date.now() >= historyRetryAt) {
+                    historyRetryAt = Date.now() + 5000;
+                    if (await engine.pullHistory() && current() === anchor) {
+                        historyKey = key;
+                        historyRetryAt = 0;
+                        schedule();
+                    }
                 }
                 return;
             }
@@ -134,7 +138,7 @@ export function createCompletionInbox(ctx, send, engine) {
         const next = current();
         if (scope !== next) {
             scope = next; forbidden = false; refreshAt = 0; retryAt = 0; readRetryAt = 0;
-            historyKey = ''; seen.clear();
+            historyKey = ''; historyRetryAt = 0; seen.clear();
             snapshot = {unread: 0, conversations: [], items: []}; paint();
         }
         if (!token() || document.hidden || forbidden) { seen.clear(); return; }

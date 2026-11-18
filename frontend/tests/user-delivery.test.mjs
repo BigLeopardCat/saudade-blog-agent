@@ -24,13 +24,13 @@ function fixture(){
 }
 test('pending user input becomes read only for the acknowledged turn',()=>{
   const f=fixture();assert.equal(f.first.querySelector().textContent,'发送中…');
-  f.delivery.read('first');assert.equal(f.first.querySelector().textContent,'已读');
+  f.delivery.read('first');assert.equal(f.first.querySelector().textContent,'已接收');
   assert.equal(f.second.querySelector().textContent,'发送中…');assert.equal(f.saved(),1);
 });
 test('network uncertainty is visible and never downgrades a received message',()=>{
   const f=fixture();f.delivery.unknown('first');assert.equal(f.first.querySelector().textContent,'未确认送达');
   f.delivery.read('first');f.delivery.unknown('first');f.delivery.read('first');
-  assert.equal(f.first.querySelector().textContent,'已读');assert.equal(f.saved(),2);
+  assert.equal(f.first.querySelector().textContent,'已接收');assert.equal(f.saved(),2);
 });
 test('unrelated and missing receipt identities cannot acknowledge inputs',()=>{
   const f=fixture();f.delivery.read('other-conversation');f.delivery.read(null);
