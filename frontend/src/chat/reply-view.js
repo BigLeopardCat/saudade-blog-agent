@@ -1,6 +1,6 @@
 /** @returns {{text: string, steps: import('./host').ProgressStep[], typingEl: HTMLDivElement | null, typingTimer: number | null}} */
 export function createReplyState() { return { text: '', steps: [], typingEl: null, typingTimer: null }; }
-export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ownsRound, staleRound, armIdle, onBubble, handleControl }) {
+export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ownsRound, staleRound, armIdle, onBubble, handleControl, onAccepted = undefined }) {
     const { messages } = ctx.dom;
     const { scrollToBottom, broadcast, makeProcessBox, getCollapsePref, setCollapsePref } = engine;
     let div, contentSpan;
@@ -99,6 +99,7 @@ export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ow
         }
         if (type === 'done')
             return;
+        if (type !== 'text_reset') onAccepted?.();
         if (type === 'text_reset') {
             state.text = '';
             contentSpan.textContent = '';

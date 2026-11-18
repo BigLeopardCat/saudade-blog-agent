@@ -1,3 +1,4 @@
+import {createUserDelivery} from './user-delivery.js';
 import { createCompletionInbox, completionTurnId } from './completion-inbox.js';
 import { createReplyState, receiveReply, preservePartialReply, renderFailed as renderFailedReply } from './reply-view.js';
 import { createAppearance } from './appearance.js';
@@ -49,6 +50,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                 setTimeout(init, 500);
                 return;
             }
+            const delivery = createUserDelivery(ctx, engine);
             const steering = g.__waifuSteering ? g.__waifuSteering(ctx, engine) : null;
             const appearance = createAppearance(ctx);
             const { markVisitorChoice, applyDarkMode, toggleEffect } = appearance;
@@ -144,7 +146,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                     ctx.state.pendingImages = [];
                     renderPreviews();
                     const userItem = __chatCore.migrateItem({
-                        id: userItemId, type: 'user', text: msg, time: sentAt, turn_id: roundId,
+                        id: userItemId, type: 'user', text: msg, time: sentAt, turn_id: roundId, delivery: 'pending',
                         ...(imgs.length ? { images: imgs, thumbs } : {}),
                     });
                     ctx.state.items.push(userItem);
@@ -286,6 +288,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                         throw ctErr;
                     }
                     await receiveReply(resp, { state: reply, ctx, engine, opts, roundId, ownsRound, staleRound, armIdle,
+                        onAccepted: () => delivery.read(roundState.turnId),
                         onBubble(element, content) { div = element; contentSpan = content; },
                         handleControl(type, data, div, contentSpan) {
                             if (type === 'task_input') {
@@ -329,14 +332,14 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                     if (fullText.trim()) {
                         const finalItem = __chatCore.migrateItem({
                             id: roundId, type: 'agent', text: fullText, time: Date.now(),
-                            process: reply.steps.map(window.__waifuWorkProgress.snapshot),
+                            process: reply.steps.map(window.__waifuWorkProgress.snapshot), turn_id: roundState.turnId,
                         });
                         ctx.state.items = __chatCore.mergeItems(ctx.state.items, [finalItem]);
                         div.dataset.mid = finalItem.id;
                         div.dataset.finished = '1';
                         delete ctx.state.live[roundId];
                         broadcast({ t: 'done', id: finalItem.id, fullText, time: finalItem.time,
-                            process: reply.steps.map(window.__waifuWorkProgress.snapshot), roundId });
+                            process: reply.steps.map(window.__waifuWorkProgress.snapshot), turn_id: roundState.turnId, roundId });
                         saveHistory();
                         clearFailedRound(roundState.turnId);
                     }
@@ -436,6 +439,7 @@ import { bindConfirmationControls } from './confirmation-controls.js';
                     clearTimeout(reply.typingTimer);
                     if (ctx.state.activeRound === roundState) {
                         const sameView = ownsRound();
+                        if (sameView) delivery.unknown(roundState.turnId);
                         ctx.state.isSending = false;
                         ctx.state.streamCtrl = null;
                         steering?.end();

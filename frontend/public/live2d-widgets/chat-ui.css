@@ -341,6 +341,7 @@
 #waifu-chat .chat-typing { display: flex; visibility: hidden; height: 22px; position: static; min-height: 22px; box-sizing: border-box; margin: 2px 0 8px; padding: 6px 0; color: var(--chat-accent); }
 #waifu-chat .chat-typing.typing-visible { visibility: visible; display: flex; width: max-content; align-items: center; gap: 4px; }
 #waifu-chat .chat-typing i { position: static; display: block; flex: none; margin: 0; }
+#waifu-chat .chat-msg.user .msg-delivery { display: block; margin-top: 5px; text-align: right; color: var(--chat-muted); font-size: 12px; line-height: 1.4; }
 #waifu-chat .chat-msg.user { color: var(--chat-ink); }
 #waifu-chat .chat-msg.user .msg-text { display: block; width: 100%; max-width: none; text-align: right; }
 #waifu-chat .msg-bubble,

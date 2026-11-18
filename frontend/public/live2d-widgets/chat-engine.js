@@ -531,7 +531,7 @@
               // 已收敛（pull 先收养、mid 已设）→ 条目已在 items（'d' id），跳过
               // mergeItems 防止 'l' id 回写振荡（pull→'d'、done→'l' 来回换 id）
               if (!h.el.dataset.mid) {
-                const item = __chatCore.migrateItem({ id: m.id, type: 'agent', text: m.fullText, time: m.time, process: m.process });
+                const item = __chatCore.migrateItem({ id: m.id, type: 'agent', text: m.fullText, time: m.time, process: m.process, turn_id: m.turn_id || m.roundId });
                 ctx.state.items = __chatCore.mergeItems(ctx.state.items, [item]);
               }
               const cs = h.contentSpan;

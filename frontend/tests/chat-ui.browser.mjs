@@ -1,3 +1,5 @@
+import {assertCompletionInbox} from './completion-inbox.browser.mjs';
+import {assertUserDelivery} from './user-delivery.browser.mjs';
 import {assertReaderLayout} from './reader-layout.browser.mjs';
 import {assertWidgetTools} from './widget-tools.browser.mjs';
 import { assertChatScroll } from './chat-scroll.browser.mjs';
@@ -57,6 +59,7 @@ const server = createServer(async (req, res) => {
           + '<rect y="480" width="240" height="480" fill="#9d9fed"/>'
           + '<rect y="930" width="240" height="30" fill="#504060"/></svg>'); return;
       }
+      if (url.pathname === '/api/chat/completions') return json(res,{code:200,data:{unread:0,conversations:[],items:[]}});
       if (url.pathname === '/api/chat/service/status') return json(res, {ready:serviceReady});
       if (url.pathname === '/api/chat/tasks') {
         const snapshot = structuredClone({...managedTasks,server_time:new Date().toISOString()});
@@ -404,6 +407,8 @@ try {
     assert.ok(bounds.messages.width >= 150, JSON.stringify(bounds));
   };
   await assertReaderLayout({page,reset,streamCount,passed});
+  await assertCompletionInbox({page,reset,streamCount,passed});
+  await assertUserDelivery({page,reset,passed});
   await assertChatScroll({page,reset,passed});
   if (!process.argv.includes('--scroll-only')) {
   await reset();
