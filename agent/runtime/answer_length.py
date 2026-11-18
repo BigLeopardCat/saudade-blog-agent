@@ -38,20 +38,6 @@ def count_characters(markdown):
     return sum(not character.isspace() for character in text)
 
 
-def instruct(system, limit):
-    if system is None or limit is None:
-        return system
-    instruction = (
-        f"用户明确要求最终答复最多 {limit} 个可见字符。使用紧凑措辞保留用户要求的内容和来源。"
-        "标点、数字和链接文字计入字数，空白和链接目标地址不计。")
-    content = system.content
-    if isinstance(content, str):
-        content = f"{content}\n\n{instruction}"
-    else:
-        content = [*content, {"type": "text", "text": instruction}]
-    return system.model_copy(update={"content": content})
-
-
 def length_violation(request, reply):
     limit = requested_limit(request)
     if limit is not None and isinstance(reply, str):

@@ -1,5 +1,7 @@
 """Visible character constraints on complete answers, including graph delivery."""
 
+import json
+
 import pytest
 from _framework_fixture import call, model_replies
 from langchain_core.messages import AIMessageChunk, HumanMessage
@@ -46,7 +48,11 @@ def test_runtime_repairs_once_and_never_streams_the_rejected_answer(correction, 
     final = events[-1]
     assert len(requests) == 2
     assert "最终答复最多 10 个可见字符" in requests[0]["messages"][0]["content"]
-    assert "禁止再次调用工具" in requests[1]["messages"][-1]["content"]
+    assert [message["role"] for message in requests[1]["messages"]] == ["system", "user"]
+    material = json.loads(requests[1]["messages"][1]["content"])
+    assert material["draft"] == original
+    assert material["request"] == "请用10字以内总结。"
+    assert "禁止再次调用工具" in material["revision_request"]
     assert original not in visible
     assert visible == final.reply
     if expected is None:
@@ -65,5 +71,5 @@ def test_length_correction_cannot_dispatch_unexpected_tool_calls():
                                    "principal": Principal(7, "admin", SOURCE_ASSERTION)}}
         events = list(runtime.stream_events({
             "messages": [HumanMessage(content="请用10字以内回答。")]}, config))
-    assert len(requests) == 2 and requests[1]["tool_choice"] == "none"
+    assert len(requests) == 2 and not requests[1].get("tools")
     assert events[-1].execution["blocked"] == [{"reason": "answer_length_exceeded"}]
