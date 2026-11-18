@@ -666,6 +666,10 @@
         0,
         0
       ],
+      "agent/runtime/answer_length.py": [
+        0,
+        48
+      ],
       "agent/runtime/approval.py": [
         1,
         0
@@ -1001,7 +1005,7 @@
     },
     "total": [
       385,
-      0
+      48
     ]
   },
   "entries": [
@@ -1104,6 +1108,17 @@
       "category": "system_data",
       "q": "ROLE_CN",
       "why": "角色名的显示字"
+    },
+    {
+      "id": "agent/runtime/answer_length.py::_LIMIT",
+      "file": "agent/runtime/answer_length.py",
+      "kind": "regex",
+      "name": "_LIMIT",
+      "size": 48,
+      "sample": "(?:用|以)?\\s*(?<!\\d)(\\d{1,6})\\s*个?(?:字符|字)\\s*(?:以内|之内|以下)(?=\\s*[,，]?\\s*(?:总结|概括|回答",
+      "category": "parser",
+      "q": "显式数字字数上限",
+      "why": "解析用户给出的数字、字数单位及上限句式。结果只用于答复长度约束，不决定意图路由、工具或权限。"
     },
     {
       "id": "tools/site.py::_NAV_LABELS",

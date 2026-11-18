@@ -346,21 +346,16 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
 
 
 def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
-    """Check each round independently and aggregate driver failures.
-
-    Validate declared round numbers so preparation and execution expectations
-    cannot be accidentally applied to the wrong turn."""
+    """Verify round alignment, driver failures, and response assertions."""
     fails: list[str] = []
     rounds = iter_rounds(case)
     got = run_result.get("rounds") or [run_result]
     if len(got) != len(rounds):
-        # Preserve driver errors alongside a missing-round failure.
         head = [f"轮数不符：用例声明 {len(rounds)} 轮，实际跑了 {len(got)} 轮"]
         for res in got:
             head += [f"[驱动] {f}" for f in (res.get("fails") or [])]
         return head
     for i, (rnd, res) in enumerate(zip(rounds, got)):
-        # Driver failures must affect the same verdict as response assertions.
         for f in (res.get("fails") or []):
             fails.append(f"[第 {i + 1} 轮] {f}")
         if length := length_violation(rnd.get("user_input"), res.get("text")):
