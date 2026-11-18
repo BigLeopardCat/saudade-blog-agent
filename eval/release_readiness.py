@@ -11,13 +11,14 @@ import argparse
 import hashlib
 import json
 from collections import Counter, defaultdict
+from io import BytesIO
 from pathlib import Path
 from statistics import median, quantiles
 
 from eval import acceptance, action_metrics, request_metrics, usage
 from eval.cache_diagnostics import compare
 from eval.statistical_metrics import proportion
-from utils.trace_io import load_trace
+from utils.trace_io import read_trace
 
 PROFILE = Path(__file__).with_name("release_profile.json")
 
@@ -92,20 +93,61 @@ def _cache_summary(row):
             if eligible else None}
 
 
+def _round_trace(rnd, build, seen):
+    """Bind one frozen capture to one HTTP request before counting its observations."""
+    path = Path(str(rnd.get("trace") or ""))
+    try:
+        frozen = path.read_bytes()
+    except (ValueError, OSError) as exc:
+        raise ValueError("missing trace") from exc
+    timing = rnd.get("http_timing") or {}
+    evidence = rnd.get("request_evidence") or {}
+    if not isinstance(timing, dict) or not isinstance(evidence, dict):
+        raise ValueError("invalid request metadata")
+    digest = timing.get("trace_sha256")
+    if not digest:
+        raise LookupError("frozen trace SHA256")
+    if hashlib.sha256(frozen).hexdigest() != digest:
+        raise ValueError("trace changed")
+    doc = read_trace(BytesIO(frozen), compressed=path.suffix == ".gz")
+    if not doc:
+        raise ValueError("invalid trace")
+    meta = doc.get("input")
+    runtime = meta.get("runtime") if isinstance(meta, dict) else None
+    if not build or not isinstance(runtime, dict) or runtime.get("build_sha") != build:
+        raise ValueError("build mismatch")
+    request = evidence.get("request_id")
+    identities = (request, timing.get("request_id"), doc.get("trace_id"))
+    if any(value is None or value == "" for value in identities):
+        raise LookupError("missing request identity")
+    if not isinstance(request, str) or any(value != request for value in identities):
+        raise ValueError("request identity mismatch")
+    if request in seen:
+        raise ValueError("duplicate request identity")
+    seen.add(request)
+    return doc
+
+
 def _metrics(report):
     groups, populations = defaultdict(list), defaultdict(usage.empty)
     missing, case_usage, process = [], {}, []
     totals, trace_errors, first_visible, decisions, ttft = usage.empty(), [], [], [], []
     build = (report.get("service_version") or {}).get("sha")
+    seen_requests = set()
     for case in report["cases"]:
         case_decisions = []
         case_total = usage.empty()
         for index, rnd in enumerate(case.get("result", {}).get("rounds", []), 1):
-            doc = load_trace(str(rnd.get("trace", "")))
-            if not doc:
+            try:
+                doc = _round_trace(rnd, build, seen_requests)
+            except (LookupError, ValueError) as error:
+                if isinstance(error, LookupError):
+                    missing.append(f"{case['id']}.{index}: {error}")
+                else:
+                    trace_errors.append({"case": case["id"], "round": index, "error": str(error)})
                 case_total["unknown_attempts"] += 1
+                totals["unknown_attempts"] += 1
                 case_decisions.append(None)
-                trace_errors.append({"case": case["id"], "round": index, "error": "missing trace"})
                 continue
             row = request_metrics.summary(doc)
             process.append({"case": case["id"], "round": index, "model_calls": row["calls"],
@@ -120,14 +162,7 @@ def _metrics(report):
             if row["unknown_attempts"]:
                 missing.append(
                     f"{case['id']}.{index}: provider usage for errored or unfinished calls")
-            if not build or row["build"] != build:
-                trace_errors.append({"case": case["id"], "round": index, "error": "build mismatch"})
             timing = rnd.get("http_timing") or {}
-            expected_digest = timing.get("trace_sha256")
-            if not expected_digest:
-                missing.append(f"{case['id']}.{index}: frozen trace SHA256")
-            elif hashlib.sha256(Path(rnd["trace"]).read_bytes()).hexdigest() != expected_digest:
-                trace_errors.append({"case": case["id"], "round": index, "error": "trace changed"})
             row.update({key: timing.get(key) for key in
                         ("elapsed_s", "first_command_s", "first_confirmation_s", "first_reply_s")})
             # Only positive commands/cards have this event. Their absence is judged by gold.

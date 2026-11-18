@@ -154,6 +154,10 @@ python -m eval.task_metrics --dir /path/to/traces --out /tmp/tasks.json
 
 固定输入、身份、模型、价格配置和构建做配对比较，报告新增退化、样本数、Wilson 95% 区间及成本/时延变化。小样本不能证明生产 SLA，未显著不同也不等于等效。费用按提供商当时实际价格核算。
 
+HTTP 发布复评逐轮核对冻结 trace 的 SHA-256、服务构建和请求编号。请求证据、HTTP 计时与
+trace 三方的编号须一致，且每次请求只计一次。编号缺失的轮次标记为未核验，错配或重复
+会使完整性检查失败。只有通过核对的轮次才进入用量、时延及首次动作统计。
+
 目标来自 `eval/release_profile.json`；失败明细和原始报告保留。禁止以修改 matcher、删除失败用例或补录成功标签代替修复。候选流程见[离线改进](offline-improvement.md)。
 
 模型请求的 `request_layout` 记录 SDK 输入指纹，`wire_request` 记录实际 HTTP JSON
