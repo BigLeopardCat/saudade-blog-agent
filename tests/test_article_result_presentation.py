@@ -66,7 +66,7 @@ def test_range_rrf_keeps_a_deep_dense_match_within_one_long_section():
     lexical = hit(ranges=[{"section_id": "s1", "offset": n, "end": n + 40} for n in (0, 500, 1000)])
     dense = hit(ranges=[{"section_id": "s1", "offset": 30000, "end": 30040}])
     row = rrf_fuse([lexical], [dense], 60, 1)[0]
-    assert [match["offset"] for match in row["matches"]] == [0, 30000, 500]
+    assert [match["offset"] for match in row["matches"]] == [0, 30000, 500, 1000]
     assert any(
         r["request"]["selection"]["offset"] == 30000
         and r["request"]["selection"]["max_chars"] == 40
@@ -130,7 +130,7 @@ def execute(monkeypatch, source, limit, *, upgrade=False):
         "args": {"query": "synthetic"},
         "type": "tool_call",
     }
-    request = SimpleNamespace(tool_call=call, override=lambda **kwargs: None)
+    request = SimpleNamespace(tool_call=call, state={}, override=lambda **kwargs: None)
     tool_execution.append_result(session, request, lambda _: source, prompt, 1, [])
     return prompt[-1], middleware.evidence, records
 

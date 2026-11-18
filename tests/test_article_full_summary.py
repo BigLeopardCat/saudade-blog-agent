@@ -204,6 +204,20 @@ def test_impossible_summary_envelope_is_rejected_before_a_model_request(source, 
     assert result.meta["reason"] == "summary_delivery_capacity"
 
 
+def test_chinese_summary_that_fits_the_frame_is_not_rejected_by_a_halved_character_target(
+        source, monkeypatch):
+    from agent.runtime.tool_context import current_observation
+
+    state, model = source
+    state["body"] = "完整材料。" * 10000
+    model.text = "观点、证据及限制。" * 150
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 1700)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 4096)
+    result = invoke()
+    assert result.kind == "ok" and result.data["summary"] == model.text
+    assert len(model.prompts) == 1 and current_observation().fits(str(result))
+
+
 def test_nested_summary_cannot_consume_the_agents_final_response_call(source):
     state, summarizer = source
     state["body"] = "完整材料。" * 10000

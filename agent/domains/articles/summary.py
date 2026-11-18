@@ -124,8 +124,8 @@ def _delivery(identifier, title, coverage, budget):
     room = min(plan.max_tokens, budget.limits.input_tokens) - overhead - 16
     if room < 128:
         raise BudgetExceeded("summary_delivery_capacity")
-    # JSON escaping can double ordinary summary characters; control characters are rejected.
-    return min(settings.agent_summary_output_tokens, room), max(1, room * 3 // 4)
+    # The character target follows the framework estimate; escaped JSON is checked after generation.
+    return min(settings.agent_summary_output_tokens, room), max(1, room * 3 // 2)
 
 
 def summarize_article(identifier, instructions, config, *, read):

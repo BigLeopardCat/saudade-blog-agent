@@ -50,16 +50,19 @@ def _invoke(model, prompt, budget, config, output, max_chars):
         estimated = estimate_tokens([HumanMessage(content=text)])
         record("article_summary", "llm_done" if response is not None else "llm_error",
                duration_s=round(time.monotonic() - started, 3), **fields,
-               finish_reason=metadata.get("finish_reason"), estimated_output=estimated)
+               finish_reason=metadata.get("finish_reason"), estimated_output=estimated,
+               output_chars=len(text), max_chars=max_chars)
     check_cancelled(config)
     measured = fields.get("output")
     used = measured if type(measured) is int and measured > 0 else estimated
     if (response is None or not text or metadata.get("finish_reason") not in (None, "stop")
-            or used > output
-            or len(text) > max_chars
+            or used > output or len(text) > max_chars
             or any(ord(char) < 32 and char not in "\n\r\t" for char in text)
             or response.tool_calls or response.invalid_tool_calls
             or response.additional_kwargs.get("refusal")):
+        record("article_summary", "output_rejected", output_chars=len(text),
+               max_chars=max_chars, used_output=used, output_limit=output,
+               finish_reason=metadata.get("finish_reason"))
         raise ValueError("incomplete_summary")
     return response
 

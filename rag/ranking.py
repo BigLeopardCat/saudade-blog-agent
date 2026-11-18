@@ -108,22 +108,24 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
                 (match["section_id"], match["offset"], match["end"]) == position
                 for match in row["matches"])):
             continue
-        if section_id not in row["section_ids"]:
-            row["section_ids"].append(section_id)
-            row["sections"].append(chunk["section"])
-        row["matches"].append({
+        match = {
             "chunk_id": chunk.get("chunk_id"),
             "section_id": section_id,
             "offset": chunk.get("start", 0),
             "end": chunk.get("end"),
-            "_source_index": i,
-        })
+        }
+        if include_excerpts:
+            _annotate(chunk, match, score, retriever, query_terms)
+        # Repeated title/heading matches add no new local evidence within a section.
+        if (retriever == "bm25" and query_terms
+                and section_id in row["section_ids"] and "matched_fields" in match
+                and "body" not in match["matched_fields"]):
+            continue
+        if section_id not in row["section_ids"]:
+            row["section_ids"].append(section_id)
+            row["sections"].append(chunk["section"])
+        row["matches"].append(match)
     ranked = sorted(by_doc.values(), key=lambda row: -row["score"])
     if limit is not None:
         ranked = ranked[:max(1, limit)]
-    for row in ranked:
-        for match in row["matches"]:
-            index = match.pop("_source_index")
-            if include_excerpts:
-                _annotate(chunks[index], match, scores[index], retriever, query_terms)
     return ranked
