@@ -39,6 +39,15 @@ def test_judge_cannot_overturn_deterministic_failure_or_missing_evidence(origina
     assert assess(body, semantic(body, ["no_issue_found"] * 2))["counts"] == {expected: 1}
 
 
+def test_deterministic_failure_keeps_unresolved_rounds_visible():
+    body = source(status="failed", turns=3)
+    result = assess(body, semantic(body, ["no_issue_found", "suspect"]))
+
+    assert result["counts"] == {"failed": 1}
+    assert result["cases"][0]["suspect_rounds"] == [2]
+    assert result["cases"][0]["missing_review_rounds"] == [3]
+
+
 def test_results_must_belong_to_the_frozen_source():
     body = source()
     with pytest.raises(ValueError, match="frozen source"):

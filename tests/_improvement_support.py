@@ -84,20 +84,27 @@ def full_cases(prefix, critical=False):
 def report(tmp_path, cases, build, *, role="regression", improved=False, evaluation_id=None):
     tmp_path.mkdir()
     hashes = snapshot(tmp_path, cases)
-    trace = tmp_path / "trace.json"
-    trace.write_text(json.dumps({"input": {"runtime": {"name": "native", "build_sha": build,
-        "model": "synthetic"}}, "reply": "synthetic reply", "events": [
-        {"node": "native", "event": "llm_start"},
-        {"node": "native", "event": "llm_done", "input": 80
-         if improved else 100, "output": 10, "cache_read": 70 if improved else 80,
-         "tool_calls": [], "invalid_tool_calls": False}]}))
-    rows = [{"id": item["id"], "identity": item["identity"], "tags": item["tags"],
-             "first_action": item["first_action"], "status": "passed",
-             "case_sha256": digest(json.dumps(item, sort_keys=True).encode()),
-             "result": {"rounds": [{"trace": str(trace), "exec_rows": [], "http_timing": {
-                 "trace_sha256": digest(trace.read_bytes()), "elapsed_s": 2,
-                 "first_reply_s": 1, "first_visible_s": 0.1, "first_command_s": 0.2,
-                 "first_confirmation_s": 0.2}}]}} for item in cases]
+    rows = []
+    for index, item in enumerate(cases, start=1):
+        request_id = f"{index:032x}"
+        trace = tmp_path / (request_id + ".json")
+        capture = json.dumps({"trace_id": request_id,
+            "input": {"runtime": {"name": "native", "build_sha": build, "model": "synthetic"}},
+            "reply": "synthetic reply", "events": [
+                {"node": "native", "event": "llm_start"},
+                {"node": "native", "event": "llm_done", "input": 80 if improved else 100,
+                 "output": 10, "cache_read": 70 if improved else 80,
+                 "tool_calls": [], "invalid_tool_calls": False}]}).encode()
+        trace.write_bytes(capture)
+        round_result = {"trace": str(trace), "exec_rows": [],
+            "request_evidence": {"request_id": request_id}, "http_timing": {
+                "request_id": request_id, "trace_sha256": digest(capture), "elapsed_s": 2,
+                "first_reply_s": 1, "first_visible_s": 0.1, "first_command_s": 0.2,
+                "first_confirmation_s": 0.2}}
+        rows.append({"id": item["id"], "identity": item["identity"], "tags": item["tags"],
+                     "first_action": item["first_action"], "status": "passed",
+                     "case_sha256": digest(json.dumps(item, sort_keys=True).encode()),
+                     "result": {"rounds": [round_result]}})
     path = tmp_path / "report.json"
     path.write_text(json.dumps({"full_run": True, "planned": len(rows), "cases": rows,
         "service_version": {"sha": build}, "suite_sha256": digest(datasets.suite_bytes(cases)),

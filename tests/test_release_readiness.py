@@ -355,6 +355,36 @@ def test_known_noncritical_failure_can_use_quality_budget_without_becoming_unkno
     assert quality["combined_checks"]["passed"] == 99
     assert quality["combined_checks"]["total"] == 100
     assert quality["unresolved_semantic"] == 0
+    assert got["usage_by_outcome"]["failed"]["calls"] == 1
+
+
+@pytest.mark.parametrize(("review", "reason"), [
+    ("suspect", "semantic findings still require review: 99"),
+    ("not_evaluated", "complete semantic review tied to the frozen report SHA256"),
+    (None, "complete semantic review tied to the frozen report SHA256"),
+])
+def test_deterministic_failure_cannot_hide_unresolved_review(tmp_path, review, reason):
+    report, profile, semantic, _ = fixture(tmp_path, count=100)
+    doc = json.loads(report.read_bytes())
+    doc["cases"][-1]["status"] = "failed"
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    judge = json.loads(semantic.read_bytes())
+    if review is None:
+        judge["rows"].pop()
+    else:
+        judge["rows"][-1]["status"] = review
+    semantic.write_text(json.dumps(judge))
+
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+
+    assert got["status"] == "unverified" and not got["failures"]
+    assert reason in got["unverified"]
+    assert got["semantic_counts"] == {"checks_passed": 99, "failed": 1}
+    assert got["usage_by_outcome"]["failed"]["calls"] == 1
+    assert got["quality_statistics"]["all"]["unresolved_semantic"] == 1
+    assert got["quality_gate_statistics"]["core"]["unresolved_semantic"] == 1
+    assert got["quality_gate_statistics"]["core"]["wilson_lower_meets_target"] is None
 
 
 def test_dispatch_rejections_are_reported_and_cannot_earn_first_action_credit(tmp_path):

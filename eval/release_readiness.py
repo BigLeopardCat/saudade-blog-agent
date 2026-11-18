@@ -204,7 +204,7 @@ def outcome_usage(cases, semantic, measured):
             for name, row in groups.items()}
 
 
-def quality_statistics(cases, semantic):
+def quality_statistics(cases, semantic, *, review_gaps=()):
     groups = {"all": cases}
     groups.update({tag: [case for case in cases if tag in case.get("tags", [])]
                    for tag in sorted({tag for case in cases for tag in case.get("tags", [])})})
@@ -212,8 +212,9 @@ def quality_statistics(cases, semantic):
                     for case in rows), len(rows)),
                    "combined_checks": proportion(sum(semantic.get(case["id"]) == "checks_passed"
                     for case in rows), len(rows)) if semantic else None,
-                   "unresolved_semantic": sum(semantic.get(case["id"]) in
-                    (None, "not_evaluated", "needs_review") for case in rows)}
+                   "unresolved_semantic": sum(case["id"] in review_gaps
+                    or semantic.get(case["id"]) in (None, "not_evaluated", "needs_review")
+                    for case in rows)}
             for name, rows in groups.items()}
 
 
@@ -224,14 +225,15 @@ def _action_timings(groups, minimum):
             for name, rows in groups.items()}
 
 
-def quality_gate_statistics(cases, semantic, profile):
+def quality_gate_statistics(cases, semantic, profile, *, review_gaps=()):
     """Show sample uncertainty beside the unchanged observed-rate release gates."""
     core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
     result = {}
     for name, rows, target in (("task", cases, profile["task_pass_rate"]),
                                ("core", core, profile["core_pass_rate"])):
-        unresolved = sum(semantic.get(case["id"]) in
-                         (None, "not_evaluated", "needs_review") for case in rows)
+        unresolved = sum(case["id"] in review_gaps
+                         or semantic.get(case["id"]) in (None, "not_evaluated", "needs_review")
+                         for case in rows)
         checked = (proportion(sum(semantic.get(case["id"]) == "checks_passed"
                                   for case in rows), len(rows)) if semantic else None)
         interval = checked["wilson_95"] if checked else None
@@ -250,7 +252,7 @@ def _reject(failures, name, passed, detail):
         failures.append({"gate": name, "detail": detail})
 
 
-def _quality(report, semantic, profile):
+def _quality(report, semantic, profile, *, review_incomplete, pending_review):
     cases, failures, missing = report["cases"], [], []
     ids = {case["id"] for case in cases}
     required = set(profile["critical_cases"])
@@ -271,12 +273,9 @@ def _quality(report, semantic, profile):
         for rnd in case.get("result", {}).get("rounds", [])), "this suite must only prepare writes")
     _reject(failures, "deterministic_critical", all(case.get("status") == "passed"
         for case in critical), "critical cases must all pass")
-    statuses = Counter(semantic.values())
     core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
-    if not semantic or statuses["not_evaluated"]:
+    if review_incomplete:
         missing.append("complete semantic review tied to the frozen report SHA256")
-    pending_review = sorted(case["id"] for case in cases
-                            if semantic.get(case["id"]) == "needs_review")
     if pending_review:
         missing.append("semantic findings still require review: " + ", ".join(pending_review))
     if semantic:
@@ -354,9 +353,16 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         raise ValueError("only model calls and token counts may be diagnostic targets")
     reviewed = (acceptance.assess(source, json.loads(Path(semantic_path).read_bytes()))
                 if semantic_path else None)
-    semantic = {case["id"]: case["status"] for case in reviewed["cases"]} if reviewed else {}
+    reviews = reviewed["cases"] if reviewed else []
+    semantic = {row["id"]: row["status"] for row in reviews}
+    unreviewed = {row["id"] for row in reviews if row["missing_review_rounds"]
+                  or not row["expected_rounds"] or row["status"] == "not_evaluated"}
+    pending_review = sorted(row["id"] for row in reviews if row["suspect_rounds"])
+    review_gaps = unreviewed.union(pending_review)
     metrics = _metrics(report)
-    failures, missing = _quality(report, semantic, profile)
+    failures, missing = _quality(report, semantic, profile,
+                                 review_incomplete=not reviews or bool(unreviewed),
+                                 pending_review=pending_review)
     costs, budget_failures, budget_missing = _budget_metrics(metrics, profile)
     for case in report["cases"]:
         outcome = case.get("result") or {}
@@ -382,8 +388,9 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
         "article_usage": metrics["article_usage"],
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
-        "quality_statistics": quality_statistics(report["cases"], semantic),
-        "quality_gate_statistics": quality_gate_statistics(report["cases"], semantic, profile),
+        "quality_statistics": quality_statistics(report["cases"], semantic, review_gaps=review_gaps),
+        "quality_gate_statistics": quality_gate_statistics(
+            report["cases"], semantic, profile, review_gaps=review_gaps),
         "first_decision": metrics["decisions"],
         "cache_diagnostics": {name: _cache_summary(row)
                               for name, row in metrics["populations"].items()},

@@ -26,18 +26,22 @@ def assess(source: bytes, semantic: dict) -> dict:
         rounds = case.get("result", {}).get("rounds", [])
         states = [rows.get((case["id"], index + 1), {}).get("status")
                   for index in range(len(rounds))]
+        suspect = [index for index, state in enumerate(states, 1) if state == "suspect"]
+        missing = [index for index, state in enumerate(states, 1)
+                   if state not in ("no_issue_found", "suspect")]
         status = "not_evaluated"
         if case["status"] == "failed":
             status = "failed"
         elif case["status"] == "passed" and rounds:
-            if "suspect" in states:
+            if suspect:
                 status = "needs_review"
-            elif all(state == "no_issue_found" for state in states):
+            elif not missing:
                 status = "checks_passed"
         results.append({"id": case["id"], "status": status,
                         "deterministic_status": case["status"],
                         "reviewed_rounds": sum(state == "no_issue_found" for state in states),
-                        "expected_rounds": len(rounds)})
+                        "expected_rounds": len(rounds),
+                        "missing_review_rounds": missing, "suspect_rounds": suspect})
     return {"source_report_sha256": semantic["source_report_sha256"],
             "scope": "recorded HTTP responses and proposed actions; "
                      "browser and post-approval outcomes excluded",
