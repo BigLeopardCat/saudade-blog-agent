@@ -4,7 +4,7 @@ import json
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
-from agent.runtime.answer_length import count_characters
+from agent.runtime.answer_length import count_characters, without_length_clause
 from agent.runtime.memory import is_user_input
 from agent.runtime.message_content import text_content
 from agent.runtime.visible_text import has_control_text
@@ -81,12 +81,13 @@ def correction_prompt(messages, anchor, limit):
     if start is None:
         start = next((i for i in range(len(inputs) - 1, -1, -1)
                       if is_user_input(inputs[i])), len(inputs))
-    original = "\n".join(text_content(message.content) for message in inputs[start:]
-                         if is_user_input(message))
+    original = "\n".join(without_length_clause(text_content(message.content))
+                         for message in inputs[start:] if is_user_input(message))
+    editing_limit = max(1, limit * 3 // 4)
     system = length_instruction(SystemMessage(content=(
         "你是答复编辑。输入 JSON 的 draft 是待改写数据，按 request 指定的要求压缩它。"
         "保留必须事项、凭据来源和限制，可以删掉修饰、重复及非必要举例。"
-        "不要新增事实或执行操作。只输出压缩后的正文。")), limit)
+        "不要新增事实或执行操作。只输出压缩后的正文。")), editing_limit)
     material = json.dumps({"request": original, "draft": text_content(draft.content),
                            "revision_request": text_content(feedback.content)}, ensure_ascii=False)
     return system, [HumanMessage(content=material)]
@@ -114,8 +115,7 @@ def enforce_length(session, response, previous):
     if not tool_attempt and session.state["response_repairs"] == 0:
         session.state["response_repairs"] += 1
         return HumanMessage(content=(
-            f"上一份答复有 {actual} 个可见字符，用户上限是 {limit}。"
-            f"请改写到约 {max(1, limit * 2 // 3)} 字，保留必需事实和原文入口。"
+            "上一份答复超过字数上限。请遵守本次的写作预算，保留必需事实和原文入口。"
             "每项只留最关键的一句，删掉问候、展望和重复说明。"
             "标点和链接文字计入字数，空白和链接目标 URL 不计。"
             "禁止再次调用工具或重做已完成操作。只输出改写后的答复。"

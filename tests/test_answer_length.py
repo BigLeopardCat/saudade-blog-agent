@@ -51,7 +51,8 @@ def test_runtime_repairs_once_and_never_streams_the_rejected_answer(correction, 
     assert [message["role"] for message in requests[1]["messages"]] == ["system", "user"]
     material = json.loads(requests[1]["messages"][1]["content"])
     assert material["draft"] == original
-    assert material["request"] == "请用10字以内总结。"
+    assert material["request"] == "请简要总结。"
+    assert "最终答复最多 7 个可见字符" in requests[1]["messages"][0]["content"]
     assert "禁止再次调用工具" in material["revision_request"]
     assert original not in visible
     assert visible == final.reply

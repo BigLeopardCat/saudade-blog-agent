@@ -6,10 +6,10 @@ import unicodedata
 from markdown_it import MarkdownIt
 
 _LIMIT = re.compile(
-    r"(?:用|以)?\s*(?<![0-9])([0-9]{1,6})\s*(?:个?(?:字符|字))\s*(?:以内|之内|以下)"
-    r"(?=\s*,?\s*(?:总结|概括|回答|回复|说明|介绍)|\s*(?:[。!;]|$))"
-    r"|(?:不超过|不得超过|最多|控制在|限于)\s*([0-9]{1,6})\s*个?(?:字符|字)"
-    r"(?=\s*(?:以内|之内|以下|[。!,;]|$))"
+    r"(?:用|以)?\s*(?<!\d)(\d{1,6})\s*个?(?:字符|字)\s*(?:以内|之内|以下)"
+    r"(?=\s*[,，]?\s*(?:总结|概括|回答|回复|说明|介绍)|\s*(?:[。！!；;]|$))"
+    r"|(?:不超过|不得超过|最多|控制在|限于)\s*(\d{1,6})\s*个?(?:字符|字)"
+    r"(?=\s*(?:以内|之内|以下|[。！!，,；;]|$))"
 )
 _MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable(["table", "strikethrough"])
 
@@ -21,6 +21,11 @@ def requested_limit(request):
     limits = [int(a or b) for a, b in _LIMIT.findall(
         unicodedata.normalize("NFKC", request))]
     return min((limit for limit in limits if limit > 0), default=None)
+
+
+def without_length_clause(request):
+    """Keep the editing brief while leaving its length budget to the runtime."""
+    return _LIMIT.sub("简要", request)
 
 
 def visible_blocks(markdown):
