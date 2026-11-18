@@ -388,7 +388,8 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
         "article_usage": metrics["article_usage"],
         "usage_by_outcome": outcome_usage(report["cases"], semantic, metrics["case_usage"]),
-        "quality_statistics": quality_statistics(report["cases"], semantic, review_gaps=review_gaps),
+        "quality_statistics": quality_statistics(
+            report["cases"], semantic, review_gaps=review_gaps),
         "quality_gate_statistics": quality_gate_statistics(
             report["cases"], semantic, profile, review_gaps=review_gaps),
         "first_decision": metrics["decisions"],
