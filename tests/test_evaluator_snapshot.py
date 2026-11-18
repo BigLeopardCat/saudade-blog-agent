@@ -10,15 +10,14 @@ from eval import online_baseline
 
 def test_snapshot_freezes_shared_stream_validation_and_event_contract(tmp_path):
     hashes = online_baseline.snapshot(tmp_path, [{"id": "snapshot-probe"}])
-    for name in ("stream_protocol.py", "agent/contracts/events.py", "agent/runtime/answer_length.py",
-                 "release_profile.json",
+    for name in ("stream_protocol.py", "agent/contracts/events.py",
+                 "agent/runtime/answer_length.py", "release_profile.json",
                  "command_report.py", "acceptance.py", "corpus_terms.py",
                  "corpus_provenance.py", "golden_runtime.py", "golden_thread.py",
                  "golden_trace.py", "native_receipt_contract.py", "cache_diagnostics.py"):
         path = tmp_path / "evaluator" / name
         assert path.is_file()
         assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name]
-
 
 
 @pytest.mark.parametrize("helper", [
