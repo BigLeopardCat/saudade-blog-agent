@@ -84,3 +84,16 @@ def test_manual_help_does_not_expand_chat_only_tool_permissions():
                    for path in context["manual_ui"]["public_pages"].values())
     assert context["manual_ui"]["grants_agent_permissions"] is False
     assert browser.tools({"configurable": {"principal": principal, "user_id": 9}}) == {}
+
+
+def test_admin_approval_role_names_are_recorded_without_granting_permissions(monkeypatch):
+    events = []
+    monkeypatch.setattr(prompt, "record", lambda node, event, **data: events.append(
+        {"node": node, "event": event, **data}))
+    messages = prompt.build_prompt([], Principal(7, "admin", SOURCE_ASSERTION))
+    context = json.JSONDecoder().raw_decode(
+        messages[0].content.split("运行时能力（可信数据）：", 1)[1])[0]
+    facts = runtime_context(events)["product_facts"]
+    assert facts["role_vocabulary"] == context["role_vocabulary"]
+    assert facts["role_vocabulary"]["zako"] == "杂鱼"
+    assert context["role_vocabulary_grants_authorization"] is False

@@ -10,6 +10,7 @@ from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import estimate_tokens, text_content
 from agent.runtime.progress import emit
+from agent.runtime.tool_context import observation_scope, plan_observation
 from agent.runtime.tool_outputs import framework_tool, prepared_result
 from config.settings import settings
 from utils import trace as trace_mod
@@ -19,7 +20,7 @@ TRACE_RESULT_CHARS = 8000
 _TRUNCATION_MARKER = "\n[结果截断，请缩小检索范围]"
 
 
-def result_limit(value):
+def result_limit(value, *, max_tokens=None):
     """Bound one observation; native_call enforces the complete request budget.
 
     Context exhaustion must not silently discard facts to fund another call.
@@ -28,12 +29,13 @@ def result_limit(value):
     message = value if isinstance(value, ToolMessage) else ToolMessage(
         content=str(value), tool_call_id="result-budget")
     body = text_content(message.content)
-    if estimate_tokens([message]) <= settings.agent_tool_result_tokens:
+    capacity = settings.agent_tool_result_tokens if max_tokens is None else max_tokens
+    if estimate_tokens([message]) <= capacity:
         return len(body)
     marker_tokens = (estimate_tokens([message.model_copy(update={"content": _TRUNCATION_MARKER})])
                      - estimate_tokens([message.model_copy(update={"content": ""})]))
     kept = trim_messages([message.model_copy(update={"content": body})],
-        max_tokens=max(0, settings.agent_tool_result_tokens - marker_tokens),
+        max_tokens=max(0, capacity - marker_tokens),
         token_counter=estimate_tokens, strategy="first", allow_partial=True, text_splitter=list)
     return len(kept[0].content) if kept else 0
 
@@ -90,7 +92,9 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     tool_state.use(session, name, prompt)
     emit(session.config, f"正在调用工具：{name}", key=f"tool:{call['id']}")
     failures = []
-    with native_tool(session.budget), tool_evidence.scope(call, round_index):
+    plan = plan_observation(session, prompt, call, request.state.get("context_anchor"))
+    with (native_tool(session.budget), tool_evidence.scope(call, round_index),
+          observation_scope(plan)):
         output = handler(request.override(tool=framework_tool(
             session.execution_tools[name], on_error=failures.append)))
     command = output if isinstance(output, Command) else None
@@ -113,7 +117,8 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     if message.status == "error" and kind not in {"invalid_args", "unavailable", "not_found"}:
         kind = "error"
     original = message
-    message = session.render_result(call, message, result_limit(message))
+    with observation_scope(plan):
+        message = session.render_result(call, message, result_limit(message))
     rendered_kind = (message.artifact or {}).get("kind")
     if kind == "ok" and rendered_kind in {"invalid_args", "unavailable", "not_found", "error"}:
         kind = rendered_kind

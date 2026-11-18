@@ -7,7 +7,7 @@ import pytest
 
 from agent.domains.articles.evidence import ArticleEvidence
 from rag.corpus import content_revision
-from rag.passages import attach_passages
+from rag.passages import attach_passages, budget_passages
 from rag.reading import render_search_result, search_frame
 from rag.search import RagIndex
 from rag.sections import outline
@@ -86,7 +86,11 @@ def test_unverified_snapshot_passages_do_not_establish_body_evidence(source):
 
 
 def test_budget_removed_passages_never_enter_read_evidence(source):
-    _, index, hits = source
+    document, index, _ = source
+    document["content"] = "## Workers\n" + "取消后等待工作线程退出，再归还许可。" * 2000
+    document["revision"] = content_revision(document["title"], document["content"])
+    index.build()
+    hits = index._lexical_ranked("归还许可", 1)
     rows = index.read_passages(hits)
     meta = {"body_evidence": {"verified": True, "scope": "returned_passages"}}
     no_body = [{**rows[0], "passages": []}]
@@ -97,10 +101,16 @@ def test_budget_removed_passages_never_enter_read_evidence(source):
         )
     )
     result = render_search_result(rows, meta, cap)
-    assert result.kind == "ok" and result.data[0]["passages"] == []
-    assert result.meta["body_evidence"]["returned_chars"] == 0
+    assert result.kind == "ok"
+    visible = sum(len(p["text"]) for p in result.data[0]["passages"])
+    assert visible < sum(len(p["text"]) for p in rows[0]["passages"])
+    assert result.meta["body_evidence"]["returned_chars"] == visible
     evidence = ArticleEvidence()
     evidence.observe("rag_search", {}, result)
+    assert sum(r["visible_chars"] for r in evidence.read_ranges.get(41, [])) == visible
+    hidden = render_search_result(no_body, meta, cap)
+    evidence = ArticleEvidence()
+    evidence.observe("rag_search", {}, hidden)
     assert evidence.candidates and evidence.documents == evidence.read_ranges == {}
     assert rows[0]["passages"]
 
@@ -115,6 +125,29 @@ def test_global_passage_budget_keeps_exact_visible_range(source):
     )
     passage = BodyPassage.model_validate(rows[0]["passages"][0])
     assert len(passage.text) == 5 and passage.source.end - passage.source.offset == 5
+
+
+def test_locator_metadata_cannot_crowd_verified_body_into_single_characters():
+    title = "项目架构与全文总结和分页读取的证据边界"
+    body = "\n".join(f"## 章节{i}的全文总结和分页读取\n" +
+                     "分页读取以同一修订和准确坐标保证连续覆盖原文。" * 18
+                     for i in range(8))
+    document = {"type": "note", "id": 71, "title": title, "content": body}
+    document["revision"] = content_revision(title, body)
+    index = RagIndex(corpus_loader=lambda: [document], vector_warmer=lambda _: None)
+    index.build()
+    hits = index._lexical_ranked("全文总结 分页读取", 1, article_id=71)
+    rows = index.read_passages(hits)
+    meta = {"body_evidence": {"verified": True, "scope": "returned_passages"}}
+    rendered = render_search_result(rows, meta, 2850)
+    assert rendered.kind == "ok" and len(rendered.text) <= 2850
+    assert rendered.meta["presentation"]["omitted_locations"] > 0
+    assert rendered.meta["body_evidence"]["returned_chars"] >= 240
+    assert len(rendered.data[0]["matches"]) < len(rows[0]["matches"])
+    for passage in rendered.data[0]["passages"]:
+        value = BodyPassage.model_validate(passage)
+        assert len(value.text) >= 240 and "同一修订" in value.text
+    assert len(rows[0]["matches"]) == 8
 
 
 def test_delivered_passages_have_heading_paths_and_are_not_requested_again(source):
@@ -133,10 +166,14 @@ def test_budgeted_or_removed_passages_leave_only_the_missing_ranges_readable(sou
                            index.status()["revision"], max_chars=5)
     doc = json.loads(search_frame(rows, {}))["documents"][0]
     seen = doc["passages"][0]["range"]
-    selected = doc["read_requests"][0]["request"]["selection"]
-    assert selected["section"] == seen["section_id"]
-    assert selected["offset"] == seen["end"]
-    assert selected["offset"] + selected["max_chars"] == hits[0]["matches"][0]["end"]
+    selections = [r["request"]["selection"] for r in doc["read_requests"]]
+    assert all(selected["section"] == seen["section_id"] for selected in selections)
+    spans = sorted([(seen["offset"], seen["end"]), *[
+        (selected["offset"], selected["offset"] + selected["max_chars"])
+        for selected in selections]])
+    original = hits[0]["matches"][0]
+    assert spans[0][0] == original["offset"] and spans[-1][1] == original["end"]
+    assert all(left[1] == right[0] for left, right in zip(spans, spans[1:]))
     removed = [{**rows[0], "passages": []}]
     selected = json.loads(search_frame(removed, {}))["documents"][0]["read_requests"][0][
         "request"]["selection"]
@@ -197,3 +234,63 @@ def test_presentation_rejects_a_parser_identity_disagreement(source):
     result = render_search_result(rows, {"body_evidence": {"verified": True}}, 24000)
     assert result.kind == "unavailable" and result.data is None
     assert result.meta["reason"] == "invalid_retrieval_data"
+
+
+def test_separated_facts_in_one_section_remain_readable():
+    body = "## Conditions\nopening_fact\n" + "irrelevantpadding " * 400 + "\nclosing_fact"
+    document = {"type": "note", "id": 41, "title": "Conditions", "content": body,
+                "revision": content_revision("Conditions", body)}
+    index = RagIndex(corpus_loader=lambda: [document], vector_warmer=lambda _: None)
+    index.build()
+    hits = index._lexical_ranked("opening_fact closing_fact", 1)
+    assert len(hits[0]["section_ids"]) == 1 and len(hits[0]["matches"]) >= 2
+    text = "\n".join(p["text"] for p in index.read_passages(hits)[0]["passages"])
+    assert "opening_fact" in text and "closing_fact" in text
+
+
+def test_hybrid_fusion_keeps_multiple_distinct_locations_in_one_section(source):
+    from rag.vector_index import rrf_fuse
+
+    _, _, hits = source
+    row = hits[0]
+    section = row["section_ids"][0]
+    row["matches"] = [{"section_id": section, "offset": start, "end": start + 10}
+                      for start in (0, 100, 200, 300)]
+    fused = rrf_fuse([row], [deepcopy(row)], 60, 1)
+    assert {(m["offset"], m["end"]) for m in fused[0]["matches"]} == {
+        (0, 10), (100, 110), (200, 210), (300, 310)}
+
+
+def test_presentation_retains_evidence_from_both_sources_and_centers_the_hit():
+    documents = []
+    for identifier in (41, 42):
+        body = "## Evidence\n" + "noise " * 700 + f"critical_fact_{identifier}"
+        title = f"Source {identifier}"
+        documents.append({"type": "note", "id": identifier, "title": title, "content": body,
+                          "revision": content_revision(title, body)})
+    index = RagIndex(corpus_loader=lambda: documents, vector_warmer=lambda _: None)
+    index.build()
+    rows = index.read_passages(index._lexical_ranked("critical_fact", 2))
+    meta = {"body_evidence": {"verified": True, "scope": "returned_passages"}}
+    small = budget_passages(rows, 600)
+    cap = len(search_frame(small, {"body_evidence": {
+        **meta["body_evidence"], "returned_chars": 600}})) + 128
+    delivered = render_search_result(rows, meta, cap)
+    assert delivered.kind == "ok" and len(delivered.data) == 2
+    assert len(str(delivered)) <= cap
+    for row in delivered.data:
+        text = "".join(p["text"] for p in row["passages"])
+        assert f"critical_fact_{row['id']}" in text
+        assert row["passages"] and all(BodyPassage.model_validate(p) for p in row["passages"])
+    assert delivered.meta["body_evidence"]["returned_chars"] == sum(
+        len(p["text"]) for row in delivered.data for p in row["passages"])
+
+
+def test_unused_source_allowance_can_be_spent_on_another_source(source):
+    _, index, hits = source
+    rows = index.read_passages(hits)
+    original = deepcopy(rows)
+    rows.append({**rows[0], "id": 42, "passages": []})
+    bounded = budget_passages(rows, 500)
+    assert len(bounded[0]["passages"][0]["text"]) == 500
+    assert rows[0] == original[0]

@@ -18,6 +18,28 @@ README、包版本、Changelog 和发行说明的稳定性声明应一致；证�
 
 使用干净工作树构建发布，保留旧开发目录中的未提交工作；不以 reset 覆盖并行会话。
 
+## 发行附件安装
+
+Release 提供 `saudade_agent-*.whl`、源码包、锁定生产依赖 `requirements.txt`、
+`release-manifest.json` 和 `SHA256SUMS`。这些附件由固定源码的 CI 构建和导入验证，
+不打包运行配置、数据库、模型或维护者的虚拟环境。先核对 manifest 的完整提交和版本，
+再在下载目录运行 `sha256sum --check SHA256SUMS`。Python 代码 wheel 可跨平台，
+锁定依赖中的原生扩展仍须支持目标解释器和平台；本项目验证环境为 Linux / CPython 3.12。
+
+独立试装可在新的虚拟环境执行，不能覆盖正在运行的环境：
+
+```sh
+uv venv --python 3.12 .venv
+uv pip sync --python .venv/bin/python --require-hashes requirements.txt
+uv pip install --python .venv/bin/python --no-deps saudade_agent-*.whl
+SAUDADE_IGNORE_ENV_FILE=1 .venv/bin/python -I -c 'from agent.main import app; print(app.version)'
+```
+
+导入通过只证明包及依赖可加载，不证明数据库、模型或宿主已就绪。
+博客集成服务继续按下文的固定源码/systemd 或 Compose 流程安装，
+wheel 不包含 systemd 发布脚本和博客服务。容器快速安装包由配套博客 Release 提供，
+可跳过 Rust 与前端编译，见[预构建安装](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/prebuilt.md)。
+
 ## 版本与配置边界
 
 生产运行 `/srv/saudade-agent/releases/<完整提交 SHA>`，每版有独立锁定 venv。启动脚本解析真实目录后执行 `agent.main:app`，不会在运行中导入开发 checkout 的变更。Agent 与博客分别发布；博客的 widget pin 只控制前端资源。
@@ -37,7 +59,7 @@ README、包版本、Changelog 和发行说明的稳定性声明应一致；证�
 
 本仓根目录的 `Dockerfile` 构建 Python 3.12、锁定生产依赖的 Agent 镜像，以 UID/GID `10002:10002` 运行，入口 `agent.main:app`，内部端口 8010。完整提交通过构建参数 `REVISION` 写入 `DEPLOY_SHA`，供 `/version` 核对；凭据和 `.env` 不进入镜像。容器 CI 检查无网络、无凭据时的导入和镜像用户。
 
-完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
+完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。 scheduler 的 Compose 健康检查在 DBOS 初始化及队列注册完成后检查进程标记；它证明启动与进程存活，不证明数据库持续可用或任务处理时延。探针不调用模型和博客接口，原生 systemd worker 不启用容器标记。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
 
 容器网络中配置 `BLOG_INTERNAL_API_BASE=http://backend:3000/api/public` 供服务器请求，`BLOG_API_BASE=https://blog.example.com/api/public` 仍决定公开导航。已有原生部署不填写内部覆盖值时维持原行为。只读根文件系统、运行凭据和卷由宿主编排负责，不在镜像启动时执行全量升级或覆盖配置。
 

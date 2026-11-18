@@ -42,6 +42,35 @@ def test_missing_coverage_and_subtotals_remain_unknown_without_agent_aggregation
     assert '本次日序列范围' not in text and '小计' not in text
 
 
+def test_backend_peaks_keep_window_and_month_scopes_separate():
+    from agent.reports import render_note_daily
+
+    text = render_note_daily({'daily': series(3), 'dailyWindow': {
+        'scope': 'rolling_window', 'start': '2026-10-31', 'end': '2026-11-02',
+        'peakViews': {'value': 90, 'dates': ['2026-10-31']},
+        'monthlySubtotals': [{'month': '2026-11', 'views': 14,
+                             'peakViews': {'value': 7, 'dates': ['2026-11-01', '2026-11-02']}}]}})
+    assert '本次滚动窗口峰值：最高日阅读 90，日期 2026-10-31' in text
+    assert '窗口内2026-11峰值：最高日阅读 7，日期 2026-11-01、2026-11-02' in text
+    assert '窗口内2026-11峰值：最高日阅读 90' not in text
+    assert '不是整月合计' in text
+
+
+def test_missing_or_invalid_peak_facts_are_not_reconstructed_from_the_daily_rows():
+    from agent.reports import render_note_daily
+
+    for peak in (None, {'value': 9}, {'value': 9, 'dates': ['not a date']},
+                 {'value': -1, 'dates': ['2026-11-01']}):
+        text = render_note_daily({'daily': series(3), 'dailyWindow': {
+            'scope': 'rolling_window', 'start': '2026-11-01', 'end': '2026-11-03',
+            'peakViews': peak}})
+        assert '最高日阅读' not in text
+    text = render_note_daily({'daily': [], 'dailyWindow': {
+        'scope': 'rolling_window', 'start': '2026-11-01', 'end': '2026-11-03',
+        'peakViews': {'value': 0, 'dates': ['2026-11-01', '2026-11-02', '2026-11-03']}}})
+    assert '最高日阅读为 0，没有正值访问高峰' in text
+
+
 def test_monthly_trend_accepts_real_daily_or_period_observations_but_not_failed_reads():
     import json
     from pathlib import Path

@@ -4,7 +4,7 @@ import json
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.domains.articles.summary import summarize_article
@@ -153,6 +153,102 @@ def test_multi_page_source_is_joined_in_order_with_one_bound_revision(source):
                for row in state["requests"][1:])
 
 
+def test_multiple_transport_pages_do_not_force_an_unnecessary_model_summary(source):
+    state, model = source
+    state["body"] = "完整材料。" * 7000
+    result = invoke()
+    assert len(state["requests"]) == 2 and model.prompts == []
+    assert result.data["view"] == "body" and result.data["readComplete"]
+    assert result.data["noteContent"] == state["body"]
+    assert result.data["source"]["offset"] == 0
+    assert result.data["source"]["end"] == len(state["body"])
+    assert result.data["nextOffset"] is None
+
+
+def test_generation_inherits_the_provenance_inclusive_delivery_allowance(source, monkeypatch):
+    from agent.runtime.tool_context import current_observation
+    from agent.runtime.tool_execution import result_limit
+
+    state, model = source
+    state["body"] = "完整材料。" * 10000
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 1700)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 4096)
+    options = {}
+
+    def factory(**kwargs):
+        options.update(kwargs)
+        return model
+
+    monkeypatch.setattr("models.get_llm", factory)
+    result = invoke()
+    assert result.kind == "ok" and 128 <= options["max_tokens"] < 1700
+    assert "交付上限" in model.prompts[0][-1].content
+    assert state["body"] in model.prompts[0][-1].content
+    assert current_observation().fits(str(result))
+    raw = ToolMessage(content=str(result), tool_call_id="summary", artifact={
+        "kind": "ok", "data": result.data})
+    assert result_limit(raw) == len(raw.content)
+    middleware = ArticleMiddleware(ToolSession(None, {}, {}, {}))
+    delivered = middleware.render_result({"name": "get_article_detail", "args": ARGS,
+        "id": "summary"}, raw, result_limit(raw))
+    assert delivered.status == "success" and delivered.content == raw.content
+    assert json.loads(delivered.content)["sourceUrl"].endswith("/article/19")
+
+
+def test_impossible_summary_envelope_is_rejected_before_a_model_request(source, monkeypatch):
+    state, model = source
+    state["body"] = "完整材料。" * 10000
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 128)
+    result = invoke()
+    assert result.kind == "unavailable" and model.prompts == []
+    assert result.meta["reason"] == "summary_delivery_capacity"
+
+
+def test_chinese_summary_that_fits_the_frame_is_not_rejected_by_a_halved_character_target(
+        source, monkeypatch):
+    from agent.runtime.tool_context import current_observation
+
+    state, model = source
+    state["body"] = "完整材料。" * 10000
+    model.text = "观点、证据及限制。" * 150
+    monkeypatch.setattr(settings, "agent_tool_result_tokens", 1700)
+    monkeypatch.setattr(settings, "agent_summary_output_tokens", 4096)
+    result = invoke()
+    assert result.kind == "ok" and result.data["summary"] == model.text
+    assert len(model.prompts) == 1 and current_observation().fits(str(result))
+
+
+def test_nested_summary_cannot_consume_the_agents_final_response_call(source):
+    state, summarizer = source
+    state["body"] = "完整材料。" * 10000
+
+    class Model:
+        max_tokens = 256
+
+        def __init__(self):
+            self.calls = 0
+
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(content="", tool_calls=[{
+                    "name": "get_article_detail", "args": ARGS, "id": "summary"}])
+            assert next(m for m in reversed(prompt) if isinstance(m, ToolMessage)).status == "error"
+            return AIMessage(content="总结尚未完成。")
+
+    model = Model()
+    budget = TaskBudget(BudgetLimits(model_calls=2))
+    with budget_scope(budget):
+        session = ToolSession(model, {}, {notes.get_article_detail.name: notes.get_article_detail},
+                              {}, middleware=(ArticleMiddleware,))
+        result = session.run([HumanMessage("总结全文")])
+    assert model.calls == budget.model_calls == 2 and summarizer.prompts == []
+    assert budget.reason is None and "尚未完成" in result.reply
+
+
 def test_refine_processes_all_source_ranges_and_keeps_previous_summary(source):
     state, model = source
     state["body"] = "\n\n".join(f"章节 {i}：事实与限制 {i}。" * 20 for i in range(45))
@@ -206,7 +302,7 @@ def test_no_summary_is_published_for_failed_or_inconsistent_continuation(source,
 @pytest.mark.parametrize("finish,text", [("length", "被截断的摘要"), ("stop", "")])
 def test_truncated_or_empty_model_output_is_not_complete_evidence(source, finish, text):
     state, model = source
-    state["body"] = "完整材料。" * 7000
+    state["body"] = "完整材料。" * 10000
     model.finish, model.text = finish, text
     budget = TaskBudget()
     result = invoke(budget)
@@ -222,7 +318,7 @@ def test_summary_output_validation_uses_actual_usage_before_conservative_estimat
     source, monkeypatch, receipt, finish, accepted
 ):
     state, model = source
-    state["body"] = "完整材料。" * 7000
+    state["body"] = "完整材料。" * 10000
     from agent.runtime.message_content import estimate_tokens
 
     text = " documentation" * 100
@@ -266,7 +362,7 @@ def test_cancellation_propagates_instead_of_returning_a_complete_summary(source,
 
 def test_summary_has_separate_provenance_and_failed_summary_cannot_be_replaced_by_passages(source):
     state, _ = source
-    state["body"] = "完整材料。" * 7000
+    state["body"] = "完整材料。" * 10000
     result = invoke()
     evidence = ArticleEvidence()
     evidence.observe("get_article_detail", ARGS, result)
@@ -312,7 +408,7 @@ def test_failed_summary_requires_complete_same_revision_document_read_to_recover
 
 def test_native_tool_loop_recovers_after_truncated_summary_by_reading_the_whole_source(source):
     state, summarizer = source
-    state["body"] = "完整材料。" * 7000
+    state["body"] = "完整材料。" * 10000
     summarizer.finish = "length"
 
     class AgentModel:
@@ -407,7 +503,7 @@ def test_standard_model_callbacks_count_internal_usage_once(source, monkeypatch,
     from utils import trace
 
     state, _ = source
-    state["body"] = "完整材料。" * 7000
+    state["body"] = "完整材料。" * 10000
     budget = TaskBudget()
     model = FakeMessagesListChatModel(responses=[AIMessage(content="摘要", usage_metadata={
         "input_tokens": 100, "output_tokens": 12, "total_tokens": 112})],

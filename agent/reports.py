@@ -361,6 +361,23 @@ def _rank_block(head: str, rows: list | None, metric: str) -> list[str]:
     return lines
 
 
+def _peak_lines(peak, label):
+    """Project backend extrema; missing or invalid extrema are never inferred from rows."""
+    if (not isinstance(peak, dict) or type(value := peak.get("value")) is not int
+            or value < 0):
+        return []
+    dates = peak.get("dates")
+    if (not isinstance(dates, list) or not dates
+            or any(not isinstance(day, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", day)
+                   for day in dates)):
+        return []
+    if value == 0:
+        return [f"- {label}：最高日阅读为 0，没有正值访问高峰。"]
+    shown = "、".join(dates[:5])
+    omitted = f"（并列 {len(dates)} 天，仅列前 5 天）" if len(dates) > 5 else ""
+    return [f"- {label}：最高日阅读 {value}，日期 {shown}{omitted}。"]
+
+
 def _daily_window_lines(window):
     """Display backend coverage and subtotals without deriving business statistics."""
     if (not isinstance(window, dict) or window.get("scope") != "rolling_window"
@@ -369,6 +386,7 @@ def _daily_window_lines(window):
         return ["- 日序列范围：后端未返回覆盖范围，不能据此断言整月合计。"]
     lines = [f"- 本次日序列范围：{window['start']} 至 {window['end']}；"
              "滚动窗口不是自然月整月合计，整月比较需读取对应月报。"]
+    lines += _peak_lines(window.get("peakViews"), "本次滚动窗口峰值")
     subtotals = window.get("monthlySubtotals")
     if isinstance(subtotals, list):
         for row in subtotals:
@@ -376,6 +394,7 @@ def _daily_window_lines(window):
                 value = _count_int(row.get("views"))
                 if value is not None:
                     lines.append(f"- 窗口内{row['month']}小计（不是整月合计）：阅读 {value}")
+                    lines += _peak_lines(row.get("peakViews"), f"窗口内{row['month']}峰值")
     return lines
 
 

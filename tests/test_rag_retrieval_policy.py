@@ -22,7 +22,7 @@ def test_chunk_aggregation_keeps_locations_aligned_with_repeated_sections():
                                                    ("s2", "另节"), ("s3", "重复")])]
     ranked = documents(chunks, {0: 4, 1: 3, 2: 2, 3: 1}, "rev")[0]
     assert ranked["section_ids"] == ["s1", "s2", "s3"]
-    assert [m["offset"] for m in ranked["matches"]] == [0, 200, 300]
+    assert [m["offset"] for m in ranked["matches"]] == [0, 100, 200, 300]
 
 
 @pytest.mark.parametrize("vector_available", [False, True])

@@ -24,6 +24,38 @@ flowchart LR
 5. 用户批准后，确定性代码重新校验目标并通过执行账防重复调用。模型可以叙述真实结果，不能自行宣布写入成功。
 6. 完整轮次提交至会话状态；SSE 交付进度、正文和结构化卡片。HTTP 断开不等于远端模型或业务请求已经停止。
 
+## 一次聊天的时序
+
+```mermaid
+sequenceDiagram
+    actor User as 用户
+    participant UI as 看板娘面板
+    participant Host as Rust 宿主
+    participant API as Agent API
+    participant Runtime as 共享运行时
+    participant Model as 模型与工具循环
+    participant Store as PostgreSQL checkpoint
+    User->>UI: 提交问题或任务
+    UI->>Host: 已登录聊天请求与会话坐标
+    Host->>Host: 验证当前登录态与会话归属
+    Host->>API: 短期身份断言与受限页面观察
+    API->>API: 验签并取得会话执行许可
+    API->>Runtime: 产品配置、可信身份与任务预算
+    Runtime->>Store: 加载或建立执行状态
+    Runtime->>Model: 框架循环与当前可见工具
+    loop 按任务需要查询或准备操作
+        Model->>Runtime: 工具调用
+        Runtime->>Runtime: 参数、权限、预算与取消检查
+        Runtime-->>Model: 结果、证据或明确错误
+    end
+    Runtime->>Store: 保存执行状态或持久暂停
+    Runtime-->>UI: 经宿主转发的 SSE 正文、进度或卡片
+```
+
+这是逻辑时序，不表示所有结果都等到最后才流式发送。领域发现按当前身份投影目录，
+再按需加载工具 schema，不要求另起一个意图分类模型。确认写入和浏览器回报有各自的
+暂停/接续边界，详见[身份与写入](identity-and-permissions.md)和[聊天协议](chat-stream-protocol.md)。
+
 ## 代码导航
 
 | 目录 | 职责 |
@@ -90,6 +122,14 @@ flowchart LR
 上限不是目标用量，也不改变任务时间或调用次数上限；仍被截断的回复继续报告未完成。
 设置扩展额度不高于基础额度可关闭扩展；自定义模型工厂及 middleware 显式模型/额度覆盖
 保留其自身策略。默认值须通过目标端点的长文成功率、实际输出与尾延迟共同验证。
+
+文章读取与检索的结果额度在执行前依据下一次完整模型请求分配，计算系统消息、当前工具 schema、
+保留历史、工具调用与输出空间；同一批尚未返回的工具共享剩余输入容量，并受每工具上限约束。
+`budget.observation_planned` 记录额度和待返回数量，不记录正文。全文摘要等会调用模型的
+子流程先预检完整调用计划，并临时保留主模型最终答复的调用次数与 Token 容量。
+这份保留不计作已消费用量，退出时释放；内部计划不可行不阻止主模型解释失败。
+最终工具结果仍须通过实际序列化后的容量检查；任务时间、真实用量结算和持久累计边界继续生效。
+普通工具保持配置的单结果上限；完整请求已装不下时停止，不通过临时裁去工具事实再凑一次模型调用。
 
 ## 交互并发与后台执行
 

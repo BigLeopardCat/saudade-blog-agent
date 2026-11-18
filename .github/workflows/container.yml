@@ -5,6 +5,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional existing draft release for verified assets
+        type: string
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -15,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Build pinned runtime
@@ -27,3 +32,58 @@ jobs:
             'from agent.main import app; assert app.state.runtime is None'
           docker run --rm --network none --entrypoint sh saudade-agent:test -c \
             'test ! -e /app/.env && test ! -d /app/.git && test -w /var/lib/saudade-agent'
+
+      - uses: astral-sh/setup-uv@e58605a9b6da7c637471fab8847a5e5a6b8df081
+        with:
+          version: '0.11.28'
+          python-version: '3.12'
+      - name: Verify production package installation
+        run: bash scripts/dev/package_smoke.sh
+      - name: Build installable distributions and locked dependencies
+        run: |
+          uv build --out-dir release-assets
+          uv export --frozen --no-dev --no-emit-project --output-file release-assets/requirements.txt
+          python3 - <<'PYCODE'
+          import hashlib, json, os, tomllib
+          from pathlib import Path
+          root = Path('release-assets')
+          (root / '.gitignore').unlink(missing_ok=True)
+          version = tomllib.loads(Path('pyproject.toml').read_text())['project']['version']
+          data = {'schema_version': 1, 'version': version, 'source_revision': os.environ['GITHUB_SHA'],
+                  'python': 'CPython 3.12+', 'dependencies': 'requirements.txt contains locked production versions and hashes',
+                  'scope': 'No runtime configuration, database, optional embedding model or virtualenv is included.',
+                  'files': {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.iterdir())}}
+          (root / 'release-manifest.json').write_text(json.dumps(data, indent=2) + '\n')
+          (root / 'SHA256SUMS').write_text(''.join(hashlib.sha256(p.read_bytes()).hexdigest() + '  ' + p.name + '\n'
+                                                for p in sorted(root.iterdir()) if p.name != 'SHA256SUMS'))
+          PYCODE
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: agent-packages-${{ github.sha }}
+          path: release-assets/
+          if-no-files-found: error
+          retention-days: 7
+
+  attach-release:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    needs: container
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          name: agent-packages-${{ github.sha }}
+          path: release-assets
+      - name: Attach assets only to the matching draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          test "$RELEASE_TAG" = "v$(jq -r .version release-assets/release-manifest.json)"
+          gh release view "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --json isDraft,targetCommitish > release.json
+          jq -e --arg sha "$SOURCE_SHA" '.isDraft == true and .targetCommitish == $sha' release.json
+          (cd release-assets && sha256sum --check SHA256SUMS)
+          gh release upload "$RELEASE_TAG" release-assets/* -R "$GITHUB_REPOSITORY"

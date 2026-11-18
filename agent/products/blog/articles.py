@@ -9,6 +9,7 @@ from langgraph.types import Command
 from agent.domains.articles.evidence import ArticleEvidence
 from agent.products.blog.article_context import source_references
 from agent.runtime.message_content import text_content
+from agent.runtime.tool_context import current_observation
 from agent.runtime.tool_execution import result_limit
 from rag.reading import (
     article_frame_text,
@@ -108,6 +109,8 @@ class ArticleMiddleware(AgentMiddleware):
             artifact = {**artifact, "kind": "error"}
             value = value.model_copy(update={"artifact": artifact})
         success = artifact.get("kind", "ok") == "ok" and value.status != "error"
+        if success and call["name"] in {"get_article_detail", "rag_search"}:
+            limit = min(limit, result_limit(value, max_tokens=current_observation().max_tokens))
         question = call["name"] == "get_article_detail" and is_question(call["args"])
         summary = call["name"] == "get_article_detail" and is_summary(call["args"])
         if success and summary:
@@ -115,7 +118,8 @@ class ArticleMiddleware(AgentMiddleware):
         elif success and call["name"] == "get_article_detail" and not question:
             data = artifact.get("data")
             if isinstance(data, dict):
-                limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}))
+                limit = result_limit(value.model_copy(update={"content": article_frame_text(data)}),
+                                     max_tokens=current_observation().max_tokens)
             body, visible = render_article_result(data, value.content, limit)
             failed = isinstance(data, dict) and visible is None
             value = value.model_copy(update={"content": body,

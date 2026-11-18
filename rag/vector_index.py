@@ -23,7 +23,7 @@ from rag.embedding_inputs import (
     vector_chunks,
 )
 from rag.postgres import PostgresRepository, Snapshot
-from rag.ranking import merge_match
+from rag.ranking import MAX_MATCHES_PER_DOCUMENT, merge_match
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +77,7 @@ def corpus_fingerprint(space: Space, chunks: list[dict]) -> str:
     return hashlib.sha256("\n".join(parts).encode("utf-8")).hexdigest()
 
 
-FUSION_POLICY = "document-section-location-rrf-v2"
+FUSION_POLICY = "document-section-location-rrf-v3"
 _SOURCE_FIELDS = ("corpus_revision", "content_revision", "document_revision", "section_schema")
 
 
@@ -152,7 +152,7 @@ def rrf_fuse(lex: list[dict], vec: list[dict], k: int, top_k: int) -> list[dict]
         out.append({**data["data"], "rank": rank, "locators": locations,
                     "sections": [row["section"] for row in locations],
                     "section_ids": [row["section_id"] for row in locations],
-                    "matches": matches[:max(3, len(locations))]})
+                    "matches": matches[:max(MAX_MATCHES_PER_DOCUMENT, len(locations))]})
     return out
 
 

@@ -13,7 +13,6 @@ from agent.llm_usage import usage_fields
 from agent.runtime.budget import BudgetExceeded, native_call
 from agent.runtime.message_content import estimate_tokens, text_content
 from agent.runtime.turns import check_cancelled
-from config.settings import settings
 from utils.trace import record
 
 _POLICY = (
@@ -25,14 +24,17 @@ _POLICY = (
     "发现后文限定或修正前文时明确反映。产出一份连贯总结，不逐页复述。"
 )
 INITIAL = ChatPromptTemplate.from_messages([
-    ("system", _POLICY), ("human", "总结要求：{instructions}\n文章材料：\n{text}")])
+    ("system", _POLICY),
+    ("human", "总结要求：{instructions}\n交付上限：{max_chars}字符，含标点与换行。"
+     "\n文章材料：\n{text}")])
 REFINE = ChatPromptTemplate.from_messages([
     ("system", _POLICY),
-    ("human", "总结要求：{instructions}\n先前摘要：\n{existing_answer}\n后续材料：\n{text}")])
+    ("human", "总结要求：{instructions}\n交付上限：{max_chars}字符，含标点与换行。"
+     "\n先前摘要：\n{existing_answer}\n后续材料：\n{text}")])
 SOURCE = PromptTemplate.from_template("原文范围 [{start},{end})：\n{page_content}")
 
 
-def _invoke(model, prompt, budget, config, output):
+def _invoke(model, prompt, budget, config, output, max_chars):
     check_cancelled(config)
     messages = prompt.to_messages()
     started, response = time.monotonic(), None
@@ -48,27 +50,36 @@ def _invoke(model, prompt, budget, config, output):
         estimated = estimate_tokens([HumanMessage(content=text)])
         record("article_summary", "llm_done" if response is not None else "llm_error",
                duration_s=round(time.monotonic() - started, 3), **fields,
-               finish_reason=metadata.get("finish_reason"), estimated_output=estimated)
+               finish_reason=metadata.get("finish_reason"), estimated_output=estimated,
+               output_chars=len(text), max_chars=max_chars)
     check_cancelled(config)
     measured = fields.get("output")
     used = measured if type(measured) is int and measured > 0 else estimated
     if (response is None or not text or metadata.get("finish_reason") not in (None, "stop")
-            or used > output
+            or used > output or len(text) > max_chars
+            or any(ord(char) < 32 and char not in "\n\r\t" for char in text)
             or response.tool_calls or response.invalid_tool_calls
             or response.additional_kwargs.get("refusal")):
+        record("article_summary", "output_rejected", output_chars=len(text),
+               max_chars=max_chars, used_output=used, output_limit=output,
+               finish_reason=metadata.get("finish_reason"))
         raise ValueError("incomplete_summary")
     return response
 
 
-def _documents(body, instructions, budget, output):
+def _documents(body, instructions, budget, output, max_chars):
     whole = Document(page_content=body, metadata={"start": 0, "end": len(body)})
     prompt = INITIAL.format_messages(
-        instructions=instructions, text=SOURCE.format(**whole.metadata, page_content=body))
+        instructions=instructions, max_chars=max_chars,
+        text=SOURCE.format(**whole.metadata, page_content=body))
     capacity = min(budget.limits.input_tokens, budget.limits.context_tokens - output)
     if budget.input_tokens(prompt) <= capacity:
-        return [whole], "stuff"
-    fixed = REFINE.format_messages(instructions=instructions, text="", existing_answer="")
-    size = capacity - budget.input_tokens(fixed) - output - 128
+        return [whole], "stuff", max_chars
+    # Bound the previous answer as well as the new output in every refinement input.
+    max_chars = min(max_chars, output * 3 // 2)
+    fixed = REFINE.format_messages(instructions=instructions, text="",
+        existing_answer="字" * max_chars, max_chars=max_chars)
+    size = capacity - budget.input_tokens(fixed) - 128
     if size < 128:
         raise BudgetExceeded("context_tokens")
     overhead = estimate_tokens([HumanMessage(content="")])
@@ -88,22 +99,29 @@ def _documents(body, instructions, budget, output):
         covered = end
     if covered != len(body):
         raise ValueError("incomplete_split")
-    return documents, "refine"
+    return documents, "refine", max_chars
 
 
-def synthesize(body, instructions, budget, config):
+def synthesize(body, instructions, budget, config, *, output, max_chars):
     from models import get_llm
 
-    output = settings.agent_summary_output_tokens
-    documents, strategy = _documents(body, instructions, budget, output)
-    if len(documents) > budget.limits.model_calls - budget.model_calls:
-        raise BudgetExceeded("model_calls")
+    documents, strategy, max_chars = _documents(body, instructions, budget, output, max_chars)
+    requests = []
+    for index, document in enumerate(documents):
+        source = SOURCE.format(**document.metadata, page_content=document.page_content)
+        template = REFINE if strategy == "refine" and index else INITIAL
+        prompt = template.format_messages(instructions=instructions, max_chars=max_chars,
+            text=source, existing_answer="字" * max_chars)
+        requests.append((prompt, output))
+    budget.admit_plan(requests)
     model = get_llm(streaming=False, max_tokens=output, enable_thinking=False, max_retries=0)
-    llm = RunnableLambda(lambda prompt, **kwargs: _invoke(model, prompt, budget, config, output))
+    llm = RunnableLambda(lambda prompt, **kwargs:
+                         _invoke(model, prompt, budget, config, output, max_chars))
     options = ({"prompt": INITIAL} if strategy == "stuff" else
                {"question_prompt": INITIAL, "refine_prompt": REFINE})
     chain = load_summarize_chain(llm, chain_type=strategy, document_prompt=SOURCE, **options)
     # Internal calls carry no Agent callbacks or tools; only the completed synthesis is delivered.
-    result = chain.invoke({"input_documents": documents, "instructions": instructions},
+    result = chain.invoke({"input_documents": documents, "instructions": instructions,
+                           "max_chars": max_chars},
                           config={"callbacks": [], "tags": ["langsmith:nostream"]})
     return result["output_text"], strategy, len(documents)
