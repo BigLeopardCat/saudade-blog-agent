@@ -9,7 +9,7 @@ import pytest
 from eval.release_readiness import PROFILE, assess, cache_population, distribution, task_class
 
 
-def fixture(tmp_path, count=20, *, input_tokens=100):
+def fixture(tmp_path, count=20, *, input_tokens=100, version=2):
     folder = tmp_path / "traces"
     folder.mkdir()
     cases = []
@@ -35,6 +35,8 @@ def fixture(tmp_path, count=20, *, input_tokens=100):
     report.write_text(json.dumps({"cases": cases, "full_run": True, "planned": count,
                                   "service_version": {"sha": "build"}}))
     profile = json.loads(PROFILE.read_bytes())
+    if version == 2:
+        profile.update(version=2, diagnostic_metrics=["calls", "in", "out"])
     profile.update(min_full_cases=1, critical_cases=["0"], task_budgets={
         "chat": profile["task_budgets"]["chat"]})
     profile_path = tmp_path / "profile.json"
@@ -73,6 +75,28 @@ def test_complete_http_evidence_passes_without_claiming_browser_or_write_executi
     assert got["usage"]["in"] == 2000 and got["usage"]["cache"] == 0
     assert got["cache_diagnostics"]["first_call"]["uncached_input"] == 2000
     assert got["separate_evidence_required"]
+
+
+def test_v3_performance_observations_do_not_override_task_evidence(tmp_path):
+    report, profile, semantic, trace = fixture(tmp_path, version=3)
+    doc = json.loads(report.read_bytes())
+    for case in doc["cases"]:
+        rnd = case["result"]["rounds"][0]
+        rnd["http_timing"].update(elapsed_s=90, first_reply_s=80, first_visible_s=2)
+        case["first_action"]["allow_text"] = False
+    report.write_text(json.dumps(doc))
+    trace_doc = json.loads(trace.read_bytes())
+    del trace_doc["events"][-1]["cache_read"]
+    update_first_capture(report, trace, trace_doc)
+    write_review(report, semantic)
+
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+
+    assert got["status"] == "http_checks_passed"
+    assert not got["failures"] and not got["unverified"]
+    assert {"chat.elapsed_s", "chat.first_reply_s", "first_visible_s", "first_action"} <= {
+        finding["gate"] for finding in got["efficiency_findings"]}
+    assert "complete provider usage including cache fields" in got["observation_gaps"]
 
 
 @pytest.mark.parametrize("fault", ["duplicate", "wrong_trace", "wrong_evidence", "missing_id"])

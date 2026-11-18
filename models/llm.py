@@ -49,15 +49,6 @@ def _provider_headers(provider: str) -> dict:
     return {}
 
 
-def text_only_options(model, options):
-    """Use the same provider dialect as get_llm for a prose-only correction."""
-    extra = _thinking_extra(settings._provider_prefix, False, getattr(model, "model_name", ""))
-    if not extra:
-        return options
-    return {**options, "extra_body": {**(getattr(model, "extra_body", None) or {}),
-                                    **(options.get("extra_body") or {}), **extra}}
-
-
 # DeepSeek uses JSON mode; callers must include the output contract in its prompt.
 _JSON_OBJECT_PROVIDERS = frozenset({"deepseek"})
 _JSON_SCHEMA_PROVIDERS = frozenset({"qwen", "openai", "opencode"})

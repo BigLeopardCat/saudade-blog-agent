@@ -39,14 +39,19 @@ def test_judge_cannot_overturn_deterministic_failure_or_missing_evidence(origina
     assert assess(body, semantic(body, ["no_issue_found"] * 2))["counts"] == {expected: 1}
 
 
-def test_historical_judge_pass_cannot_override_the_recorded_character_limit():
+@pytest.mark.parametrize("policy,expected", [(None, "failed"), ("advisory", "checks_passed")])
+def test_overage_is_independent_of_semantic_review_and_frozen_policy(policy, expected):
     report = json.loads(source(turns=1))
+    if policy:
+        report["answer_length_policy"] = policy
     report["cases"][0]["result"]["rounds"][0] = {
         "request_evidence": {"message": "请用3字以内回答。"}, "text": "**一二三四**"}
     body = json.dumps(report).encode()
     result = assess(body, semantic(body, ["no_issue_found"]))
-    assert result["counts"] == {"failed": 1}
-    assert result["cases"][0]["length_failure_rounds"] == [1]
+    assert result["counts"] == {expected: 1}
+    assert result["cases"][0]["length_failure_rounds"] == ([] if policy else [1])
+    assert result["cases"][0]["length_findings"] == [
+        {"kind": "answer_length", "round": 1, "limit": 3, "actual": 4}]
 
 
 def test_deterministic_failure_keeps_unresolved_rounds_visible():

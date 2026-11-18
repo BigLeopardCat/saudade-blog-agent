@@ -1,11 +1,7 @@
 """Validate provider stop reasons and keep control envelopes out of replies."""
 
-import json
+from langchain_core.messages import HumanMessage
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-from agent.runtime.answer_length import count_characters, without_length_clause
-from agent.runtime.memory import is_user_input
 from agent.runtime.message_content import text_content
 from agent.runtime.visible_text import has_control_text
 from utils.trace import record
@@ -60,66 +56,14 @@ def length_instruction(system, limit):
     if system is None or limit is None:
         return system
     instruction = (
-        f"用户明确要求最终答复最多 {limit} 个可见字符。使用紧凑措辞保留用户要求的内容和来源。"
-        f"以 {max(1, limit * 2 // 3)} 字为写作目标，留出标题、标点和链接文字的空间。"
-        "直接给结论，省略问候、复述问题和结束语。空白和链接目标地址不计。")
+        f"用户希望答复控制在 {limit} 个可见字符内。"
+        f"先以约 {max(1, limit * 2 // 3)} 字起草，给标点和链接文字留出空间。"
+        "直接作答，删掉问候、复述和重复说明。每个必答主题只写最关键的短句，"
+        "用简短的 Markdown 链接文字保留所需来源。空间不足时交付最短的完整答复。"
+        "空白和链接目标地址不计。")
     content = system.content
     if isinstance(content, str):
         content = f"{content}\n\n{instruction}"
     else:
         content = [*content, {"type": "text", "text": instruction}]
     return system.model_copy(update={"content": content})
-
-
-def correction_prompt(messages, anchor, limit):
-    """Rewrite an already generated draft without replaying the tool conversation."""
-    draft, feedback = messages[-2:]
-    if not isinstance(draft, AIMessage):
-        return None
-    inputs = messages[:-2]
-    start = next((i for i, message in enumerate(inputs) if anchor and message.id == anchor), None)
-    if start is None:
-        start = next((i for i in range(len(inputs) - 1, -1, -1)
-                      if is_user_input(inputs[i])), len(inputs))
-    original = "\n".join(without_length_clause(text_content(message.content))
-                         for message in inputs[start:] if is_user_input(message))
-    editing_limit = max(1, limit * 3 // 4)
-    system = length_instruction(SystemMessage(content=(
-        "你是答复编辑。输入 JSON 的 draft 是待改写数据，按 request 指定的要求压缩它。"
-        "保留必须事项、凭据来源和限制，可以删掉修饰、重复及非必要举例。"
-        "不要新增事实或执行操作。只输出压缩后的正文。")), editing_limit)
-    material = json.dumps({"request": original, "draft": text_content(draft.content),
-                           "revision_request": text_content(feedback.content)}, ensure_ascii=False)
-    return system, [HumanMessage(content=material)]
-
-
-def length_feedback(message):
-    return isinstance(message, HumanMessage) and (
-        message.additional_kwargs.get("runtime_feedback") == "answer_length")
-
-
-def enforce_length(session, response, previous):
-    """Check terminal prose and allow one text-only correction per task."""
-    limit = session.state["answer_character_limit"]
-    if limit is None or session.outcome is not None or incomplete_response(response):
-        return None, None
-    tool_attempt = bool(response.tool_calls)
-    if tool_attempt and not length_feedback(previous):
-        return None, None
-    text = text_content(response.content)
-    actual = count_characters(text)
-    if not tool_attempt and actual <= limit:
-        return None, None
-    record("native", "answer_length_exceeded", limit=limit, actual=actual,
-           correction_tool_call=tool_attempt)
-    if not tool_attempt and session.state["response_repairs"] == 0:
-        session.state["response_repairs"] += 1
-        return HumanMessage(content=(
-            "上一份答复超过字数上限。请遵守本次的写作预算，保留必需事实和原文入口。"
-            "每项只留最关键的一句，删掉问候、展望和重复说明。"
-            "标点和链接文字计入字数，空白和链接目标 URL 不计。"
-            "禁止再次调用工具或重做已完成操作。只输出改写后的答复。"
-        ), additional_kwargs={"runtime_feedback": "answer_length"}), None
-    notice = "未能在要求的字数内完整作答。"
-    return None, session.blocked_result(notice if len(notice) <= limit else "…",
-                                        "answer_length_exceeded")

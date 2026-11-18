@@ -22,7 +22,6 @@ from agent.api.routes import chat as chat_routes
 from agent.api.schemas import ChatRequest, HistoryItem
 from agent.contracts.events import StreamEvent
 from agent.principal import Principal
-from agent.runtime.answer_length import length_violation
 from agent.transport import reply_text
 from eval import (
     command_report,
@@ -358,9 +357,6 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
     for i, (rnd, res) in enumerate(zip(rounds, got)):
         for f in (res.get("fails") or []):
             fails.append(f"[第 {i + 1} 轮] {f}")
-        if length := length_violation(rnd.get("user_input"), res.get("text")):
-            fails.append(f"[第 {i + 1} 轮] 答复 {length['actual']} 字，"
-                         f"超过 {length['limit']} 字上限")
         label = rnd.get("gold", {}).get("round", rnd["round"])
         if int(label) != int(rnd["round"]):
             fails.append(f"[第 {rnd['round']} 轮] gold 的 round={label} 与轮次不符"

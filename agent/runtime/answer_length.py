@@ -23,11 +23,6 @@ def requested_limit(request):
     return min((limit for limit in limits if limit > 0), default=None)
 
 
-def without_length_clause(request):
-    """Keep the editing brief while leaving its length budget to the runtime."""
-    return _LIMIT.sub("简要", request)
-
-
 def visible_blocks(markdown):
     for token in _MARKDOWN.parse(markdown):
         if token.type == "inline":
