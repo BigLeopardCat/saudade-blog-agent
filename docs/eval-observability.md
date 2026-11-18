@@ -51,8 +51,8 @@ python -m eval.release_readiness --help
 
 部分写入后的核对检查 Agent 本轮成功查询的工具证据，不依赖内部 HTTP 次数或列表路径。
 两个指定编号可以一次列表读取，也可以分别读取详情；两者均须有直接、无重复的状态证据。
-写入准备调用上限复用 `release_profile.json`；三次调用仍是该效率场景的优化目标，
-超过三次但未超过既有发布上限时保留原话和实际调用数为效率观察，不称为优化成功。
+`release_profile.json` 中的调用和延迟目标用于观测。分析个案时保留实际调用数及
+临时效率目标，结合成功结果、工具证据、额外模型开销和真实用户等待判断是否需要优化。
 
 语义 judge 使用开发依赖 OpenEvals，由 `eval/semantic_judge.py` 适配当前模型协议。
 执行前用 `uv sync --locked` 安装开发依赖，生产服务无需安装 OpenEvals。

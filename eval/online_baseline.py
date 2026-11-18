@@ -154,7 +154,8 @@ def snapshot(folder, cases):
                  "golden_thread.py", "golden_trace.py", "native_receipt_contract.py",
                  "cache_diagnostics.py")
     paths = {name: ROOT / "eval" / name for name in names}
-    paths["agent/contracts/events.py"] = ROOT / "agent/contracts/events.py"
+    for name in ("agent/contracts/events.py", "agent/runtime/answer_length.py"):
+        paths[name] = ROOT / name
     for name, path in paths.items():
         body = path.read_bytes()
         target = sources / name

@@ -142,8 +142,13 @@ Wilson 区间不替代实测通过率，两者一起报告。`quality_gate_stati
 
 ## 发布步骤
 
+以准备打包的提交为验收对象。先记录 Agent 的完整提交和包版本，再固定博客宿主、
+Compose 内的 Agent、前端组件及当前数据库迁移。相同版本号的草稿也要核对 manifest 的
+`source_revision`。只要源码或任一配套锁发生变化，就按新组合验证受影响的链路并重新构建附件。
+各类版本的读取位置见[部署与版本核对](deployment.md#正式发行)。
+
 1. 运行独立于开发者机器配置的离线 CI；权限、确认、幂等、任务输入和恢复契约均须通过。
-2. 冻结候选版本，先运行 8 个场景的 HTTP POC；退化先修复，不带问题盲跑全量。
+2. 冻结候选版本，先跑 HTTP POC。默认用例见 `eval.online_baseline.POC_IDS`。补验本次修复涉及的场景，确认身份、固定数据、trace 和模型都正常后再扩大批量。
 3. POC 通过后跑完整文本套件，至少 100 个场景，保留首次结果，不重采样用例；框架内有限模型重试计入消耗。
    HTTP 轮次报错且关联 trace 记录客户端断连时，按链路评测错误停止批次；不能据此推断
    模型答题错误或供应商根因，也不自动重跑。保留部分回复、消耗和未完成用例。
@@ -158,6 +163,8 @@ Wilson 区间不替代实测通过率，两者一起报告。`quality_gate_stati
 
 小批量可重复传入 `--case-id` 选择具体用例并保留顺序；该选项不用于 full。
 每次运行在私有报告目录保存实际选择的 `suite.jsonl` 及其哈希，不覆盖旧结果。
+临时线上首答可以验证一个已知修复，稳定版仍须使用同一候选的完整报告，
+并独立汇总隔离数据库、浏览器和部署恢复证据。
 
 准备阶段只追踪已验证的原状态、收件人和影响范围，并关联框架工具调用 ID。
 拟写正文和预期变更仍是待审输出，不作为自身事实依据。缺少准备事实、被截断或关联不上
@@ -196,21 +203,39 @@ judge 校准报告分别列出误报、漏报、调用失败、precision/recall�
 统计实现参考 [SciPy 比例区间](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats._result_classes.BinomTestResult.proportion_ci.html)
 和 [SciPy bootstrap](https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.bootstrap.html)。
 
+从固定的 Agent 源码运行，先安装锁定开发依赖。使用独立验收环境中的三类已登录
+测试账号，按[身份与写入](identity-and-permissions.md)配置 `SAUDADE_OPERATOR_SESSIONS_FILE`。
+`TRACE_DIR` 指向操作员获准读取的该环境 trace 目录，`EVAL_STATE_DIR` 指向已有的私有状态目录。
+`AGENT_URL` 指向可访问的内部 Agent，`BLOG_URL` 指向配套宿主，`AGENT_REV` 写完整候选提交。先核对
+Agent `/version`、宿主 `/build-info.json` 和两端就绪，再按以下顺序运行。
+采集与语义评审都会请求模型。评审只接收已授权、经过投影的冻结材料，并使用独立配置。
+
 ```bash
-python -m eval.online_baseline --host --phase poc \
-  --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" \
-  --zako-uid "$GOLDEN_ZAKO_UID" --report-dir /tmp/agent-poc
+umask 077
+RUN_DIR="$(mktemp -d "${EVAL_STATE_DIR:?设置私有验收状态目录}/release.XXXXXX")"
+PROBE=(
+  --host --agent-url "$AGENT_URL" --blog-url "$BLOG_URL" --expected-build "$AGENT_REV"
+  --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" --zako-uid "$GOLDEN_ZAKO_UID"
+)
 
-python -m eval.online_baseline --host --phase full \
-  --admin-uid "$GOLDEN_ADMIN_UID" --user-uid "$GOLDEN_USER_UID" \
-  --zako-uid "$GOLDEN_ZAKO_UID" --report-dir /tmp/agent-baseline
+uv run --frozen python -m eval.online_baseline "${PROBE[@]}" --phase poc \
+  --report-dir "$RUN_DIR/poc"
 
-# 语义评审完成后只读评估，不发模型请求、不执行业务操作。
-python -m eval.release_readiness /tmp/agent-baseline/report.json \
-  --semantic /tmp/agent-semantic/report.json --out /tmp/agent-readiness.json
+# 确认 POC 无退化后，采集同一候选的完整套件。
+uv run --frozen python -m eval.online_baseline "${PROBE[@]}" --phase full \
+  --report-dir "$RUN_DIR/full"
+
+uv run --frozen python -m eval.online_judge --report "$RUN_DIR/full/report.json" \
+  --out "$RUN_DIR/semantic"
+
+uv run --frozen python -m eval.release_readiness "$RUN_DIR/full/report.json" \
+  --semantic "$RUN_DIR/semantic/report.json" --profile "$RUN_DIR/full/evaluator/release_profile.json" \
+  --out "$RUN_DIR/readiness.json"
 ```
 
-`http_checks_passed` 只覆盖 HTTP 准备阶段及成本目标，不宣布整个产品可商业运营。
+最后一步离线复核，保留采集和评审的退出状态及原报告。先复核语义疑点，
+再使用与冻结报告一致的评审材料运行最终判断。`http_checks_passed` 只覆盖该批
+HTTP 任务的读取、准备和证据要求。浏览器执行、批准后结果与生产可靠性需要独立证据。
 可用性先以发布后 7 天 ≥99.5% 为试运行目标，真实观察满 30 天后再讨论 99.9%；
 当前不能从单机测试推算 SLA。先验证 4 个活跃会话与断连、取消后的资源释放，
 再按实际流量提高并发目标，无需为个人博客建设多租户调度平台。

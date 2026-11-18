@@ -14,6 +14,18 @@ from eval import native_assertions, online_baseline
 from eval.online_transport import EvaluationError, OnlineTransport, archive_result
 
 
+def test_frozen_snapshot_includes_the_profile_and_answer_length_counter(tmp_path):
+    hashes = online_baseline.snapshot(tmp_path, [{"id": "case"}])
+
+    for name, source in (
+        ("release_profile.json", "eval/release_profile.json"),
+        ("agent/runtime/answer_length.py", "agent/runtime/answer_length.py"),
+    ):
+        archived = (tmp_path / "evaluator" / name).read_bytes()
+        assert archived == (online_baseline.ROOT / source).read_bytes()
+        assert hashes[name] == hashlib.sha256(archived).hexdigest()
+
+
 def transport(tmp_path, monkeypatch, wire):
     def respond(request):
         return httpx.Response(200, headers={"content-type": "text/event-stream"},
