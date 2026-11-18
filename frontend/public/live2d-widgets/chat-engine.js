@@ -712,13 +712,13 @@
           }
           return null;
         }).then(data => {
-          if (stale()) return; // 会话已切换，在途旧响应丢弃（不 applyLocal 覆盖新视图）
+          if (stale()) return false; // 旧会话响应不能覆盖当前视图。
           if (data && data.__status === 404) {
-            if (data.__error === 'conversation_not_found') { handleConvGone(reqConv); return; }
-            applyLocal(); // 其他 404 沿用旧降级语义
-            return;
+            if (data.__error === 'conversation_not_found') handleConvGone(reqConv);
+            else applyLocal();
+            return false;
           }
-          if (!data || !Array.isArray(data.items)) { applyLocal(); return; }
+          if (!data || !Array.isArray(data.items)) { applyLocal(); return false; }
           if (reqConv === null && !ctx.state.convNeedCreate) {
             // auto 态决议：无参请求响应带会话 id（服务端已落最新非空会话）——有
             // 会话 → 采纳为显式会话（此后分键/回传/广播一致）；conversation_id
@@ -737,11 +737,15 @@
           try { reconcileDOM(); }
           catch(e) { console.error('[agent-chat] pullHistory 渲染异常（items 已更新，不降级）:', e); }
           saveHistory(); // 缓存同步（值变更检测防写者风暴）
+          return true;
         }).catch(e => {
-          if (stale()) return; // 会话已切换：失败的是旧会话请求，新会话视图已接管
-          console.error('[agent-chat] pullHistory 拉取失败，本地缓存兜底:', e); applyLocal();
+          if (!stale()) {
+            console.error('[agent-chat] pullHistory 拉取失败，本地缓存兜底:', e);
+            applyLocal();
+          }
+          return false;
         }).finally(() => { clearTimeout(pt); });
-        return chain.then(() => true);
+        return chain;
       };
       // ── 时间标签幂等维护（微信式时间分组）──
       // 标签是纯渲染物：不进 items、不序列化、不广播（items 权威同步后各窗本地

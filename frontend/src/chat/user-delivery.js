@@ -1,4 +1,4 @@
-// “已读” means the server accepted this input; it does not claim the task succeeded.
+// The receipt records server acceptance of the input.
 export function createUserDelivery(ctx, engine) {
     const messages = ctx.dom.messages;
     const render = () => {
@@ -15,7 +15,7 @@ export function createUserDelivery(ctx, engine) {
                 receipt.setAttribute('role', 'status');
                 node.appendChild(receipt);
             }
-            const text = state === 'read' ? '已读' : state === 'pending' ? '发送中…' : '未确认送达';
+            const text = state === 'read' ? '已接收' : state === 'pending' ? '发送中…' : '未确认送达';
             if (receipt.textContent !== text) receipt.textContent = text;
             receipt.title = state === 'read' ? '服务器已接收这条消息' : '';
         }
