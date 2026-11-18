@@ -89,6 +89,77 @@ def test_query_dimension_change_invalidates_aligned_shortcut_and_forces_rebuild(
     assert store.view().dim == 3
 
 
+@pytest.mark.parametrize("requested", [0, 2])
+def test_live_search_schedules_dimension_recovery_only_for_an_unpinned_space(
+    store, monkeypatch, requested
+):
+    from rag import search
+    from rag.corpus import content_revision
+
+    monkeypatch.setattr(settings, "embedding_dim", requested)
+    dimension = 2
+    monkeypatch.setattr(vectors, "_embed_texts", lambda texts, space: [
+        [1] + [0] * (dimension - 1) for _ in texts])
+    doc = {"type": "note", "id": 1, "title": "Source", "content": "needle",
+           "revision": content_revision("Source", "needle")}
+    queued = []
+    index = search.RagIndex(corpus_loader=lambda: [doc], vector_warmer=queued.append)
+    assert index.build()
+    space = vectors.space_from_settings()
+    assert store.update(queued.pop(), space)["ok"]
+    assert index.search("needle")[0]["id"] == 1
+    assert search.last_route()["mode"] == "hybrid"
+
+    dimension = 3
+    assert index.search("new needle")[0]["id"] == 1
+    assert search.last_route()["mode"] == "degraded"
+    if requested:
+        assert not queued
+        assert search.last_route()["reason"] == "query_embed_failed"
+        assert store.view().dim == 2 and store.last_error() is None
+    else:
+        assert len(queued) == 1
+        assert search.last_route()["reason"] == "vector_dimension_changed"
+        assert store.view() is None
+        assert store.update(queued.pop(), space)["ok"]
+        assert store.view().dim == 3
+        assert index.search("needle")[0]["id"] == 1
+        assert search.last_route()["mode"] == "hybrid"
+
+
+def test_live_search_reuses_fingerprint_only_for_the_same_corpus_and_space(store, monkeypatch):
+    from unittest.mock import Mock
+
+    from rag import search
+    from rag.corpus import content_revision
+
+    def corpus():
+        return [{"type": "note", "id": 1, "title": "Source", "content": body,
+                 "revision": content_revision("Source", body)}]
+
+    body = "needle before edit"
+    queued = []
+    index = search.RagIndex(corpus_loader=corpus, vector_warmer=queued.append)
+    fingerprint = Mock(wraps=vectors.corpus_fingerprint)
+    monkeypatch.setattr(search, "corpus_fingerprint", fingerprint)
+    monkeypatch.setattr(vectors, "_embed_texts", lambda texts, _: [[1, 0] for _ in texts])
+    assert index.build()
+    assert store.update(queued.pop(), vectors.space_from_settings())["ok"]
+    for query in ("needle", "other needle"):
+        assert index.search(query)[0]["id"] == 1
+        assert search.last_route()["mode"] == "hybrid"
+    assert fingerprint.call_count == 1
+
+    body = "needle after edit"
+    assert index.build()
+    assert index.search("needle")[0]["id"] == 1
+    assert search.last_route()["mode"] == "degraded" and fingerprint.call_count == 2
+    assert store.update(queued.pop(), vectors.space_from_settings())["ok"]
+    monkeypatch.setattr(settings, "embedding_model", "different-model")
+    assert index.search("needle")[0]["id"] == 1
+    assert search.last_route()["mode"] == "degraded" and fingerprint.call_count == 3
+
+
 def test_background_build_uses_owned_workers_and_shutdown_does_not_publish(store, monkeypatch):
     import asyncio
     import threading

@@ -335,8 +335,13 @@ class VectorStore:
             return False
         with self._lock:
             if snapshot is not None and snapshot != self._snapshot:
-                self._last_error = None
-                self._missing = []
+                previous = self._snapshot
+                if previous is not None and (snapshot.space != previous.space
+                                             or snapshot.dimension != previous.dimension):
+                    self._reset_dimensions = False
+                if not self._reset_dimensions:
+                    self._last_error = None
+                    self._missing = []
             self._snapshot = snapshot
             return self.view() is not None
 
@@ -347,7 +352,8 @@ class VectorStore:
     def view(self) -> VectorView | None:
         snapshot = self._snapshot
         try:
-            if snapshot is None or snapshot.space != space_from_settings().as_dict():
+            if (self._reset_dimensions or snapshot is None
+                    or snapshot.space != space_from_settings().as_dict()):
                 return None
         except InputProfileError:
             return None
@@ -363,9 +369,11 @@ class VectorStore:
         self._snapshot = None
         self._last_error = "vector_database_unavailable"
 
-    def invalidate_dimension(self):
-        self._reset_dimensions = True
-        self._last_error = "vector_dimension_changed"
+    def invalidate_dimension(self, observed: Snapshot):
+        with self._lock:
+            if self._snapshot == observed:
+                self._reset_dimensions = True
+                self._last_error = "vector_dimension_changed"
 
     def available(self, space: Space) -> dict[str, int]:
         key = hashlib.sha256(json.dumps(space.as_dict(), sort_keys=True).encode()).hexdigest()
@@ -385,7 +393,7 @@ class VectorStore:
                 return {"skipped": "locked", "fingerprint": fingerprint,
                         "embedded": 0, "reused": 0, "api_calls": 0, "logical_batches": 0}
             self.load()
-            if self.view_for(fingerprint) is not None and not self._reset_dimensions:
+            if self.view_for(fingerprint) is not None:
                 return {"skipped": "aligned", "fingerprint": fingerprint,
                         "embedded": 0, "reused": len(set(keys)), "api_calls": 0,
                         "logical_batches": 0}
@@ -535,14 +543,14 @@ def embed_query(query: str) -> array | None:
     except (ValueError, TypeError, IndexError, OverflowError):
         logger.warning("Query embedding failed", exc_info=True)
         return None
-    if got and dim and len(got) != dim:
-        st.invalidate_dimension()
-        return None
     if (not got or not any(got) or not all(math.isfinite(x) for x in got)
             or (space.dim and len(got) != space.dim)):
         return None
     vec = array("f", got)
     if not any(vec) or not all(math.isfinite(x) for x in vec):
+        return None
+    if view is not None and dim and len(vec) != dim:
+        st.invalidate_dimension(view.snapshot)
         return None
     cap = max(1, int(_settings.embedding_query_cache or 256))
     with _query_lock:
