@@ -250,7 +250,10 @@ class SessionMiddleware(AgentMiddleware):
         background = bool(session.event_seed or session.config.get(
             "configurable", {}).get("system_event_id")) or any(
             row.get("background_work") for row in session.receipts)
-        tool_choice = ("none" if reviewing or background else "auto") if menu else None
+        length_correction = bool(request.messages
+                                 and response_validation.length_feedback(request.messages[-1]))
+        tool_choice = ("none" if reviewing or background or length_correction else "auto"
+                       ) if menu else None
         options = {**request.model_settings, **model_options(settings.llm_timeout)}
         if session.output_budget is not None:
             output_limit, selection = session.output_budget.select(
@@ -326,6 +329,14 @@ class SessionMiddleware(AgentMiddleware):
         if repair:
             session._round_index += 1
             return {**capture(session), "messages": repair, "jump_to": "model"}
+        repair_length, blocked = response_validation.enforce_length(
+            session, response, state["messages"][-2] if len(state["messages"]) > 1 else None)
+        if blocked is not None:
+            session.outcome = blocked
+            return {**capture(session), "jump_to": "end"}
+        if repair_length is not None:
+            session._round_index += 1
+            return {**capture(session), "messages": [repair_length], "jump_to": "model"}
         calls, outcome = session._validate_response(response)
         system = [self.system_message] if self.system_message else []
         self.exchange = [*system, *state["messages"]]

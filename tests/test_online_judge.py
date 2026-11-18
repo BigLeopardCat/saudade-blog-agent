@@ -54,9 +54,21 @@ def test_prepared_text_is_reviewed_as_output_not_used_as_supporting_fact(tmp_pat
     assert report["counts"] == {"suspect": 1}
     assert report["backend"] == semantic_judge.backend_identity()
     assert set(report["evaluator_sha256"]) == {
-        "online_judge.py", "semantic_judge.py", "acceptance.py"}
+        "online_judge.py", "semantic_judge.py", "acceptance.py", "answer_length.py"}
     assessment = json.loads((tmp_path / "semantic" / "assessment.json").read_text())
     assert assessment["counts"] == {"needs_review": 1}
+
+
+def test_overlength_reply_never_reaches_the_semantic_judge(tmp_path, monkeypatch):
+    case = recorded(tmp_path, text="一二三四", trace_extra={
+        "input": {"message": "请用3字以内回答。", "principal_role": "user"}})
+    monkeypatch.setattr(semantic_judge, "judge_one", lambda *a, **kw:
+                        pytest.fail("deterministic failure must not ask the judge"))
+    result = run(tmp_path, case, Model())
+    row = result["rows"][0]
+    assert row["status"] == "suspect"
+    assert row["deterministic_findings"] == [
+        {"kind": "answer_length", "limit": 3, "actual": 4}]
 
 
 def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp_path, monkeypatch):
@@ -73,7 +85,8 @@ def test_calibration_dry_run_freezes_the_current_backend_without_model_calls(tmp
     assert report["status"] == "not_evaluated" and report["business_requests"] == 0
     assert report["backend"] == semantic_judge.backend_identity()
     assert set(report["evaluator_sha256"]) == {
-        "online_judge.py", "semantic_judge.py", "acceptance.py", "judge_calibration.py"}
+        "online_judge.py", "semantic_judge.py", "acceptance.py", "judge_calibration.py",
+        "answer_length.py"}
     assert (folder / "semantic_judge.py").read_bytes() == Path(semantic_judge.__file__).read_bytes()
 
 

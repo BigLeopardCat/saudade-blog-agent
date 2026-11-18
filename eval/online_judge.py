@@ -13,10 +13,10 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
-from markdown_it import MarkdownIt
 from openai import OpenAIError
 
 from agent.contracts.events import ConfirmationNotice, confirmation_text
+from agent.runtime import answer_length
 from eval import acceptance, semantic_judge
 from eval.online_transport import safe_result
 from utils import trace as trace_mod
@@ -348,16 +348,6 @@ def material(case, results):
     return text
 
 
-def _visible_blocks(markdown):
-    for token in MarkdownIt("commonmark", {"html": False}).parse(markdown):
-        if token.type == "inline":
-            yield "".join(child.content if child.type in {"text", "code_inline", "image"}
-                          else "\n" if child.type in {"softbreak", "hardbreak"} else ""
-                          for child in token.children or [])
-        elif token.type in {"fence", "code_block"}:
-            yield token.content
-
-
 def validate_excerpts(verdict, text):
     current = json.loads(text)["turns"][-1]
     proposed = current.get("proposed_actions_not_facts", [])
@@ -380,7 +370,8 @@ def validate_excerpts(verdict, text):
     outputs.append(json.dumps(reviews, ensure_ascii=False, separators=(",", ":")))
     outputs.extend(strings(reviews))
     outputs.extend(current.get("confirmation_previews_to_review", []))
-    outputs.extend(block for output in list(outputs) for block in _visible_blocks(output))
+    outputs.extend(block for output in list(outputs)
+                   for block in answer_length.visible_blocks(output))
     if (not isinstance(verdict["reason"], str) or not verdict["reason"].strip()
             or len(verdict["unsupported"]) > 5
             or any(not isinstance(item, str) or not item.strip()
@@ -392,7 +383,8 @@ def validate_excerpts(verdict, text):
 def snapshot_reviewer(folder):
     """Archive the same evaluator identity for calibration and recorded-output review."""
     hashes = {}
-    for module in (Path(__file__), Path(semantic_judge.__file__), Path(acceptance.__file__)):
+    for module in (Path(__file__), Path(semantic_judge.__file__), Path(acceptance.__file__),
+                   Path(answer_length.__file__)):
         body = module.read_bytes()
         (folder / module.name).write_bytes(body)
         hashes[module.name] = digest(body)
@@ -442,10 +434,18 @@ def review(report_path, folder, llm, *, only=()):
                 name = f"material-{len(report['rows']) + 1}.json"
                 (folder / name).write_text(text + "\n")
                 row.update(material=name, material_sha256=digest(text.encode()))
-                verdict = semantic_judge.judge_one(
-                    text, llm, instructions=INSTRUCTIONS,
-                    diagnostics=row["diagnostics"])
-                validate_excerpts(verdict, text)
+                current = json.loads(text)["turns"][-1]
+                length = answer_length.length_violation(
+                    current["user_request"], rounds[index]["text"])
+                if length:
+                    row["deterministic_findings"] = [length]
+                    verdict = {"unsupported": [], "answered": False, "verdict": "suspect",
+                               "reason": "答复超过用户明确给出的字数上限"}
+                else:
+                    verdict = semantic_judge.judge_one(
+                        text, llm, instructions=INSTRUCTIONS,
+                        diagnostics=row["diagnostics"])
+                    validate_excerpts(verdict, text)
                 status = ("suspect" if verdict["unsupported"] or not verdict["answered"]
                           else "no_issue_found")
                 verdict["verdict"] = "suspect" if status == "suspect" else "ok"

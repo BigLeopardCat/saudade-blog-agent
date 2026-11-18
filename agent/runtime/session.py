@@ -188,7 +188,7 @@ class ToolSession:
         return result
 
     def observe_reply(self, response):
-        if not self.suppress_output:
+        if not self.suppress_output and self.state["answer_character_limit"] is None:
             boundary = VisibleText()
             text = boundary.feed(text_content(response.content)) + boundary.finish()
             self.reply_parts.append(text)
@@ -261,7 +261,8 @@ class ToolSession:
                 # response already emitted by the SDK. Only AI deltas are text.
                 if (not isinstance(chunk, AIMessageChunk)
                         or metadata.get("langgraph_node") != "model"
-                        or self.suppress_output):
+                        or self.suppress_output
+                        or self.state["answer_character_limit"] is not None):
                     continue
                 key = (metadata.get("langgraph_step"), chunk.id)
                 if key != model_key:

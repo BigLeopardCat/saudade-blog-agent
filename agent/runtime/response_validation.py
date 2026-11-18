@@ -2,6 +2,7 @@
 
 from langchain_core.messages import HumanMessage
 
+from agent.runtime.answer_length import count_characters
 from agent.runtime.message_content import text_content
 from agent.runtime.visible_text import has_control_text
 from utils.trace import record
@@ -50,3 +51,35 @@ def withdraw(session):
     session.reply_parts.clear()
     session.state["output_revision"] += 1
     record("native", "reply_withdrawn", revision=session.state["output_revision"])
+
+
+def length_feedback(message):
+    return isinstance(message, HumanMessage) and (
+        message.additional_kwargs.get("runtime_feedback") == "answer_length")
+
+
+def enforce_length(session, response, previous):
+    """Check terminal prose and allow one text-only correction per task."""
+    limit = session.state["answer_character_limit"]
+    if limit is None or session.outcome is not None or incomplete_response(response):
+        return None, None
+    tool_attempt = bool(response.tool_calls)
+    if tool_attempt and not length_feedback(previous):
+        return None, None
+    text = text_content(response.content)
+    actual = count_characters(text)
+    if not tool_attempt and actual <= limit:
+        return None, None
+    record("native", "answer_length_exceeded", limit=limit, actual=actual,
+           correction_tool_call=tool_attempt)
+    if not tool_attempt and session.state["response_repairs"] == 0:
+        session.state["response_repairs"] += 1
+        return HumanMessage(content=(
+            f"上一份答复有 {actual} 个可见字符，用户上限是 {limit}。"
+            "请直接重写完整答复，保留用户要求的事项、事实和原文入口。"
+            "标点和链接文字计入字数，空白和链接目标 URL 不计。"
+            "禁止再次调用工具或重做已完成操作。只输出改写后的答复。"
+        ), additional_kwargs={"runtime_feedback": "answer_length"}), None
+    notice = "未能在要求的字数内完整作答。"
+    return None, session.blocked_result(notice if len(notice) <= limit else "…",
+                                        "answer_length_exceeded")

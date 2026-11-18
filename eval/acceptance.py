@@ -4,6 +4,8 @@ import hashlib
 import json
 from collections import Counter
 
+from agent.runtime.answer_length import length_violation
+
 
 def assess(source: bytes, semantic: dict) -> dict:
     if semantic.get("source_report_sha256") != hashlib.sha256(source).hexdigest():
@@ -29,8 +31,11 @@ def assess(source: bytes, semantic: dict) -> dict:
         suspect = [index for index, state in enumerate(states, 1) if state == "suspect"]
         missing = [index for index, state in enumerate(states, 1)
                    if state not in ("no_issue_found", "suspect")]
+        length_failures = [index for index, round_ in enumerate(rounds, 1)
+                           if length_violation((round_.get("request_evidence") or {}).get(
+                               "message"), round_.get("text"))]
         status = "not_evaluated"
-        if case["status"] == "failed":
+        if case["status"] == "failed" or length_failures:
             status = "failed"
         elif case["status"] == "passed" and rounds:
             if suspect:
@@ -41,7 +46,8 @@ def assess(source: bytes, semantic: dict) -> dict:
                         "deterministic_status": case["status"],
                         "reviewed_rounds": sum(state == "no_issue_found" for state in states),
                         "expected_rounds": len(rounds),
-                        "missing_review_rounds": missing, "suspect_rounds": suspect})
+                        "missing_review_rounds": missing, "suspect_rounds": suspect,
+                        "length_failure_rounds": length_failures})
     return {"source_report_sha256": semantic["source_report_sha256"],
             "scope": "recorded HTTP responses and proposed actions; "
                      "browser and post-approval outcomes excluded",
