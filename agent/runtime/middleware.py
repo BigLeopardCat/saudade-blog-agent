@@ -13,6 +13,7 @@ from langgraph.types import Command
 
 from agent.llm_usage import usage_fields
 from agent.runtime import (
+    answer_length,
     approval_messages,
     response_validation,
     trace_context,
@@ -33,6 +34,7 @@ from agent.runtime.tool_execution import append_result
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from models.errors import error_fields
+from models.llm import text_only_options
 from utils.trace import record
 
 
@@ -229,6 +231,10 @@ class SessionMiddleware(AgentMiddleware):
         extra_inputs = input_additions(session, request.state)
         if extra_inputs:
             request = request.override(messages=[*request.messages, *extra_inputs])
+        system = answer_length.instruct(request.system_message,
+                                        session.state["answer_character_limit"])
+        if system is not request.system_message:
+            request = request.override(system_message=system)
         session.framework_state = {**request.state, "messages": list(request.messages)}
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]
@@ -255,9 +261,11 @@ class SessionMiddleware(AgentMiddleware):
         tool_choice = ("none" if reviewing or background or length_correction else "auto"
                        ) if menu else None
         options = {**request.model_settings, **model_options(settings.llm_timeout)}
+        if length_correction:
+            options = text_only_options(model, options)
         if session.output_budget is not None:
             output_limit, selection = session.output_budget.select(
-                session, request, prompt, concise=reviewing or background)
+                session, request, prompt, concise=reviewing or background or length_correction)
             key = "max_completion_tokens" if "max_completion_tokens" in options else "max_tokens"
             options[key] = output_limit
             record("native", "output_budget", round=session._round_index, **selection)

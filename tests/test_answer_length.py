@@ -45,6 +45,7 @@ def test_runtime_repairs_once_and_never_streams_the_rejected_answer(correction, 
     visible = "".join(event.content for event in events if isinstance(event, AIMessageChunk))
     final = events[-1]
     assert len(requests) == 2
+    assert "最终答复最多 10 个可见字符" in requests[0]["messages"][0]["content"]
     assert "禁止再次调用工具" in requests[1]["messages"][-1]["content"]
     assert original not in visible
     assert visible == final.reply
@@ -56,8 +57,8 @@ def test_runtime_repairs_once_and_never_streams_the_rejected_answer(correction, 
 
 
 def test_length_correction_cannot_dispatch_unexpected_tool_calls():
-    with model_replies({"content": "甲" * 12},
-                       {"tool_calls": [call("load_admin_reports_info_tools")]}) as (model, requests):
+    unexpected = {"tool_calls": [call("load_admin_reports_info_tools")]}
+    with model_replies({"content": "甲" * 12}, unexpected) as (model, requests):
         runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
                                application=BlogApplication(), model_factory=lambda **_: model)
         config = {"configurable": {"thread_id": "conv_42", "user_id": 7, "conversation_id": 42,
