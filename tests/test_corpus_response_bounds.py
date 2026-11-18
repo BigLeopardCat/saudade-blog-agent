@@ -55,6 +55,35 @@ def test_byte_bounded_paging_still_rejects_empty_or_repeated_cursor_pages(bad):
         corpus.fetch(lambda _: bad)
 
 
+@pytest.mark.parametrize("keeps_changing", [False, True])
+def test_http_revision_conflict_restarts_with_an_empty_snapshot_once(monkeypatch, keeps_changing):
+    calls = []
+    older = {"code": 200, "data": page([document(1)], 2, 1)}
+    newer = {"code": 200, "data": {**page([document(2)], 1, None), "revision": "b" * 64}}
+    conflict = {"code": 409, "message": "corpus_revision_changed", "data": None}
+    interrupted = [(200, older), (409, conflict)]
+    responses = iter(interrupted * 2 if keeps_changing else [*interrupted, (200, newer)])
+
+    def handle(request):
+        calls.append(dict(request.url.params))
+        status, body = next(responses)
+        return httpx.Response(status, json=body)
+
+    with httpx.Client(transport=httpx.MockTransport(handle)) as client:
+        monkeypatch.setattr(base, "_client", client)
+        index = RagIndex(vector_warmer=lambda _: None)
+        if keeps_changing:
+            with pytest.raises(corpus.CorpusUnavailable, match="revision_changed"):
+                index.build()
+            assert index.docs_snapshot() == []
+        else:
+            assert index.build()
+            assert [row["id"] for row in index.docs_snapshot()] == [2]
+    assert calls[0] == calls[2] == {"limit": str(corpus.PAGE_SIZE)}
+    assert calls[1]["after"] == "1" and calls[1]["revision"] == "a" * 64
+    assert len(calls) == (4 if keeps_changing else 3)
+
+
 def test_rag_export_uses_explicit_corpus_transport_capacity(monkeypatch):
     body = "x" * (API_RESPONSE_BYTES // 3 + 1024)
     result = {"code": 200, "data": page([document(i, body) for i in range(1, 4)], 3, None)}

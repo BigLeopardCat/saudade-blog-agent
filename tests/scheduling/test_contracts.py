@@ -147,6 +147,8 @@ def test_readonly_background_agent_has_no_prepare_write_or_browser_capability():
     assert "set_page_appearance" not in names
     assert "get_chat_history" not in names
     assert "devices" not in domains
+    assert "task_control" not in domains
+    assert "pause_task" not in names
     assert not any(name.startswith("prepare_") for name in names)
     for name in names:
         scope = authz.TOOL_SCOPE.get(name)
@@ -187,13 +189,20 @@ def test_host_rechecks_current_account_and_handles_hidden_article(monkeypatch):
     assert requests[0].headers["authorization"].startswith("Bearer ")
 
 
-def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(monkeypatch):
+@pytest.mark.parametrize("reply,status,model_calls", [
+    ("隔离任务结果", "completed", 1),
+    ("", "incomplete", 2),
+])
+def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(
+    monkeypatch, reply, status, model_calls
+):
     from contextlib import ExitStack
 
     from langchain_core.messages import AIMessageChunk
     from langgraph.checkpoint.memory import InMemorySaver
 
     from agent.scheduling import readonly
+    from agent.scheduling.worker import WorkerActions
 
     class Model:
         max_tokens = 64
@@ -205,15 +214,21 @@ def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(m
 
         def stream(self, messages, **kwargs):
             self.calls += 1
-            yield AIMessageChunk(content="隔离任务结果")
+            yield AIMessageChunk(content=reply)
 
     model = Model()
     monkeypatch.setattr(readonly.checkpoint, "build_checkpointer", lambda *_, **__: InMemorySaver())
     monkeypatch.setattr(readonly, "get_llm", lambda **_: model)
     with ExitStack() as resources:
         runner = readonly.ReadOnlyRunner(resources)
-        first = runner.run(ADMIN, "isolated-run", "分析文章")
-        replay = runner.run(ADMIN, "isolated-run", "分析文章")
+        worker = WorkerActions(None, SimpleNamespace(actor=lambda owner: ADMIN), resources)
+        worker.runner = runner
+        monkeypatch.setattr(worker, "enabled", lambda *args, **kwargs: True)
+        task = Definition(title="报告", action="read_only_agent", instruction="分析文章",
+                          delay_seconds=60)
+        payload = {"owner_id": ADMIN.uid, "definition": task.model_dump(mode="json")}
+        first = worker.perform(payload, "isolated-run")
+        replay = worker.perform(payload, "isolated-run")
         runner.runtime.update_state(
             {
                 "configurable": {
@@ -227,8 +242,13 @@ def test_background_agent_uses_standard_runtime_and_reuses_finished_checkpoint(m
         )
         blocked = runner.run(ADMIN, "isolated-run", "分析文章")
         assert blocked["status"] == "incomplete"
-    assert first["text"] == replay["text"] == "隔离任务结果"
-    assert replay["reused"] and model.calls == 1
+    assert replay["status"] == first["status"] == status
+    assert first["text"] == replay["text"]
+    if reply:
+        assert first["text"] == reply
+    else:
+        assert "未能完成" in first["text"]
+    assert replay["reused"] and model.calls == model_calls
     assert first["thread_id"].startswith("background_")
 
 

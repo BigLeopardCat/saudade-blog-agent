@@ -15,6 +15,10 @@ class CorpusUnavailable(RuntimeError):
     """The source did not provide a complete, self-consistent snapshot."""
 
 
+class CorpusRevisionChanged(CorpusUnavailable):
+    """The host invalidated an active pagination cursor."""
+
+
 def content_revision(title: str, content: str) -> str:
     payload = json.dumps([title, content], ensure_ascii=False, separators=(",", ":"))
     return hashlib.sha256(payload.encode()).hexdigest()
@@ -33,6 +37,15 @@ def _digest(value) -> bool:
 
 
 def fetch(get) -> list[dict]:
+    try:
+        return _fetch_snapshot(get)
+    except CorpusRevisionChanged:
+        return _fetch_snapshot(get)
+
+
+def _fetch_snapshot(get) -> list[dict]:
+    from tools.result import ToolResult
+
     docs: list[dict] = []
     revision = None
     total = 0
@@ -43,6 +56,8 @@ def fetch(get) -> list[dict]:
         if after and revision is not None:
             params.update(after=after, revision=revision)
         page = get("/rag/corpus?" + urlencode(params))
+        if after and isinstance(page, ToolResult) and page.meta.get("status") == 409:
+            raise CorpusRevisionChanged("corpus_revision_changed")
         if (
             not isinstance(page, dict)
             or page.get("schema_version") != SCHEMA_VERSION

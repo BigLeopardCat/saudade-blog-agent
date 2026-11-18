@@ -2,28 +2,35 @@
 
 import hashlib
 import json
+from pathlib import Path
 
 import pytest
 
 from eval.release_readiness import PROFILE, assess, cache_population, distribution, task_class
 
 
-def fixture(tmp_path, count=20):
-    trace = tmp_path / "trace.json"
-    trace.write_text(json.dumps({
-        "input": {"runtime": {"name": "native", "build_sha": "build", "model": "model"}},
-        "reply": "hello", "events": [
-            {"event": "request_layout", "model": "model", "tools": "tools", "messages": ["a"]},
-            {"node": "native", "event": "llm_done", "tool_calls": [],
-             "input": 100, "output": 10, "cache_read": 0},
-        ]}))
-    cases = [{"id": str(index), "tags": ["chat", "identity"], "status": "passed",
-              "first_action": {"any_tools": [], "allow_text": True},
-              "result": {"rounds": [
-        {"trace": str(trace), "http_timing": {"elapsed_s": 2, "first_visible_s": 0.2,
-         "first_reply_s": 1,
-         "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest()}}
-    ]}} for index in range(count)]
+def fixture(tmp_path, count=20, *, input_tokens=100):
+    folder = tmp_path / "traces"
+    folder.mkdir()
+    cases = []
+    for index in range(count):
+        request_id = f"{index + 1:032x}"
+        trace = folder / f"{request_id}.json"
+        trace.write_text(json.dumps({
+            "trace_id": request_id, "reply": "hello",
+            "input": {"runtime": {"name": "native", "build_sha": "build", "model": "model"}},
+            "events": [
+                {"event": "request_layout", "model": "model", "tools": "tools", "messages": ["a"]},
+                {"node": "native", "event": "llm_done", "tool_calls": [],
+                 "input": input_tokens, "output": 10, "cache_read": 0},
+            ]}))
+        rnd = {"trace": str(trace), "request_evidence": {"request_id": request_id},
+               "http_timing": {"request_id": request_id, "elapsed_s": 2, "first_visible_s": 0.2,
+                               "first_reply_s": 1,
+                               "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest()}}
+        cases.append({"id": str(index), "tags": ["chat", "identity"], "status": "passed",
+                      "first_action": {"any_tools": [], "allow_text": True},
+                      "result": {"rounds": [rnd]}})
     report = tmp_path / "report.json"
     report.write_text(json.dumps({"cases": cases, "full_run": True, "planned": count,
                                   "service_version": {"sha": "build"}}))
@@ -38,7 +45,7 @@ def fixture(tmp_path, count=20):
     report.write_text(json.dumps(doc))
     semantic_path = tmp_path / "semantic.json"
     write_review(report, semantic_path)
-    return report, profile_path, semantic_path, trace
+    return report, profile_path, semantic_path, Path(cases[0]["result"]["rounds"][0]["trace"])
 
 
 def write_review(report, target, suspect=()):
@@ -50,6 +57,15 @@ def write_review(report, target, suspect=()):
                  for case in cases]}))
 
 
+def update_first_capture(report, trace, data):
+    trace.write_text(json.dumps(data))
+    source = json.loads(report.read_bytes())
+    rnd = source["cases"][0]["result"]["rounds"][0]
+    assert rnd["trace"] == str(trace)
+    rnd["http_timing"]["trace_sha256"] = hashlib.sha256(trace.read_bytes()).hexdigest()
+    report.write_text(json.dumps(source))
+
+
 def test_complete_http_evidence_passes_without_claiming_browser_or_write_execution(tmp_path):
     report, profile, semantic, _ = fixture(tmp_path)
     got = assess(report, semantic_path=semantic, profile_path=profile)
@@ -57,6 +73,28 @@ def test_complete_http_evidence_passes_without_claiming_browser_or_write_executi
     assert got["usage"]["in"] == 2000 and got["usage"]["cache"] == 0
     assert got["cache_diagnostics"]["first_call"]["uncached_input"] == 2000
     assert got["separate_evidence_required"]
+
+
+@pytest.mark.parametrize("fault", ["duplicate", "wrong_trace", "wrong_evidence", "missing_id"])
+def test_one_round_requires_its_own_matching_http_capture(tmp_path, fault):
+    report, profile, semantic, _ = fixture(tmp_path)
+    doc = json.loads(report.read_bytes())
+    first, second = [case["result"]["rounds"][0] for case in doc["cases"][:2]]
+    if fault == "duplicate":
+        doc["cases"][1]["result"]["rounds"] = [first]
+    elif fault == "wrong_trace":
+        second["trace"] = first["trace"]
+        second["http_timing"]["trace_sha256"] = first["http_timing"]["trace_sha256"]
+    elif fault == "wrong_evidence":
+        second["request_evidence"] = first["request_evidence"]
+    else:
+        del second["http_timing"]["request_id"]
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == ("unverified" if fault == "missing_id" else "failed")
+    assert got["usage"]["calls"] == 19
+    assert got["task_metrics"]["chat"]["in"]["p95"] is None
 
 
 def test_case_efficiency_findings_remain_in_the_release_report(tmp_path):
@@ -147,33 +185,27 @@ def test_evidence_faults_never_pass(tmp_path, fault):
         trace.unlink()
     elif fault == "wrong_build":
         data["input"]["runtime"]["build_sha"] = "other"
-        trace.write_text(json.dumps(data))
+        update_first_capture(report, trace, data)
     elif fault == "missing_usage":
         data["events"][-1].pop("cache_read")
-        trace.write_text(json.dumps(data))
+        update_first_capture(report, trace, data)
     else:
         doc = json.loads(report.read_bytes())
         doc["cases"][0]["result"]["rounds"][0]["exec_rows"] = [{"tool": "set_role"}]
         report.write_text(json.dumps(doc))
-        write_review(report, semantic)
+    write_review(report, semantic)
     result = assess(report, semantic_path=semantic, profile_path=profile)
     assert result["status"] != "http_checks_passed"
 
 
 def test_efficiency_regression_blocks_despite_good_semantic_results(tmp_path):
-    report, profile, semantic, trace = fixture(tmp_path)
+    report, profile, semantic, _ = fixture(tmp_path, input_tokens=9000)
     policy = json.loads(profile.read_bytes())
     policy.update(version=1, diagnostic_metrics=[])
     profile.write_text(json.dumps(policy))
-    doc = json.loads(trace.read_bytes())
-    doc["events"][-1]["input"] = 9000
-    trace.write_text(json.dumps(doc))
     source = json.loads(report.read_bytes())
     source["evaluator_sha256"]["release_profile.json"] = hashlib.sha256(
         profile.read_bytes()).hexdigest()
-    for case in source["cases"]:
-        case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = hashlib.sha256(
-            trace.read_bytes()).hexdigest()
     report.write_text(json.dumps(source))
     write_review(report, semantic)
     got = assess(report, semantic_path=semantic, profile_path=profile)
@@ -182,16 +214,7 @@ def test_efficiency_regression_blocks_despite_good_semantic_results(tmp_path):
 
 
 def test_current_profile_reports_input_cost_without_calling_it_a_quality_failure(tmp_path):
-    report, profile, semantic, trace = fixture(tmp_path)
-    doc = json.loads(trace.read_bytes())
-    doc["events"][-1]["input"] = 9000
-    trace.write_text(json.dumps(doc))
-    source = json.loads(report.read_bytes())
-    for case in source["cases"]:
-        case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = hashlib.sha256(
-            trace.read_bytes()).hexdigest()
-    report.write_text(json.dumps(source))
-    write_review(report, semantic)
+    report, profile, semantic, _ = fixture(tmp_path, input_tokens=9000)
     got = assess(report, semantic_path=semantic, profile_path=profile)
     assert got["status"] == "http_checks_passed" and not got["failures"]
     assert [finding["gate"] for finding in got["efficiency_findings"]] == ["chat.in"]
@@ -272,10 +295,10 @@ def test_outcome_costs_keep_failed_spending_and_unreviewed_success_separate():
 
 
 def test_absent_cache_usage_stays_unknown_in_cache_diagnostics(tmp_path):
-    report, profile, _, trace = fixture(tmp_path)
+    report, profile, _, trace = fixture(tmp_path, count=1)
     doc = json.loads(trace.read_bytes())
     doc["events"][-1].pop("cache_read")
-    trace.write_text(json.dumps(doc))
+    update_first_capture(report, trace, doc)
     got = assess(report, profile_path=profile)
     assert got["cache_diagnostics"]["first_call"]["uncached_input"] is None
 
@@ -284,7 +307,7 @@ def test_model_error_cost_cannot_disappear_behind_complete_successful_calls(tmp_
     report, profile, _, trace = fixture(tmp_path)
     doc = json.loads(trace.read_bytes())
     doc["events"].append({"event": "llm_error"})
-    trace.write_text(json.dumps(doc))
+    update_first_capture(report, trace, doc)
     got = assess(report, profile_path=profile)
     assert any("errored or unfinished calls" in item for item in got["unverified"])
 
@@ -332,6 +355,36 @@ def test_known_noncritical_failure_can_use_quality_budget_without_becoming_unkno
     assert quality["combined_checks"]["passed"] == 99
     assert quality["combined_checks"]["total"] == 100
     assert quality["unresolved_semantic"] == 0
+    assert got["usage_by_outcome"]["failed"]["calls"] == 1
+
+
+@pytest.mark.parametrize(("review", "reason"), [
+    ("suspect", "semantic findings still require review: 99"),
+    ("not_evaluated", "complete semantic review tied to the frozen report SHA256"),
+    (None, "complete semantic review tied to the frozen report SHA256"),
+])
+def test_deterministic_failure_cannot_hide_unresolved_review(tmp_path, review, reason):
+    report, profile, semantic, _ = fixture(tmp_path, count=100)
+    doc = json.loads(report.read_bytes())
+    doc["cases"][-1]["status"] = "failed"
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    judge = json.loads(semantic.read_bytes())
+    if review is None:
+        judge["rows"].pop()
+    else:
+        judge["rows"][-1]["status"] = review
+    semantic.write_text(json.dumps(judge))
+
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+
+    assert got["status"] == "unverified" and not got["failures"]
+    assert reason in got["unverified"]
+    assert got["semantic_counts"] == {"checks_passed": 99, "failed": 1}
+    assert got["usage_by_outcome"]["failed"]["calls"] == 1
+    assert got["quality_statistics"]["all"]["unresolved_semantic"] == 1
+    assert got["quality_gate_statistics"]["core"]["unresolved_semantic"] == 1
+    assert got["quality_gate_statistics"]["core"]["wilson_lower_meets_target"] is None
 
 
 def test_dispatch_rejections_are_reported_and_cannot_earn_first_action_credit(tmp_path):
@@ -395,8 +448,6 @@ def test_registered_suite_can_measure_every_release_percentile_group():
 
 
 def test_reassessment_records_its_own_code_identity(tmp_path):
-    from pathlib import Path
-
     from eval import release_readiness
 
     report, profile, semantic, _ = fixture(tmp_path)

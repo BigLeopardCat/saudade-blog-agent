@@ -107,7 +107,7 @@ class WorkerActions:
         principal = self.host.actor(payload["owner_id"])
         if self.runner is None:
             self.runner = ReadOnlyRunner(self.resources, self.stop_event)
-        return {"status": "completed", **self.runner.run(principal, run_id, definition.instruction)}
+        return self.runner.run(principal, run_id, definition.instruction)
 
 
 def main():

@@ -338,16 +338,17 @@ class RagIndex:
         _record("hybrid", None, len(vec), miss)
         return fused or lex[:top_k]
 
-    def _vector_chunks_for(self, chunks: list[dict], space) -> list[dict]:
+    def _vector_inputs_for(self, chunks: list[dict], space) -> tuple[list[dict], str]:
         with self._lock:
             cached = self._vector_chunk_cache
         if cached is not None and cached[0] is chunks and cached[1] == space:
             return cached[2]
         refined = vector_chunks(chunks)
+        inputs = refined, corpus_fingerprint(space, refined)
         with self._lock:
             if self._chunks is chunks:
-                self._vector_chunk_cache = (chunks, space, refined)
-        return refined
+                self._vector_chunk_cache = (chunks, space, inputs)
+        return inputs
 
     def _vector_ranked(self, query: str, top_k: int, *,
                        article_id: int | None = None) -> tuple[list[dict], str | None, int]:
@@ -355,18 +356,18 @@ class RagIndex:
         if not is_enabled():
             return [], (degraded_reason() if settings.rag_hybrid_enabled else None), 0
         with self._lock:
-            chunks = self._chunks
+            source_chunks = self._chunks
             revision = self._revision
         try:
             space = space_from_settings()
-            chunks = self._vector_chunks_for(chunks, space)
+            chunks, fingerprint = self._vector_inputs_for(source_chunks, space)
         except InputProfileError:
             return [], "embedding_profile_error", 0
         store = get_store()
         store.load()
-        view = store.view_for(corpus_fingerprint(space, chunks))
+        view = store.view_for(fingerprint)
         if view is None:
-            self._warm_vectors(chunks)
+            self._warm_vectors(source_chunks)
             return [], degraded_reason() or "no_vectors", len(store.missing())
         if len(view) != len(chunks):
             logger.warning("向量视图 %d 行 != 语料 %d chunk——本轮退回纯词法",
@@ -378,6 +379,9 @@ class RagIndex:
             return [], "no_vector_hits", 0
         qv = embed_query(query)
         if qv is None:
+            if store.last_error() == "vector_dimension_changed":
+                self._warm_vectors(source_chunks)
+                return [], "vector_dimension_changed", len(store.missing())
             return [], "query_embed_failed", len(store.missing())
         from sqlalchemy.exc import SQLAlchemyError
 
