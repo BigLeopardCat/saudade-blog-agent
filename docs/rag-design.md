@@ -19,15 +19,17 @@ GET /api/public/rag/corpus 接受 limit、after、revision。
 | 成功信封 data 字段 | 含义 |
 |---|---|
 | schema_version | 协议版本 |
-| revision | 整个公开语料集合的内容指纹 |
+| revision | 宿主签发的公开语料分页版本，64 位小写十六进制，续页原样回传 |
 | total | 同版本的文章总数 |
-| documents | 每篇 id、title、content、revision |
+| documents | 每篇 id、title、content、revision。逐篇 revision 是紧凑 JSON 数组 [title,content] 的 UTF-8 SHA-256 |
 | next_cursor | 下一页游标；末页为 null |
 
-每页在 PostgreSQL repeatable-read、read-only 事务中取得页和摘要。
-指纹覆盖公开集合成员、标题及正文，不依赖写方更新 updated_at。
-分页期间内容或可见性变化返回 HTTP 409，数据库故障返回 HTTP 503，
-不能将故障包装成成功空列表。接口不增加阅读量、不返回作者内部身份。
+每页在同一 PostgreSQL repeatable-read、read-only 事务读取分页版本、总数和文章。
+公开成员、ID、标题或正文变更时，写事务同步更新版本和逐篇摘要。编辑私有文章、
+修改展示字段或回滚写事务，已有游标仍有效。宿主按 ID 取至多 limit + 1 条元数据，
+仅对入选文章读取正文，并再次核对公开条件。分页版本只供同一宿主判断能否续页。
+Agent 在完整导入后独立计算索引内容指纹，可用于不同来源的内容比对。
+版本冲突返回 HTTP 409，数据库故障返回 HTTP 503。接口不增加阅读量，不返回作者内部身份。
 
 rag/corpus.py 校验版本、内容摘要、总数、严格递增 ID、页大小和游标。
 续页收到 HTTP 409 时丢弃本轮已经取回的页面，从首页重取一次。再次冲突保留上次完整索引。
