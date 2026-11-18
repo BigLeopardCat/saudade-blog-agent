@@ -49,6 +49,49 @@ def budget_passages(rows, max_chars):
     return result
 
 
+def narrow_locations(rows, width):
+    """Keep ranked locations and only the exact body ranges belonging to those locations."""
+    narrowed = []
+    for row in rows:
+        if not row.get("passages"):
+            narrowed.append(row)
+            continue
+        matches = row.get("matches", [])[:width]
+        passages = []
+        for passage in row.get("passages", []):
+            source = passage["source"]
+            for window in merge_read_windows(matches):
+                if source["section_id"] != window["section_id"]:
+                    continue
+                low = max(source["offset"], window["offset"])
+                high = min(source["end"], window["end"])
+                if low < high:
+                    passages.append({**passage,
+                        "text": passage["text"][low-source["offset"]:high-source["offset"]],
+                        "source": {**source, "offset": low, "end": high}})
+        sections = [s for s in row.get("section_ids", [])
+                    if any(m["section_id"] == s for m in matches)]
+        names = dict(zip(row.get("section_ids", []), row.get("sections", [])))
+        narrowed.append({**row, "matches": matches, "passages": passages,
+                         "section_ids": sections,
+                         "sections": [names[s] for s in sections if s in names]})
+    return narrowed
+
+
+def useful_passages(original, presented):
+    """A tiny fragment cannot displace a readable query excerpt in another location."""
+    for before, after in zip(original, presented):
+        if len(before.get("passages", [])) != len(after.get("passages", [])):
+            return False
+        for source, visible in zip(before.get("passages", []), after.get("passages", [])):
+            excerpts = [source_excerpt(m) for m in before.get("matches", [])
+                        if m["section_id"] == source["source"]["section_id"]]
+            minimum = max((len(e["text"]) for e in excerpts if e), default=128)
+            if len(visible["text"]) < min(minimum, len(source["text"])):
+                return False
+    return True
+
+
 def attach_passages(hits, sources, corpus_revision, *, max_chars=None):
     result = []
     for hit in hits:

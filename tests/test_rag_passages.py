@@ -127,6 +127,29 @@ def test_global_passage_budget_keeps_exact_visible_range(source):
     assert len(passage.text) == 5 and passage.source.end - passage.source.offset == 5
 
 
+def test_locator_metadata_cannot_crowd_verified_body_into_single_characters():
+    title = "项目架构与全文总结和分页读取的证据边界"
+    body = "\n".join(f"## 章节{i}的全文总结和分页读取\n" +
+                     "分页读取以同一修订和准确坐标保证连续覆盖原文。" * 18
+                     for i in range(8))
+    document = {"type": "note", "id": 71, "title": title, "content": body}
+    document["revision"] = content_revision(title, body)
+    index = RagIndex(corpus_loader=lambda: [document], vector_warmer=lambda _: None)
+    index.build()
+    hits = index._lexical_ranked("全文总结 分页读取", 1, article_id=71)
+    rows = index.read_passages(hits)
+    meta = {"body_evidence": {"verified": True, "scope": "returned_passages"}}
+    rendered = render_search_result(rows, meta, 2850)
+    assert rendered.kind == "ok" and len(rendered.text) <= 2850
+    assert rendered.meta["presentation"]["omitted_locations"] > 0
+    assert rendered.meta["body_evidence"]["returned_chars"] >= 240
+    assert len(rendered.data[0]["matches"]) < len(rows[0]["matches"])
+    for passage in rendered.data[0]["passages"]:
+        value = BodyPassage.model_validate(passage)
+        assert len(value.text) >= 240 and "同一修订" in value.text
+    assert len(rows[0]["matches"]) == 8
+
+
 def test_delivered_passages_have_heading_paths_and_are_not_requested_again(source):
     _, index, hits = source
     rows = index.read_passages(hits)

@@ -222,7 +222,7 @@ def search_text(meta, text):
 
 def render_search_result(data, meta, cap):
     """Retain complete ranked sources; unshown passages never establish read evidence."""
-    from rag.passages import budget_passages
+    from rag.passages import budget_passages, narrow_locations, useful_passages
     from tools.result import ok, unavailable
 
     def present(rows):
@@ -232,6 +232,11 @@ def render_search_result(data, meta, cap):
                 "shown_candidates": len(rows),
                 "omitted_candidates": len(data) - len(rows),
             }
+        omitted = sum(len(r.get("matches", [])) for r in data[:len(rows)]) - sum(
+            len(r.get("matches", [])) for r in rows)
+        if omitted:
+            visible_meta["presentation"] = {**visible_meta.get("presentation", {}),
+                                             "omitted_locations": omitted}
         if "body_evidence" in meta:
             visible_meta["body_evidence"] = {
                 **meta["body_evidence"],
@@ -247,10 +252,24 @@ def render_search_result(data, meta, cap):
             rows = data[:size]
             if result := present(rows):
                 return result
-            characters = sum(len(p["text"]) for row in rows for p in row.get("passages", []))
-            while characters:
-                characters //= 2
-                if result := present(budget_passages(rows, characters)):
+            width = max((len(row.get("matches", [])) for row in rows
+                         if row.get("passages")), default=0)
+            for count in range(width, 0, -1):
+                selected = narrow_locations(rows, count)
+                if result := present(selected):
+                    return result
+                characters = sum(len(p["text"]) for row in selected
+                                 for p in row.get("passages", []))
+                while characters:
+                    characters //= 2
+                    clipped = budget_passages(selected, characters)
+                    if not useful_passages(selected, clipped):
+                        break
+                    if result := present(clipped):
+                        return result
+            for count in range(width, 0, -1):
+                metadata = [{**r, "passages": []} for r in narrow_locations(rows, count)]
+                if result := present(metadata):
                     return result
     except (KeyError, TypeError, ValueError):
         return unavailable(

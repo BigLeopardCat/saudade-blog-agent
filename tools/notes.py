@@ -318,10 +318,7 @@ def _search_article_passages(query, top_k, article_id):
                 meta["context"] = {"mode": settings.rag_context_mode, "applied": False,
                                    "reason": type(error).__name__}
         try:
-            from agent.runtime.tool_context import current_observation
-
-            hits = get_index().read_passages(
-                hits, max_chars=current_observation().max_tokens * 3 // 2)
+            hits = get_index().read_passages(hits)
         except (ValueError, KeyError, TypeError):
             return unavailable(search_text(meta, "Source body evidence could not be verified."),
                                meta={**meta, "reason": "source_evidence_unavailable"})
