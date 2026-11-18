@@ -62,6 +62,8 @@ class TaskBudget:
         self._storage = None
         self._restored = {"tokens": 0, "model_calls": 0, "tool_calls": 0}
         self._input_anchor: tuple[input_usage.InputShape, int] | None = None
+        self._held_tokens = 0
+        self._held_calls = 0
         self.clock = TaskClock(self.limits.task_seconds)
 
     def enter_request(self, deadline):
@@ -146,11 +148,55 @@ class TaskBudget:
                 if type(value) is int and value >= 0:
                     setattr(self, key, max(getattr(self, key), value))
 
-    def _reject(self, reason):
-        self.reason = reason
+    def _reject(self, reason, *, persistent=True):
+        if persistent and (not (self._held_tokens or self._held_calls)
+                           or reason in {"task_seconds", "task_time_unknown"}):
+            self.reason = reason
         record("budget", "rejected", reason=reason, model_calls=self.model_calls,
                tool_calls=self.tool_calls, task_tokens=self.tokens)
         raise BudgetExceeded(reason)
+
+    @contextmanager
+    def completion_headroom(self, *, tokens, model_calls=1):
+        """A subworkflow cannot consume the enclosing Agent's final response allowance."""
+        with self._lock:
+            if (type(tokens) is not int or tokens < 0
+                    or type(model_calls) is not int or model_calls < 0):
+                raise ValueError("completion headroom must be nonnegative integers")
+            if self.model_calls + self._held_calls + model_calls > self.limits.model_calls:
+                self._reject("model_calls", persistent=False)
+            if self.tokens + self._held_tokens + tokens > self.limits.task_tokens:
+                self._reject("task_tokens", persistent=False)
+            self._held_tokens += tokens
+            self._held_calls += model_calls
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._held_tokens -= tokens
+                self._held_calls -= model_calls
+
+    def admit_plan(self, requests):
+        """Reject an infeasible bounded workflow before its first paid request."""
+        requests = list(requests)
+        with self._lock:
+            if self.clock.expired():
+                self._reject(self.reason or "task_seconds")
+            if self.reason:
+                self._reject(self.reason)
+            if self.model_calls + self._held_calls + len(requests) > self.limits.model_calls:
+                self._reject("model_calls", persistent=False)
+            total = 0
+            for messages, output in requests:
+                tokens = self._input_estimate(messages, (), output, None)[0]
+                if tokens > self.limits.input_tokens:
+                    self._reject("input_tokens", persistent=False)
+                if tokens + output > self.limits.context_tokens:
+                    self._reject("context_tokens", persistent=False)
+                total += tokens + output
+            if self.tokens + self._held_tokens + total > self.limits.task_tokens:
+                self._reject("task_tokens", persistent=False)
+        record("budget", "workflow_admitted", model_calls=len(requests), reserved_tokens=total)
 
     def reserve(self, messages, tools=(), *, output_limit=None, model_key=None):
         output_limit = settings.agent_output_tokens if output_limit is None else output_limit
@@ -179,9 +225,9 @@ class TaskBudget:
             return "context_tokens"
         if estimated > self.limits.input_tokens:
             return "input_tokens"
-        if self.model_calls >= self.limits.model_calls:
+        if self.model_calls + self._held_calls >= self.limits.model_calls:
             return "model_calls"
-        if self.tokens + estimated + output_limit > self.limits.task_tokens:
+        if self.tokens + self._held_tokens + estimated + output_limit > self.limits.task_tokens:
             return "task_tokens"
         return None
 
@@ -196,10 +242,10 @@ class TaskBudget:
         """Remaining output room after the complete input, without reserving a call."""
         with self._lock:
             estimated = self._input_estimate(messages, tools, 1, model_key)[0]
-            if self.reason or self.model_calls >= self.limits.model_calls:
+            if self.reason or self.model_calls + self._held_calls >= self.limits.model_calls:
                 return 0
-            return max(0, min(self.limits.context_tokens - estimated,
-                              self.limits.task_tokens - self.tokens - estimated))
+            spending_room = self.limits.task_tokens - self.tokens - self._held_tokens - estimated
+            return max(0, min(self.limits.context_tokens - estimated, spending_room))
 
     def input_capacity(self, messages, tools=(), *, output_limit, model_key=None):
         """Additional input room; spending limits never silently remove task context."""

@@ -222,6 +222,7 @@ def search_text(meta, text):
 
 def render_search_result(data, meta, cap):
     """Retain complete ranked sources; unshown passages never establish read evidence."""
+    from rag.passages import budget_passages
     from tools.result import ok, unavailable
 
     def present(rows):
@@ -243,13 +244,13 @@ def render_search_result(data, meta, cap):
 
     try:
         for size in range(len(data), 0, -1):
-            if result := present(data[:size]):
+            rows = data[:size]
+            if result := present(rows):
                 return result
-        if data:
-            first = {**data[0], "passages": list(data[0].get("passages", []))}
-            while first["passages"]:
-                first["passages"].pop()
-                if result := present([first]):
+            characters = sum(len(p["text"]) for row in rows for p in row.get("passages", []))
+            while characters:
+                characters //= 2
+                if result := present(budget_passages(rows, characters)):
                     return result
     except (KeyError, TypeError, ValueError):
         return unavailable(

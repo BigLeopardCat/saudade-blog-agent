@@ -1,9 +1,8 @@
 """Deliver complete source material; synthesize sources that exceed the observation budget."""
 
-import json
 from typing import Annotated, Literal
 
-from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_core.messages import HumanMessage
 from openai import OpenAIError
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, StrictStr
 
@@ -11,11 +10,13 @@ from agent.domains.articles.summary_model import synthesize
 from agent.runtime.budget import BudgetExceeded, TaskBudget, current_budget
 from agent.runtime.message_content import estimate_tokens
 from agent.runtime.progress import emit
+from agent.runtime.tool_context import current_observation
 from agent.runtime.turns import check_cancelled
 from config.settings import settings
 from rag.reading import article_frame_text
 from rag.sections import PARSER_VERSION
 from rag.source import MAX_DOCUMENT_CHARS, Digest
+from tools.base import SITE_BASE
 from tools.result import ToolResult, ok, unavailable
 from utils.trace import record
 
@@ -36,6 +37,7 @@ class SummaryResult(BaseModel):
     view: Literal["summary"]
     noteId: Annotated[StrictInt, Field(gt=0)]
     noteTitle: StrictStr
+    sourceUrl: StrictStr = ""
     summary: Annotated[StrictStr, Field(min_length=1)]
     strategy: Literal["stuff", "refine"]
     segments: Annotated[StrictInt, Field(gt=0)]
@@ -45,15 +47,17 @@ class SummaryResult(BaseModel):
 def visible_summary(data, identifier):
     result = SummaryResult.model_validate(data)
     coverage = result.coverage
+    source_url = f"{SITE_BASE}/article/{identifier}"
     if (result.noteId != identifier or coverage.end != coverage.total_chars
+            or result.sourceUrl not in ("", source_url)
             or coverage.section_schema != PARSER_VERSION):
         raise ValueError("incomplete_summary_coverage")
-    return result.model_dump()
+    return {**result.model_dump(), "sourceUrl": source_url}
 
 
 def _source(identifier, config, budget, read):
     pages, offset, revision, schema, total, title = [], 0, "", "", None, ""
-    source_tokens = 0
+    source_tokens, initial = 0, {}
     while True:
         check_cancelled(config)
         budget.check_time()
@@ -71,6 +75,7 @@ def _source(identifier, config, budget, read):
         source = data.get("source") or {}
         body = data.get("noteContent")
         if not pages:
+            initial = data
             revision, schema = data["contentRevision"], data["sectionSchema"]
             total = data["totalChars"]
             title = data.get("noteTitle", "文章")
@@ -93,21 +98,34 @@ def _source(identifier, config, budget, read):
         if source_tokens > budget.limits.task_tokens - budget.tokens:
             raise BudgetExceeded("task_tokens")
         if end == total:
-            return "".join(pages), title, {
+            body = "".join(pages)
+            full = {**initial, "noteContent": body, "readOffset": 0, "nextOffset": None,
+                    "readComplete": True, "note": None,
+                    "source": {**initial["source"], "offset": 0, "end": total}}
+            return body, title, {
                 "complete": True, "start": 0, "end": end, "total_chars": total,
-                "revision": revision, "section_schema": schema, "pages": len(pages)}, (
-                    data if len(pages) == 1 else None)
+                "revision": revision, "section_schema": schema, "pages": len(pages)}, full
 
 
 def _source_fits(data, budget):
-    if data is None:
-        return False
-    message = ToolMessage(content=article_frame_text(data), name="get_article_detail",
-                          tool_call_id="source-" + "0" * 64)
-    output = max(settings.agent_output_tokens, settings.agent_extended_output_tokens)
-    capacity = min(settings.agent_tool_result_tokens, budget.limits.input_tokens,
-                   budget.limits.context_tokens - output)
-    return estimate_tokens([message]) <= capacity
+    plan = current_observation()
+    text = article_frame_text(data)
+    return (plan.fits(text) and budget.input_tokens([plan.message(text)])
+            <= min(budget.limits.input_tokens, budget.limits.context_tokens))
+
+
+def _delivery(identifier, title, coverage, budget):
+    """Include provenance before choosing the nested model's output allowance."""
+    plan = current_observation()
+    envelope = visible_summary({"view": "summary", "noteId": identifier, "noteTitle": title,
+        "summary": " ", "strategy": "refine", "segments": budget.limits.model_calls,
+        "coverage": coverage}, identifier)
+    overhead = estimate_tokens([plan.message(article_frame_text(envelope))])
+    room = min(plan.max_tokens, budget.limits.input_tokens) - overhead - 16
+    if room < 128:
+        raise BudgetExceeded("summary_delivery_capacity")
+    # JSON escaping can double ordinary summary characters; control characters are rejected.
+    return min(settings.agent_summary_output_tokens, room), max(1, room * 3 // 4)
 
 
 def summarize_article(identifier, instructions, config, *, read):
@@ -119,10 +137,18 @@ def summarize_article(identifier, instructions, config, *, read):
             record("article_summary", "source_delivered", article_id=identifier, **coverage)
             return ok(article_frame_text(source), data=source)
         emit(config, "正在汇总全文…", key=f"summary:{identifier}")
-        text, strategy, segments = synthesize(body, instructions, budget, config)
+        output, max_chars = _delivery(identifier, title, coverage, budget)
+        plan = current_observation()
+        with budget.completion_headroom(tokens=plan.completion_tokens,
+                                        model_calls=plan.completion_calls):
+            text, strategy, segments = synthesize(body, instructions, budget, config,
+                                                  output=output, max_chars=max_chars)
         data = visible_summary({"view": "summary", "noteId": identifier, "noteTitle": title,
             "summary": text, "strategy": strategy, "segments": segments,
             "coverage": coverage}, identifier)
+        text = article_frame_text(data)
+        if not plan.fits(text):
+            raise ValueError("summary_delivery_capacity")
     except (ValueError, TypeError, KeyError, OpenAIError, TimeoutError, BudgetExceeded) as error:
         reason = error.reason if isinstance(error, BudgetExceeded) else type(error).__name__
         record("article_summary", "incomplete", article_id=identifier, reason=reason)
@@ -131,4 +157,4 @@ def summarize_article(identifier, instructions, config, *, read):
     check_cancelled(config)
     record("article_summary", "completed", article_id=identifier, strategy=strategy,
            segments=segments, **coverage)
-    return ok(json.dumps(data, ensure_ascii=False, separators=(",", ":")), data=data)
+    return ok(text, data=data)

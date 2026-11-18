@@ -9,6 +9,7 @@ from rag.tokenization import analyzed, tokenize
 
 EXCERPT_CHARS = 240
 MATCH_FIELDS = ("title", "heading", "body")
+MAX_MATCHES_PER_DOCUMENT = 8
 
 
 def source_excerpt(match: dict) -> dict | None:
@@ -102,10 +103,14 @@ def documents(chunks: list[dict], scores: dict[int, float], revision: str, *,
             }
             by_doc[identity] = row
         section_id = chunk.get("section_id", chunk["section"])
-        if section_id in row["section_ids"] or len(row["section_ids"]) >= 3:
+        position = (section_id, chunk.get("start", 0), chunk.get("end"))
+        if (len(row["matches"]) >= MAX_MATCHES_PER_DOCUMENT or any(
+                (match["section_id"], match["offset"], match["end"]) == position
+                for match in row["matches"])):
             continue
-        row["section_ids"].append(section_id)
-        row["sections"].append(chunk["section"])
+        if section_id not in row["section_ids"]:
+            row["section_ids"].append(section_id)
+            row["sections"].append(chunk["section"])
         row["matches"].append({
             "chunk_id": chunk.get("chunk_id"),
             "section_id": section_id,
