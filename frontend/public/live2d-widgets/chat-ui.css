@@ -852,6 +852,7 @@
 }
 
 /* The badge overlays its anchor without moving the centered conversation title. */
+#waifu-chat .chat-heading:has(.chat-unread-dot:not([hidden])) { z-index: 1; }
 #waifu-chat .chat-unread-dot {
   position: absolute; top: -10px; right: -12px; width: 24px; height: 24px;
   border: 0; padding: 0; background: transparent; pointer-events: auto; cursor: pointer;
