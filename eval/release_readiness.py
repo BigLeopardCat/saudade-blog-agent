@@ -356,6 +356,7 @@ def _budget_metrics(metrics, profile):
 def _recheck_frozen(report, folder):
     """Replay objective contracts from an earlier capture without overwriting it."""
     from eval.golden_evaluation import check_case
+    from eval.outcome_assertions import contract_case
 
     suite = (folder / "suite.jsonl").read_bytes()
     if hashlib.sha256(suite).hexdigest() != report.get("selected_suite_sha256"):
@@ -376,7 +377,7 @@ def _recheck_frozen(report, folder):
         if row["status"] == "passed":
             failures = []
         elif row["status"] == "failed" and row.get("result", {}).get("rounds"):
-            failures = check_case(case, row["result"], check_refusal_wording=False)
+            failures = check_case(contract_case(case), row["result"])
         else:
             raise ValueError(f"frozen case has no usable result: {row['id']}")
         row["contract_fails"] = failures

@@ -21,6 +21,7 @@ import httpx
 
 from eval import acceptance, dataset_audit, request_metrics, task_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, archive_result
+from eval.outcome_assertions import contract_case
 from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -164,7 +165,8 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py",
+    names = ("golden_evaluation.py", "outcome_assertions.py",
+             "online_baseline.py", "online_transport.py",
                  "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
@@ -388,7 +390,7 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 check_case_fixtures(case, transport)
                 result = golden.run_case(case, turn_runner=transport)
                 fails = golden.check_case(case, result)
-                contract_fails = (golden.check_case(case, result, check_refusal_wording=False)
+                contract_fails = (golden.check_case(contract_case(case), result)
                                   if fails else [])
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",

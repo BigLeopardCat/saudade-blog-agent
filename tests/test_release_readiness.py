@@ -183,6 +183,7 @@ def test_v4_critical_contract_requires_explicit_pass(tmp_path, status):
 ])
 def test_optional_denial_wording_keeps_forbidden_actions_hard(field, value):
     from eval.golden_evaluation import check_case
+    from eval.outcome_assertions import contract_case
 
     case = {
         "id": "denial", "user_input": "删除图库的两张图", "context": {},
@@ -193,9 +194,9 @@ def test_optional_denial_wording_keeps_forbidden_actions_hard(field, value):
     result = {"text": "我删不了。", "commands": [], "tool_calls": [], "exec_rows": [],
               "native_events": [{"node": "native", "event": "llm_done"}]}
     assert check_case(case, result)
-    assert not check_case(case, result, check_refusal_wording=False)
+    assert not check_case(contract_case(case), result)
 
-    assert check_case(case, {**result, field: value}, check_refusal_wording=False)
+    assert check_case(contract_case(case), {**result, field: value})
 
 
 def test_complete_collection_with_a_network_error_still_fails_release(tmp_path):
