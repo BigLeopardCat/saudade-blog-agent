@@ -21,6 +21,7 @@ import httpx
 
 from eval import acceptance, dataset_audit, request_metrics, task_metrics
 from eval.online_transport import EvaluationError, OnlineTransport, archive_result
+from eval.outcome_assertions import contract_case
 from utils.trace_io import load_trace
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -66,6 +67,23 @@ def fixture_account_eligibility(case):
     except (ValueError, TypeError) as exc:
         raise ValueError(f"invalid account eligibility fixture: {case['id']}") from exc
     return dict(value)
+
+
+def fixture_catalog(case):
+    value = case.get("requires_catalog", {})
+    if not isinstance(value, dict) or set(value) - {"article_tag", "root_tag", "category", "board"}:
+        raise ValueError(f"invalid catalog fixture: {case['id']}")
+    for key, target in value.items():
+        if key == "root_tag" and isinstance(target, str) and target.strip():
+            continue
+        if key == "board" and type(target) is int and target > 0:
+            continue
+        if (key in {"article_tag", "category"} and isinstance(target, list) and len(target) == 2
+                and type(target[0]) is int and target[0] > 0
+                and isinstance(target[1], str) and target[1].strip()):
+            continue
+        raise ValueError(f"invalid {key} fixture: {case['id']}")
+    return value
 
 
 def _call_limits(gold, case_id):
@@ -117,6 +135,9 @@ def load_suite(path=SUITE):
         fixture_articles(case)
         fixture_images(case)
         fixture_account_eligibility(case)
+        fixture_catalog(case)
+        if "requires_device_gateway" in case and type(case["requires_device_gateway"]) is not bool:
+            raise ValueError(f"invalid device fixture: {case['id']}")
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -144,7 +165,8 @@ def snapshot(folder, cases):
     sources = folder / "evaluator"
     sources.mkdir()
     hashes = {}
-    names = ("golden_evaluation.py", "online_baseline.py", "online_transport.py",
+    names = ("golden_evaluation.py", "outcome_assertions.py",
+             "online_baseline.py", "online_transport.py",
                  "stream_protocol.py",
                  "native_assertions.py", "request_metrics.py", "latency_metrics.py",
                  "task_metrics.py", "usage.py",
@@ -154,7 +176,8 @@ def snapshot(folder, cases):
                  "golden_thread.py", "golden_trace.py", "native_receipt_contract.py",
                  "cache_diagnostics.py")
     paths = {name: ROOT / "eval" / name for name in names}
-    paths["agent/contracts/events.py"] = ROOT / "agent/contracts/events.py"
+    for name in ("agent/contracts/events.py", "agent/runtime/answer_length.py"):
+        paths[name] = ROOT / name
     for name, path in paths.items():
         body = path.read_bytes()
         target = sources / name
@@ -201,6 +224,10 @@ def check_case_fixtures(case, transport):
         transport.check_quota_fixture(case["requires_quota_usage"])
     if case.get("requires_category_creation"):
         transport.check_category_fixture(case["requires_category_creation"])
+    for kind, target in fixture_catalog(case).items():
+        transport.check_catalog_fixture(kind, target)
+    if case.get("requires_device_gateway"):
+        transport.check_device_gateway_fixture()
 
 
 def fixture_preflight(cases, transport, identities):
@@ -363,9 +390,13 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 check_case_fixtures(case, transport)
                 result = golden.run_case(case, turn_runner=transport)
                 fails = golden.check_case(case, result)
+                contract_fails = (golden.check_case(contract_case(case), result)
+                                  if fails else [])
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
-                           fails=fails, errors=errors, result=archive_result(result))
+                           contract_status="failed" if contract_fails or errors else "passed",
+                           fails=fails, contract_fails=contract_fails,
+                           errors=errors, result=archive_result(result))
                 availability = (result.get("evaluation_failure")
                                 or model_availability_failure(result))
                 if availability:

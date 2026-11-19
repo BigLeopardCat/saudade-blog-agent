@@ -10,6 +10,7 @@
 | 本地运行 | [本地起步](getting-started.md) → [配置导航](configuration.md) |
 | 理解与修改代码 | [架构](agent-architecture.md) → [代码导读](code-reading.md) → [领域扩展](product-extensions.md) |
 | 部署与排障 | [部署](deployment.md) → [排障](troubleshooting.md) → [评测与观测](eval-observability.md) |
+| 准备发行 | [版本与附件核对](deployment.md#正式发行) → [候选回归与证据](release-acceptance.md#发布步骤) |
 
 ## 设计与契约
 

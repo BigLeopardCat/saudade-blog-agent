@@ -103,6 +103,7 @@ def report(tmp_path, cases, build, *, role="regression", improved=False, evaluat
                 "first_confirmation_s": 0.2}}
         rows.append({"id": item["id"], "identity": item["identity"], "tags": item["tags"],
                      "first_action": item["first_action"], "status": "passed",
+                     "contract_status": "passed",
                      "case_sha256": digest(json.dumps(item, sort_keys=True).encode()),
                      "result": {"rounds": [round_result]}})
     path = tmp_path / "report.json"

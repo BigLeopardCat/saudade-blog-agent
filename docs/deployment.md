@@ -6,17 +6,25 @@ Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 Postg
 
 ## 正式发行
 
-发行前冻结通过验收的 Agent 与博客完整提交。宿主契约测试源码由 `.github/host-contract.json` 固定，
-组件由博客的 `frontend/widget.lock.json` 固定；容器运行版本另由
-博客的 `deploy/docker/agent.lock.json` 固定。三个锁用途不同，不要求互相追逐 HEAD；
-发行说明必须列明实际验证的组合，不能将另一版本的回归成绩套用到安装包。
+发行前从准备打包的源码记录以下版本，并在发行说明列出实际验证过的组合。
 
-先关闭严重缺陷并完成最终候选的 CI、任务验收及隔离恢复演练，再决定稳定版本号与 tag。
-README、包版本、Changelog 和发行说明的稳定性声明应一致；证据不足时保持候选状态。
-发行资产附源码提交、适用数据库迁移、校验值、已知限制和升级/回滚步骤。
-生产凭据、数据库备份、原始私有 trace 不进入公开发行资产。
+| 对象 | 版本依据 |
+| --- | --- |
+| Agent Python 包 | `pyproject.toml` 与附件 manifest 的 `version`、`source_revision` |
+| 用于跨仓测试的宿主源码 | Agent 的 [宿主契约锁](../.github/host-contract.json) |
+| 浏览器组件 | 博客的 `frontend/widget.lock.json` 及对应子树哈希 |
+| Compose Agent | 博客的 `deploy/docker/agent.lock.json` 与博客附件 manifest 的 `agent_revision` |
+| 正在运行的站点 | Agent `/version` 和实际进程、宿主产物与 `/build-info.json` |
 
-使用干净工作树构建发布，保留旧开发目录中的未提交工作；不以 reset 覆盖并行会话。
+三个锁分别管理测试、组件和容器。切换 Compose Agent 时重新验证整套安装、恢复及受影响的
+跨仓任务。独立 systemd 升级只会改变正在运行的 Agent。正式发布以[发布验收](release-acceptance.md)
+为准，保留未通过或尚未评估的证据。
+
+使用干净检出和对应提交的 CI 构建附件。`Agent container` 工作流接受已有草稿的
+`release_tag`，草稿目标必须等于构建提交且 tag 与包版本对应。候选变更后核对草稿目标、
+manifest、附件校验和及验收报告，四者都来自新候选才可发布。发行说明列出适用数据库迁移、
+已知限制和升级回滚入口。生产凭据、数据库备份和私有 trace 留在受控环境。
+博客安装包由[宿主发布流程](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/prebuilt.md)生成。
 
 ## 发行附件安装
 

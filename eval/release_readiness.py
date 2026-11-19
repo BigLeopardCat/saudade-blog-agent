@@ -2,7 +2,7 @@
 
 This is evidence for HTTP preparation quality and efficiency. Browser execution,
 approved writes, fault recovery and operational availability need separate evidence.
-Missing semantic review, usage or sample size stays unverified.
+Version 4 reports model judgments and efficiency as observations.
 """
 
 from __future__ import annotations
@@ -240,6 +240,7 @@ def quality_gate_statistics(cases, semantic, profile, *, review_gaps=()):
         interval = checked["wilson_95"] if checked else None
         result[name] = {
             "target": target, "basis": "observed_rate", "combined_checks": checked,
+            "observed_rate_is_release_gate": profile["version"] < 4,
             "unresolved_semantic": unresolved,
             "wilson_lower_meets_target": interval[0] >= target
                 if interval is not None and not unresolved else None,
@@ -271,9 +272,20 @@ def _quality(report, semantic, profile, *, review_incomplete, pending_review):
         "HTTP/evidence failures must be resolved before release")
     _reject(failures, "no_online_business_writes", not any(
         any(not row.get("cmd") for row in rnd.get("exec_rows", [])) for case in cases
-        for rnd in case.get("result", {}).get("rounds", [])), "this suite must only prepare writes")
-    _reject(failures, "deterministic_critical", all(case.get("status") == "passed"
-        for case in critical), "critical cases must all pass")
+        for rnd in (case.get("result", {}).get("rounds") or [case.get("result", {})])),
+        "this suite must only prepare writes")
+    contract_gate = profile["version"] >= 4
+    failed = [case["id"] for case in critical
+              if case.get("contract_status" if contract_gate else "status") != "passed"]
+    _reject(failures, "deterministic_critical", not failed,
+            failed if contract_gate else "critical cases must all pass")
+    if contract_gate:
+        unchecked = [case["id"] for case in cases
+                     if case.get("contract_status") not in {"passed", "failed"}
+                     and case.get("status") != "evaluation_error"]
+        if unchecked:
+            missing.append("functional contract evidence missing: " + ", ".join(unchecked))
+        return failures, missing
     core = [case for case in cases if set(case.get("tags", [])) & set(profile["core_tags"])]
     if review_incomplete:
         missing.append("complete semantic review tied to the frozen report SHA256")
@@ -341,13 +353,44 @@ def _budget_metrics(metrics, profile):
     return result, failures, [] if observational else gaps
 
 
-def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
+def _recheck_frozen(report, folder):
+    """Replay objective contracts from an earlier capture without overwriting it."""
+    from eval.golden_evaluation import check_case
+    from eval.outcome_assertions import contract_case
+
+    suite = (folder / "suite.jsonl").read_bytes()
+    if hashlib.sha256(suite).hexdigest() != report.get("selected_suite_sha256"):
+        raise ValueError("frozen suite SHA256 mismatch")
+    definitions = [json.loads(line) for line in suite.splitlines() if line.strip()]
+    selected = {case["id"]: case for case in definitions}
+    if len(selected) != len(definitions) or not selected:
+        raise ValueError("frozen suite cases must be nonempty and unique")
+    if report.get("full_run") and selected.keys() != {row["id"] for row in report["cases"]}:
+        raise ValueError("complete capture does not match frozen suite")
+    for row in report["cases"]:
+        case = selected.get(row["id"])
+        digest = hashlib.sha256(json.dumps(case, sort_keys=True).encode()).hexdigest()
+        if not case or digest != row.get("case_sha256") or row["tags"] != case["tags"]:
+            raise ValueError(f"frozen case mismatch: {row['id']}")
+        if row["status"] == "evaluation_error":
+            continue
+        if row["status"] == "passed":
+            failures = []
+        elif row["status"] == "failed" and row.get("result", {}).get("rounds"):
+            failures = check_case(contract_case(case), row["result"])
+        else:
+            raise ValueError(f"frozen case has no usable result: {row['id']}")
+        row["contract_fails"] = failures
+        row["contract_status"] = "failed" if failures or row.get("errors") else "passed"
+
+
+def assess(report_path, *, semantic_path=None, profile_path=PROFILE, recheck_frozen=False):
     source, profile_body = Path(report_path).read_bytes(), Path(profile_path).read_bytes()
     report, profile = json.loads(source), json.loads(profile_body)
     ids = [case["id"] for case in report["cases"]]
     if not ids or len(ids) != len(set(ids)):
         raise ValueError("baseline cases must be nonempty and unique")
-    if profile.get("version") not in {1, 2, 3}:
+    if profile.get("version") not in {1, 2, 3, 4}:
         raise ValueError("unsupported release profile version")
     if profile["version"] != 2 and profile.get("diagnostic_metrics"):
         raise ValueError("only version 2 accepts selected diagnostic metrics")
@@ -359,6 +402,10 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
         raise ValueError("only model calls and token counts may be diagnostic targets")
     reviewed = (acceptance.assess(source, json.loads(Path(semantic_path).read_bytes()))
                 if semantic_path else None)
+    if recheck_frozen:
+        if profile["version"] < 4:
+            raise ValueError("rechecking contracts requires release profile version 4")
+        _recheck_frozen(report, Path(report_path).parent)
     reviews = reviewed["cases"] if reviewed else []
     semantic = {row["id"]: row["status"] for row in reviews}
     unreviewed = {row["id"] for row in reviews if row["missing_review_rounds"]
@@ -380,17 +427,30 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE):
     failures.extend(budget_failures)
     missing.extend([*metrics["missing"], *budget_missing])
     profile_digest = hashlib.sha256(profile_body).hexdigest()
-    if (report.get("evaluator_sha256") or {}).get("release_profile.json") != profile_digest:
+    captured_profile = (report.get("evaluator_sha256") or {}).get("release_profile.json")
+    if captured_profile != profile_digest and not recheck_frozen:
         missing.append("release profile frozen with this baseline")
     _reject(failures, "trace_integrity", not metrics["trace_errors"], metrics["trace_errors"])
     return {
         "scope": profile["scope"], "source_sha256": hashlib.sha256(source).hexdigest(),
         "profile_sha256": profile_digest,
+        "captured_profile_sha256": captured_profile,
+        "rechecked_frozen_contracts": recheck_frozen,
         "assessor_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "status": "failed" if failures else "unverified" if missing else "http_checks_passed",
         "failures": failures, "unverified": missing,
         "semantic_counts": dict(Counter(semantic.values())),
         "deterministic_counts": dict(Counter(case.get("status") for case in report["cases"])),
+        "contract_counts": dict(Counter(
+            "evaluation_error" if case["status"] == "evaluation_error"
+            else case.get("contract_status", "unverified") for case in report["cases"])),
+        "contract_failures": [
+            {"case": case["id"], "checks": case.get("contract_fails", [])}
+            for case in report["cases"] if case.get("contract_status") == "failed"
+        ],
+        "semantic_observations": {"suspect_cases": pending_review,
+                                  "unreviewed_cases": sorted(unreviewed) if reviewed else ids,
+                                  "is_release_gate": profile["version"] < 4},
         "answer_length_findings": [{"case": row["id"], **finding}
                                    for row in reviews for finding in row["length_findings"]],
         "usage": metrics["usage"], "tool_process": metrics["tool_process"], **costs,
@@ -416,9 +476,12 @@ def main():
     parser.add_argument("report", type=Path)
     parser.add_argument("--semantic", type=Path)
     parser.add_argument("--profile", type=Path, default=PROFILE)
+    parser.add_argument("--recheck-frozen", action="store_true",
+                        help="recheck v4 contracts against captured suite and HTTP evidence")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
-    result = assess(args.report, semantic_path=args.semantic, profile_path=args.profile)
+    result = assess(args.report, semantic_path=args.semantic, profile_path=args.profile,
+                    recheck_frozen=args.recheck_frozen)
     args.out.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
     print(json.dumps({key: result[key] for key in ("status", "failures", "unverified")},
                      ensure_ascii=False))

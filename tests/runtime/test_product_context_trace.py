@@ -27,6 +27,7 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
                          "tool_loading", "tool_guidance", "rendering", "factual_policy",
                          "delivery_policy",
                          "administration_requires", "manual_ui", "guestbook", "article_management",
+                         "account_roles",
                          "can_access_admin_console", "role_label", "authenticated"}
     assert facts["tool_loading"] == "on_demand"
     assert facts["tool_guidance"] in messages[0].content
@@ -34,6 +35,9 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["delivery_policy"] in messages[0].content
     assert facts["administration_requires"] == ["admin", "superadmin"]
     assert facts["can_access_admin_console"] is False
+    assert facts["account_roles"] == context["account_roles"] == {
+        "assign_admin_requires": "superadmin",
+        "admin_change_between": ["user", "zako"]}
     assert facts["guestbook"]["post"] == "login"
     assert facts["guestbook"] == context["guestbook"]
     assert facts["guestbook"]["read"] == "public"
@@ -64,6 +68,7 @@ def test_only_the_time_used_in_the_prompt_is_added_to_review_facts(monkeypatch):
                          "tool_loading", "tool_guidance", "rendering", "factual_policy",
                          "delivery_policy",
                          "administration_requires", "manual_ui", "guestbook", "article_management",
+                         "account_roles",
                          "can_access_admin_console", "role_label", "authenticated"}
     assert "PRIVATE_CANARY" not in str(records)
 

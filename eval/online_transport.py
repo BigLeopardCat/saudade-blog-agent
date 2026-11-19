@@ -169,6 +169,48 @@ class OnlineTransport:
         if row.imageKey != image_id:
             raise EvaluationError("gallery fixture identity mismatch")
 
+    def check_catalog_fixture(self, kind, target):
+        """Prove prerequisites from the same host without modifying its records."""
+        if kind == "category":
+            self.check_category_fixture(target[1], target_id=target[0])
+            return
+        if kind == "article_tag":
+            article_id, name = target
+            path, params = f"/api/public/notes/{article_id}", {}
+        elif kind == "root_tag":
+            path, params = "/api/public/tags", {"parent_name": target, "page_size": 1}
+        elif kind == "board":
+            path, params = "/api/public/activity/guestbook", {"id": target, "page_size": 1}
+        else:
+            raise EvaluationError("unknown catalog fixture")
+
+        response = self.client.get(self.blog_url + path, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, dict) or payload.get("code") != 200:
+            raise EvaluationError(f"{kind} fixture is absent or cannot be verified")
+        data = payload.get("data")
+        if kind == "article_tag":
+            found = (isinstance(data, dict) and data.get("noteKey") == article_id
+                     and isinstance(data.get("noteTagRefs"), list)
+                     and any(isinstance(tag, dict) and tag.get("name") == name
+                             for tag in data["noteTagRefs"]))
+        elif kind == "root_tag":
+            found = payload.get("resolvedParentName") == target
+        else:
+            found = isinstance(data, list) and any(
+                isinstance(row, dict) and type(row.get("id")) is int and row["id"] == target
+                for row in data)
+        if not found:
+            raise EvaluationError(f"{kind} fixture is missing from the verified result")
+
+    def check_device_gateway_fixture(self):
+        response = self.client.get(self.blog_url + "/api/device-gateway/api/devices",
+                                   headers=self.host_headers(self.uid))
+        response.raise_for_status()
+        if not isinstance(response.json(), list):
+            raise EvaluationError("device gateway fixture returned an invalid list")
+
     def check_account_eligibility_fixture(self, expected):
         """A policy-specific case requires the current backend to certify its premise."""
         from agent.domains.account_actions.eligibility import checked
@@ -221,22 +263,29 @@ class OnlineTransport:
             response.raise_for_status()
             self.cleaned_conversations.append(cid)
 
-    def check_category_fixture(self, name):
-        """Verify creation preconditions through the same read-only service contract."""
+    def check_category_fixture(self, name, *, target_id=None):
+        """Verify category preparation through the service without applying the change."""
         from agent.domains.categories import targets
 
-        request = targets.intent({"action": "create", "fields": {"name": name}})
+        if target_id is None:
+            request = targets.intent({"action": "create", "fields": {"name": name}})
+        else:
+            request = targets.intent({"action": "update", "target": {"id": target_id},
+                                      "fields": {"name": name}})
         response = self.client.post(self.blog_url + targets.PATH + "/prepare",
                                     headers=self.host_headers(self.uid), json=request)
         response.raise_for_status()
         payload = response.json()
         if not isinstance(payload, dict) or payload.get("code") != 200:
+            if target_id is None:
+                raise EvaluationError(
+                    "category fixture cannot prepare a new category; check name/path collisions")
             raise EvaluationError(
-                "category fixture cannot prepare a new category; check name/path collisions")
+                "category fixture cannot prepare the requested change")
         try:
             targets.plan(payload["data"], request)
         except (ValueError, TypeError, KeyError) as exc:
-            raise EvaluationError("category fixture has no valid new-category plan") from exc
+            raise EvaluationError("category fixture returned no valid plan") from exc
 
     def _headers(self, request_id):
         if self.host:

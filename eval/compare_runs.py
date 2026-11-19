@@ -38,7 +38,7 @@ def _cost(case):
             "calls": sum(row["calls"] for row in rows)}
 
 
-def compare(before, after):
+def compare(before, after, *, status_field="status"):
     left, right = _cases(before), _cases(after)
     if before.get("suite_sha256") != after.get("suite_sha256") or set(left) != set(right):
         raise ValueError("paired runs must use the same frozen suite and case IDs")
@@ -47,13 +47,16 @@ def compare(before, after):
                 or left[name]["case_sha256"] != right[name].get("case_sha256")):
             raise ValueError("paired case inputs or assertions changed")
     names = sorted(left)
+    if status_field != "status" and any(source[name].get(status_field) not in {"passed", "failed"}
+                                        for source in (left, right) for name in names):
+        raise ValueError("paired runs need complete functional contract evidence")
     costs = [(_cost(left[name]), _cost(right[name])) for name in names]
     return {"scope": "deterministic checks and token usage; semantic quality not inferred",
             "unit": "complete scenario, including all its turns",
-            "quality": paired_outcomes([left[name]["status"] == "passed" for name in names],
-                                       [right[name]["status"] == "passed" for name in names]),
-            "regressions": [name for name in names if left[name]["status"] == "passed"
-                            and right[name]["status"] == "failed"],
+            "quality": paired_outcomes([left[name][status_field] == "passed" for name in names],
+                                       [right[name][status_field] == "passed" for name in names]),
+            "regressions": [name for name in names if left[name][status_field] == "passed"
+                            and right[name][status_field] == "failed"],
             "cost": {key: paired_delta([pair[0][key] for pair in costs],
                                        [pair[1][key] for pair in costs])
                      for key in ("input", "uncached_input", "output", "calls")},

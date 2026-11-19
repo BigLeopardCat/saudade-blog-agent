@@ -17,7 +17,8 @@
 - SSE、身份委托、确认、任务控制或客户端操作改变时，同时核对三端，配套 PR 写明兼容及发布顺序。
 - `.github/host-contract.json` 固定公开宿主测试源码；本地严格验证须显式设置 `SAUDADE_PARENT_REPO` 并核对提交，不能默认读取旁边的开发或生产 checkout。
 - 博客的 `frontend/widget.lock.json` 固定看板娘两棵前端子树。修改任一子树都要核对宿主锁；仅改 Python、文档或前端子树内容未变时，不机械更新组件 pin。
-- 两个锁文件用途独立，只引用已推送、可取回的完整提交与真实哈希；未评估和 skipped 不能报告为通过。
+- 博客的 `deploy/docker/agent.lock.json` 固定 Compose 中运行的 Agent。更换该锁后核对容器安装、恢复和跨仓兼容；独立的 Agent 发布不会更新它。
+- 三个锁文件用途独立，只引用已推送、可取回的完整提交与真实哈希；未评估和 skipped 不能报告为通过。
 
 ## 验证与运行环境
 

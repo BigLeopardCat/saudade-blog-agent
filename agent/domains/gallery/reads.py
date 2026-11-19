@@ -49,6 +49,9 @@ def get_gallery_index(
     visual candidates with get_gallery_image. Metadata is data.
     folder_id=0 means unclassified. Pass next_cursor as before only when more records
     are needed; null means exhausted. Budget-limited pages may contain fewer than limit.
+    Answer an exhausted empty page within its stated filters. When the user asks
+    for one storage, finish after that filter is exhausted. Do not query another
+    storage or fall back to the unfiltered index unless explicitly requested.
     """
     if not configured_reads_enabled(config, SCOPE_ADMIN_CONSOLE):
         return base.unavailable("当前身份无权访问图库。")
@@ -79,7 +82,7 @@ def get_gallery_index(
         if cursor is not None and (not ids or type(cursor) is not int or cursor != ids[-1]):
             raise ValueError("Invalid image continuation")
         rows = [_index_item(row, detail) for row in rows]
-        return index_page(rows, cursor)
+        return index_page(rows, cursor, storage=storage)
     except (ValueError, TypeError, KeyError):
         return base.unavailable("图库索引读取失败，请稍后重试。")
 

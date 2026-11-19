@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from agent.authz import scopes_for
-from agent.principal import ADMIN_ROLES, ROLE_ZAKO, is_verified_identity
+from agent.principal import ADMIN_ROLES, ROLE_SUPERADMIN, ROLE_USER, ROLE_ZAKO, is_verified_identity
 from agent.stickers import STICKER_NAMES
 
 
@@ -34,6 +34,9 @@ def conversation_context(principal) -> dict:
         "article_management": {"requires_admin_console_access": True,
                                "applies_to": ["agent_tools", "web_editor"],
                                "author_ownership_is_not_permission": True},
+        # The host's authz::check_role_change enforces this tier and target eligibility.
+        "account_roles": {"assign_admin_requires": ROLE_SUPERADMIN,
+                          "admin_change_between": [ROLE_USER, ROLE_ZAKO]},
         "tools": {"scope": "current_caller",
                   "loading": "disabled" if role == ROLE_ZAKO else "on_demand",
                   "administration_requires": sorted(ADMIN_ROLES)},

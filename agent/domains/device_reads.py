@@ -51,7 +51,11 @@ def _entry(row):
 
 @tool
 def list_devices(config: RunnableConfig, page: Page = 1, limit: Limit = 5) -> object:
-    """List accessible devices, including shared demo devices; at most 10 per page."""
+    """List accessible devices, including shared demos; at most 10 per page.
+
+    Ownership is not reported. Describe results as 可访问设备, not devices owned
+    by the account. If asked for 名下设备, explain that ownership cannot be verified.
+    """
     cfg = (config or {}).get("configurable") or {}
     principal = cfg.get("principal")
     uid = cfg.get("user_id")

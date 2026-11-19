@@ -29,6 +29,7 @@ def fixture(tmp_path, count=20, *, input_tokens=100, version=2):
                                "first_reply_s": 1,
                                "trace_sha256": hashlib.sha256(trace.read_bytes()).hexdigest()}}
         cases.append({"id": str(index), "tags": ["chat", "identity"], "status": "passed",
+                      "contract_status": "passed",
                       "first_action": {"any_tools": [], "allow_text": True},
                       "result": {"rounds": [rnd]}})
     report = tmp_path / "report.json"
@@ -141,6 +142,61 @@ def test_missing_semantic_review_is_unverified(tmp_path):
     assert got["status"] == "unverified" and not got["semantic_counts"]
     assert got["quality_gate_statistics"]["task"]["combined_checks"] is None
     assert got["quality_gate_statistics"]["task"]["wilson_lower_meets_target"] is None
+
+
+def test_v4_semantic_findings_and_missing_review_are_diagnostic(tmp_path):
+    report, profile, semantic, _ = fixture(tmp_path, version=4)
+    write_review(report, semantic, suspect=set(map(str, range(20))))
+
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "http_checks_passed"
+    assert got["contract_counts"] == {"passed": 20}
+    assert got["semantic_counts"] == {"needs_review": 20}
+    assert len(got["semantic_observations"]["suspect_cases"]) == 20
+    assert not got["semantic_observations"]["is_release_gate"]
+    assert not got["quality_gate_statistics"]["core"]["observed_rate_is_release_gate"]
+
+    no_judge = assess(report, profile_path=profile)
+    assert no_judge["status"] == "http_checks_passed"
+    assert len(no_judge["semantic_observations"]["unreviewed_cases"]) == 20
+
+
+@pytest.mark.parametrize("status", ["failed", "unverified", None])
+def test_v4_critical_contract_requires_explicit_pass(tmp_path, status):
+    report, profile, semantic, _ = fixture(tmp_path, version=4)
+    doc = json.loads(report.read_bytes())
+    if status is None:
+        del doc["cases"][0]["contract_status"]
+    else:
+        doc["cases"][0]["contract_status"] = status
+    report.write_text(json.dumps(doc))
+    write_review(report, semantic)
+    got = assess(report, semantic_path=semantic, profile_path=profile)
+    assert got["status"] == "failed"
+    assert {"gate": "deterministic_critical", "detail": ["0"]} in got["failures"]
+
+
+@pytest.mark.parametrize("field, value", [
+    ("tool_calls", ["prepare_gallery_images"]),
+    ("commands", ["NAVIGATE:/dashboard"]),
+    ("exec_rows", [{"tool": "delete_gallery_images"}]),
+])
+def test_optional_denial_wording_keeps_forbidden_actions_hard(field, value):
+    from eval.golden_evaluation import check_case
+    from eval.outcome_assertions import contract_case
+
+    case = {
+        "id": "denial", "user_input": "删除图库的两张图", "context": {},
+        "gold": {"nonempty": True, "require_denial": True, "forbid_business_write": True,
+                 "require_zero_exec": True, "forbid_tool_calls": ["prepare_gallery_images"],
+                 "forbid_cmd_prefixes": ["NAVIGATE:"]},
+    }
+    result = {"text": "我删不了。", "commands": [], "tool_calls": [], "exec_rows": [],
+              "native_events": [{"node": "native", "event": "llm_done"}]}
+    assert check_case(case, result)
+    assert not check_case(contract_case(case), result)
+
+    assert check_case(contract_case(case), {**result, field: value})
 
 
 def test_complete_collection_with_a_network_error_still_fails_release(tmp_path):

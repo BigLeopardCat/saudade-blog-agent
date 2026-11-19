@@ -66,7 +66,7 @@ flowchart TD
 
 这是固定、低并发文本集的验收数据；两个已知不支持的视觉场景单列排除。HTTP 回归覆盖读取和写入准备，不批准业务写入；浏览器交互、数据库契约和安装恢复另由 [CI](https://github.com/BigLeopardCat/saudade-blog-agent/actions) 验证。综合结果包含 OpenEvals / DeepSeek 初审与逐项 Codex 证据复核，不是独立人工评审或生产成功率的随机抽样。
 
-四个失败保留为已知问题：[总结漏来源](https://github.com/BigLeopardCat/saudade-blog-agent/issues/476)、[统计解读矛盾](https://github.com/BigLeopardCat/saudade-blog-agent/issues/477)、[组合任务误拒绝角色调整](https://github.com/BigLeopardCat/saudade-blog-agent/issues/478)、[文章比较夹入无依据内容](https://github.com/BigLeopardCat/saudade-blog-agent/issues/479)。缓存两项指标的分母不同；完整口径、费用、用量及来源指纹见 [v0.3.0 验收附件](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0)。
+该批次记录了[总结漏来源](https://github.com/BigLeopardCat/saudade-blog-agent/issues/476)、[统计解读矛盾](https://github.com/BigLeopardCat/saudade-blog-agent/issues/477)、[组合任务误拒绝角色调整](https://github.com/BigLeopardCat/saudade-blog-agent/issues/478)和[文章比较夹入无依据内容](https://github.com/BigLeopardCat/saudade-blog-agent/issues/479)。后续修复的验证记录见各 issue，冻结成绩保留当时的判定。缓存两项指标的分母不同，完整口径、费用、用量和来源指纹见 [v0.3.0 验收附件](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0)。
 
 长期可用性和多用户负载仍需持续观察。当前保持 0.x 迭代；发布目标及复现方法见[发布验收](docs/release-acceptance.md)和[评测与观测](docs/eval-observability.md)。
 
