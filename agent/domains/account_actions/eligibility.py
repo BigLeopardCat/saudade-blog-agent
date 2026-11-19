@@ -63,8 +63,8 @@ def get_account_action_eligibility(
     Requires no mute duration and never prepares or executes a change. For set_role,
     specify the proposed role; other actions omit role. allowed=true is eligibility,
     not approval. If an immediate mute is allowed but no duration is known, call
-    prepare_account_mute without a duration to retain the follow-up. No profile lookup
-    is needed unless the user also requested account details.
+    prepare_account_mute with start=now and omit the duration to retain the follow-up.
+    No profile lookup is needed unless the user also requested account details.
     A catalog miss does not establish that an account is absent;
     this endpoint also checks known IDs excluded from account listings.
     """

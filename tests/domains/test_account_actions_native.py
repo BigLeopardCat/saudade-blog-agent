@@ -171,7 +171,7 @@ def grant(prepared):
         ("role", {"username": "测试账号", "role": "zako"}, "set_account_role", "role", "zako"),
         (
             "mute",
-            {"account_id": 11, "permanent": True},
+            {"account_id": 11, "start": "now", "permanent": True},
             "account_mute",
             "mutedUntil",
             "9999-12-31T23:59:59",
@@ -263,7 +263,7 @@ def test_repeated_freeze_still_confirms_session_revocation(accounts, tmp_path):
 
 
 def test_temporary_mute_freezes_absolute_expiry_and_preserves_other_fields(accounts):
-    prepared = prepare("mute", username="测试账号", hours=24)
+    prepared = prepare("mute", start="now", username="测试账号", hours=24)
     intent = grant(prepared)["specs"][0]["args"]["intent"]
     from datetime import datetime
 
@@ -381,7 +381,7 @@ def test_cancel_is_durable_and_prevents_later_confirmation(accounts, tmp_path, m
         ("prepare_account_freeze", {"account_id": 11}),
         ("prepare_account_unfreeze", {"account_id": 12}),
         ("prepare_account_role", {"account_id": 11, "role": "zako"}),
-        ("prepare_account_mute", {"account_id": 11, "hours": 24}),
+        ("prepare_account_mute", {"account_id": 11, "start": "now", "hours": 24}),
         ("prepare_account_unmute", {"account_id": 11}),
     ],
 )
@@ -423,7 +423,7 @@ def test_role_card_discloses_previous_and_new_role_and_session_effect(accounts):
 
 
 def test_temporary_mute_replay_uses_the_confirmed_absolute_expiry(accounts, tmp_path):
-    signed = grant(prepare("mute", account_id=11, hours=24))
+    signed = grant(prepare("mute", start="now", account_id=11, hours=24))
     expiry = signed["specs"][0]["args"]["intent"]["mutedUntil"]
     accounts["clock"] = "2030-02-01T01:00:00"
     ledger = Ledger(str(tmp_path / "temporary-mute.sqlite3"))

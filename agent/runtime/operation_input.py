@@ -42,7 +42,16 @@ def current(session):
         scope = binding(session.config)
     except ValueError:
         return None
-    return pending if pending["scope"] == scope and "conversation_id" in scope else None
+    if pending["scope"] != scope or "conversation_id" not in scope:
+        return None
+    schema = convert_to_openai_tool(session.execution_tools[pending["tool"]])
+    params = schema["function"]["parameters"]
+    fields = set(pending["fields"])
+    # A release can add a required input. Never resume a draft by inventing its value.
+    if (not fields <= params["properties"].keys()
+            or not set(params.get("required", ())) <= (pending["fixed"].keys() | fields)):
+        return None
+    return pending
 
 
 def menu(session):

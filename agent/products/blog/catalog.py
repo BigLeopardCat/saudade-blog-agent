@@ -44,9 +44,10 @@ DOMAIN_DESCRIPTIONS = {
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",
     "admin_account_actions": "Prepare account freeze, immediate mute or role changes. "
-    "Scheduled mute is unsupported. "
+    "A future mute start is unsupported and never switches to immediate mute. "
     "Known IDs or full usernames go directly to preparation; it verifies target and eligibility. "
-    "Missing mute duration uses admin_accounts; custom messages use admin_notices. "
+    "Use admin_accounts for eligibility when an immediate mute is missing its duration. "
+    "Custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
     "admin_announcements": "Global announcement publication, editing and batch deletion; deletion "
     "also removes recipients' copies. Read historical operation receipts by the real operation ID; "
