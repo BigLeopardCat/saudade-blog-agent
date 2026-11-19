@@ -93,12 +93,7 @@ def navigate_page(
     if not authorized(config, "navigate_page"):
         return "当前身份无权操作页面。", {"kind": "unavailable"}
     if not site.nav_path_valid(path):
-        allowed = ", ".join(sorted(accessible_paths(config)))
-        raise ToolException(
-            f"Invalid site path. Exact paths: {allowed}. Dynamic paths: "
-            "/article/<positive integer>, /category/<name>. "
-            "Read get_site_map for page names or copy a source link."
-        )
+        raise ToolException("无法打开该路径。")
     if site.nav_pure_path(path).startswith("/dashboard") and not console_access(config):
         raise ToolException("当前账号没有后台管理权限，无法进入后台管理页面。")
     from tools.base import SITE_BASE

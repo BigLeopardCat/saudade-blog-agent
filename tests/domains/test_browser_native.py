@@ -241,6 +241,15 @@ def test_invalid_navigation_never_issues_a_browser_receipt(path):
         browser.navigate_page.invoke(_call("navigate_page", {"path": path}), config=_config())
 
 
+def test_navigation_tool_returns_only_the_unsupported_path_result():
+    tool = browser.tools(_config())["navigate_page"]
+    result = tool.invoke(_call("navigate_page", {"path": "/he"}), config=_config())
+
+    assert result.content == "无法打开该路径。"
+    assert result.status == "error"
+    assert result.artifact is None
+
+
 @pytest.mark.parametrize(
     "path",
     [
