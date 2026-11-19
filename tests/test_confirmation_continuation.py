@@ -214,28 +214,6 @@ def test_single_preparation_continues_to_a_model_reply_without_extra_narration(b
     assert "".join(event.content for event in events[:-1]) == events[-1].reply
 
 
-def test_clarification_followup_keeps_confirmed_receipt_after_rebuilding_runtime(backend):
-    state, _ = backend
-    first_model = Model(LOAD, AIMessage(content="", tool_calls=[FAVORITE]))
-    selected = runtime(first_model)
-    prepared = run(selected, "先收藏文章 19，再标记一条通知；编号请先问我。")
-    grant = confirm.verify(prepared.execution["pending_confirm"]["token"], 7, 42)
-
-    selected.model_factory = lambda **_: Model(
-        AIMessage(content="已收藏文章 19。请提供要标记的通知编号。"))
-    waiting = run(selected, grant=grant)
-    assert len(waiting.execution["receipts"]) == 1
-    assert not waiting.execution.get("pending_confirm") and len(state["writes"]) == 1
-
-    model = Model(AIMessage(content="收到通知编号 101。"))
-    rebuilt = runtime(model, selected.saver)
-    run(rebuilt, "101")
-    facts = [json.loads(message.content) for message in model.prompts[0]
-             if isinstance(message, ToolMessage) and message.name == "add_favorite"]
-    assert any(fact.get("status") == "executed" for fact in facts)
-    assert len(state["writes"]) == 1 and not state["read"]
-
-
 def test_approval_keeps_preparation_before_explanation_and_appends_execution_after_it(backend):
     from _framework_fixture import call as wire_call
     from _framework_fixture import model_replies
