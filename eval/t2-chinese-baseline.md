@@ -36,7 +36,7 @@ socket/cache 数值均为虚拟机上报，不能推定底层独占物理资源�
 机器上完成本项目的模型对照**，不能把候选方案写成已经部署或性能达标。
 后续保留 llama.cpp 基线，优先用官方 BGE 权重评测 TEI CPU；vLLM 为可选 CPU pooling
 对照，API 保留。选型依据、缓存区别、迁移步骤及可填写的验收表见
-[生产调试手册 §7–§8](../docs/rag-production-debug.md#7-引擎候选与缓存边界)。
+[实验时的生产调试手册 §7–§8](https://github.com/BigLeopardCat/saudade-blog-agent/blob/538b84c56820979d8dbb49dcbf7ff0938a396c93/docs/rag-production-debug.md#7-引擎候选与缓存边界)。
 
 ## 数据来源与抽样
 
@@ -137,7 +137,7 @@ uv sync --locked --extra rag-data
 ```
 
 已有目录拒绝覆盖。离线复现去掉 `--download`，源文件需全部匹配固定 SHA。
-每个模型按 [部署手册](../docs/rag-production-debug.md) 准备、校验、启动；同一台小内存机
+每个模型按 [当时的部署手册](https://github.com/BigLeopardCat/saudade-blog-agent/blob/538b84c56820979d8dbb49dcbf7ff0938a396c93/docs/rag-production-debug.md) 准备、校验、启动；同一台小内存机
 一次只跑一个模型。以下是 BGE Q8 示例，评测密钥通过受保护环境注入 `EMBEDDING_API_KEY`：
 
 ```bash
@@ -156,4 +156,4 @@ Qwen 使用资产脚本生成、声明 NFC 的 profile，在新 namespace 独立
 
 项目只有几篇文章也可建小而针对性的人工测试：先标文章、章节、所需证据和无答案，
 持续加入真实失败查询。公开语料补充通用中文检索回归，自有案例覆盖业务语义。
-最终上线调试和验收步骤见 [生产调试手册](../docs/rag-production-debug.md)。
+当前上线按[向量部署](../docs/deployment.md#向量存储)核对，排查步骤见[RAG 和正文问题](../docs/troubleshooting.md#定位-rag-和正文问题)。
