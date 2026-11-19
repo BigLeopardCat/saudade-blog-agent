@@ -229,10 +229,6 @@ class SessionMiddleware(AgentMiddleware):
         extra_inputs = input_additions(session, request.state)
         if extra_inputs:
             request = request.override(messages=[*request.messages, *extra_inputs])
-        limit = session.state["answer_character_limit"]
-        if limit is not None and request.system_message is not None:
-            request = request.override(system_message=response_validation.length_instruction(
-                request.system_message, limit))
         session.framework_state = {**request.state, "messages": list(request.messages)}
         prompt = [*([request.system_message] if request.system_message else []),
                   *model_messages(hydrate(request.messages, session.transient))]

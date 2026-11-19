@@ -50,19 +50,3 @@ def withdraw(session):
     session.reply_parts.clear()
     session.state["output_revision"] += 1
     record("native", "reply_withdrawn", revision=session.state["output_revision"])
-
-
-def length_instruction(system, limit):
-    if system is None or limit is None:
-        return system
-    instruction = (
-        f"用户希望答复控制在 {limit} 个可见字符内。"
-        "直接作答，删掉问候、复述和重复说明。每个必答主题只写最关键的短句，"
-        "用简短的 Markdown 链接文字保留所需来源。空间不足时交付最短的完整答复。"
-        "空白和链接目标地址不计。")
-    content = system.content
-    if isinstance(content, str):
-        content = f"{content}\n\n{instruction}"
-    else:
-        content = [*content, {"type": "text", "text": instruction}]
-    return system.model_copy(update={"content": content})
