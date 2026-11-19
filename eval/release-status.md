@@ -2,6 +2,7 @@
 
 各版的固定提交、配套博客、测试范围和已知限制随 [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases) 保存。
 
+- [v0.3.2](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.2) 收录 #492 的运行时简化。该版使用离线回归与安装包校验，未重跑真实模型。
 - [v0.3.1](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.1) 的发行说明记录对应候选的 245 项文本功能契约、复算范围和已知质量问题。附件为 wheel、源码包、锁定依赖、manifest 和 SHA256SUMS。
 - [v0.3.0（历史）](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0) 的 `release-acceptance.json` 与 `release-provenance.json` 对应该版冻结证据，包含当时使用的语义判定、用量、缓存和端到端耗时。
 
