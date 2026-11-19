@@ -23,12 +23,18 @@ export async function assertCompletionInbox({page,reset,streamCount,passed}) {
       window.dispatchEvent(new Event('agent-turn-done'));
     },{turn});
     await page.waitForFunction(()=>!document.querySelector('.chat-unread-dot').hidden);
+    const launcher=page.locator('#waifu-tool-hitokoto');
+    await launcher.waitFor();
+    assert.equal(await launcher.getAttribute('aria-label'),'对话，2 条未读任务结果');
+    assert.notEqual(await launcher.evaluate(el=>getComputedStyle(el,'::after').content),'none');
+
     await page.waitForTimeout(800);
     assert.equal(reads,0,'Closed chat cannot acknowledge an unseen result');
     assert.equal(await page.locator('#waifu-chat').getAttribute('data-window-mode'),null);
     await page.evaluate(()=>window.__chatTest.ctx.dom.chatPanel.classList.add('active'));
     await page.waitForFunction(()=>document.querySelector('.chat-unread-dot').hidden);
     assert.equal(reads,1,'Reading updates the dot without waiting for the polling interval');
+    assert.equal(await launcher.getAttribute('aria-label'),'对话，1 条未读任务结果');
     assert.equal(streamCount(),before,'Reading an already reported result never calls the model');
 
     row.id='run_long_report';row.version='b'.repeat(64);pending=true;

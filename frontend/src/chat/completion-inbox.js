@@ -23,6 +23,12 @@ export function createCompletionInbox(ctx, send, engine) {
         || ctx.state.stoppedTask || Object.keys(ctx.state.remoteRounds || {}).length;
     const reportedHere = () => snapshot.items.filter(row => row.conversationId === ctx.state.conv && row.reported);
     const paint = () => {
+        const launcher = ctx.dom.waifu?.querySelector('#waifu-tool-hitokoto');
+        if (launcher) {
+            launcher.toggleAttribute('data-unread', snapshot.unread > 0);
+            launcher.setAttribute('aria-label', snapshot.unread > 0
+                ? `对话，${snapshot.unread} 条未读任务结果` : '对话');
+        }
         const counts = new Map(snapshot.conversations.map(row => [String(row.id), row.unread]));
         const count = counts.get(String(ctx.state.conv)) || 0;
         if (badge) {

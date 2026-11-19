@@ -145,6 +145,13 @@
 #waifu-tool button:hover { color: #a64e70; background: rgba(175,115,145,.12); }
 #waifu-tool button:focus-visible { outline: 2px solid #a64e70; outline-offset: 1px; }
 #waifu-tool svg { display: block; width: 20px; height: 20px; pointer-events: none; }
+#waifu-tool-hitokoto { position: relative; }
+#waifu-tool-hitokoto[data-unread]::after {
+  content: ''; position: absolute; top: 4px; right: 4px; width: 8px; height: 8px;
+  border-radius: 50%; background: #e85275; box-shadow: 0 0 0 2px #fff7fc;
+  pointer-events: none;
+}
+
 @media (hover: none) { #waifu-tool { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { #waifu-tool { transition: none; } }
 
