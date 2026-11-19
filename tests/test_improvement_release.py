@@ -193,7 +193,7 @@ def test_failed_or_interrupted_holdout_cannot_be_rerun(evaluated, tmp_path, monk
 
 
 
-def test_semantic_regressions_are_preserved_without_blocking_review(evaluated, tmp_path, monkeypatch):
+def test_semantic_regressions_do_not_block_review(evaluated, tmp_path, monkeypatch):
     registry, _, _, after, _, semantic, *_ = evaluated
     case = json.loads(after.read_bytes())["cases"][0]["id"]
     write_semantic(after, semantic, suspect={case})

@@ -443,8 +443,10 @@ def assess(report_path, *, semantic_path=None, profile_path=PROFILE, recheck_fro
         "contract_counts": dict(Counter(
             "evaluation_error" if case["status"] == "evaluation_error"
             else case.get("contract_status", "unverified") for case in report["cases"])),
-        "contract_failures": [{"case": case["id"], "checks": case.get("contract_fails", [])}
-                              for case in report["cases"] if case.get("contract_status") == "failed"],
+        "contract_failures": [
+            {"case": case["id"], "checks": case.get("contract_fails", [])}
+            for case in report["cases"] if case.get("contract_status") == "failed"
+        ],
         "semantic_observations": {"suspect_cases": pending_review,
                                   "unreviewed_cases": sorted(unreviewed) if reviewed else ids,
                                   "is_release_gate": profile["version"] < 4},
@@ -474,7 +476,7 @@ def main():
     parser.add_argument("--semantic", type=Path)
     parser.add_argument("--profile", type=Path, default=PROFILE)
     parser.add_argument("--recheck-frozen", action="store_true",
-                        help="recheck version 4 contracts against the captured suite and HTTP evidence")
+                        help="recheck v4 contracts against captured suite and HTTP evidence")
     parser.add_argument("--out", type=Path, required=True)
     args = parser.parse_args()
     result = assess(args.report, semantic_path=args.semantic, profile_path=args.profile,
