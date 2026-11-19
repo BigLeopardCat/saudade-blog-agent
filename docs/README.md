@@ -10,12 +10,13 @@
 | 本地运行 | [本地起步](getting-started.md) → [配置导航](configuration.md) |
 | 理解与修改代码 | [架构](agent-architecture.md) → [代码导读](code-reading.md) → [领域扩展](product-extensions.md) |
 | 部署与排障 | [部署](deployment.md) → [排障](troubleshooting.md) → [评测与观测](eval-observability.md) |
-| 准备发行 | [版本与附件核对](deployment.md#正式发行) → [候选回归与证据](release-acceptance.md#发布步骤) |
+| 准备发行 | [按改动选择验收](release-acceptance.md#按改动选择验收范围) → [发行维护](releasing.md) |
 
 ## 设计与契约
 
 | 文档 | 覆盖范围 |
 | --- | --- |
+| [当前产品范围](product-scope.md) | 目标用户、典型任务、人工基线及价值待验证项 |
 | [架构](agent-architecture.md) | 组件职责、依赖方向、状态及并发边界 |
 | [代码导读](code-reading.md) | 沿读取、确认写入、恢复三条路径定位代码与测试 |
 | [会话与记忆](conversation-memory.md) | checkpoint、上下文、摘要、缓存与任务预算 |
@@ -36,7 +37,8 @@
 | [部署](deployment.md) | 首次安装、升级、数据库、备份和回滚 |
 | [排障](troubleshooting.md) | 就绪、版本、trace、授权和未知结果 |
 | [评测与观测](eval-observability.md) | 分层验证、真实模型、trace 与指标 |
-| [发布验收](release-acceptance.md) | 质量、安全、成本及证据要求 |
+| [发行维护](releasing.md) | 配套版本、发包流程与发布证据 |
+| [发布验收](release-acceptance.md) | 按改动选择检查、功能门禁及证据要求 |
 | [离线改进](offline-improvement.md) | 反馈复核、独立验收集和候选比较 |
 | [教程截图](screenshots.md) | 图片来源、步骤对应、重拍与 Wiki 发布 |
 

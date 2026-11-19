@@ -6,25 +6,7 @@ Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 Postg
 
 ## 正式发行
 
-发行前从准备打包的源码记录以下版本，并在发行说明列出实际验证过的组合。
-
-| 对象 | 版本依据 |
-| --- | --- |
-| Agent Python 包 | `pyproject.toml` 与附件 manifest 的 `version`、`source_revision` |
-| 用于跨仓测试的宿主源码 | Agent 的 [宿主契约锁](../.github/host-contract.json) |
-| 浏览器组件 | 博客的 `frontend/widget.lock.json` 及对应子树哈希 |
-| Compose Agent | 博客的 `deploy/docker/agent.lock.json` 与博客附件 manifest 的 `agent_revision` |
-| 正在运行的站点 | Agent `/version` 和实际进程、宿主产物与 `/build-info.json` |
-
-三个锁分别管理测试、组件和容器。切换 Compose Agent 时重新验证整套安装、恢复及受影响的
-跨仓任务。独立 systemd 升级只会改变正在运行的 Agent。正式发布以[发布验收](release-acceptance.md)
-为准，保留未通过或尚未评估的证据。
-
-使用干净检出和对应提交的 CI 构建附件。`Agent container` 工作流接受已有草稿的
-`release_tag`，草稿目标必须等于构建提交且 tag 与包版本对应。候选变更后核对草稿目标、
-manifest、附件校验和及验收报告，四者都来自新候选才可发布。发行说明列出适用数据库迁移、
-已知限制和升级回滚入口。生产凭据、数据库备份和私有 trace 留在受控环境。
-博客安装包由[宿主发布流程](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/prebuilt.md)生成。
+维护者从[Agent 发行维护](releasing.md)准备候选和附件。安装者选择下面的试装步骤或正式集成部署。
 
 ## 发行附件安装
 
@@ -269,17 +251,10 @@ curl --fail http://127.0.0.1:8010/health
 
 监控活动任务、排队/拒绝、数据库连接、磁盘和供应商错误/真实 usage。闲置网页不占运行许可。默认一个进程、最多 8 个活动聊天，需要按目标机器与供应商实测，不能据此宣称支持某个并发人数。`AGENT_PORT`、`AGENT_WORKERS`、`AGENT_WORKER_HEALTHCHECK_SECONDS` 由 systemd 注入；增加 worker 会放大并发和连接预算。
 
-| 现象 | 优先检查 |
-| --- | --- |
-| `/ready` 报凭据/签名密钥缺失 | 当前供应商、两个签名密钥、实际 EnvironmentFile，不打印配置内容 |
-| 启动或数据库失败 | journal、DSN、网络及专用库权限；不回退内存冒充恢复 |
-| 登录正常但工具 401/403 | 当前身份/权限、两端断言密钥、工具委托有效期 |
-| 429/5xx 或断连 | trace 中的状态、`Retry-After` 和安全请求 ID，不只凭回复文字归因 |
-| 失败后任务已暂停 | 从 checkpoint 显式继续；未知写入先对账，不盲目重做 |
-| 检索退回词法 | embedding 认证、profile、向量缺失与刷新状态 |
+按故障现象查看[排障](troubleshooting.md#按现象处理)。
 
 定期备份数据库和私有授权目录，在隔离环境演练还原。向量缓存可重建，确认/执行账和会话不能按缓存删除。保留可回退版本，审查日志轮转、trace 保留和磁盘余量。
 
 CI 的 `deployment-rehearsal` 在可丢弃 Linux 运行机上使用真实 systemd、PostgreSQL 与生产发布脚本，验证首次安装、健康检查失败后的旧版本恢复、正常升级及数据库备份还原。它不调用模型或宿主业务 API；实际站点仍须核对自己的凭据、网络、权限与可选服务。
 
-正式版还需满足[发布验收](release-acceptance.md)：必需 CI、安装/升级/回滚、真实浏览器、小批量，以及供应商稳定后的冻结全量回归。供应商错误与功能失败分别统计，重跑使用新报告目录，不覆盖失败记录。CI 的发行包隔离检查不能代替全新环境的外部服务接线验收。
+发行前按[发布验收](release-acceptance.md)为改动选择验证范围，确认待安装包和部署步骤均来自同一候选。目标环境仍需完成外部接线和上线核对。
