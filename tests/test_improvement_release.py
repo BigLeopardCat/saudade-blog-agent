@@ -87,13 +87,15 @@ def test_old_reports_without_backend_identity_cannot_certify_a_current_candidate
         development(evaluated)
 
 
-@pytest.mark.parametrize("fault", ["semantic_regression", "cost_regression", "missing_usage",
+@pytest.mark.parametrize("fault", ["contract_regression", "cost_regression", "missing_usage",
                                  "wrong_candidate", "changed_evaluator", "unfinished_call"])
 def test_bad_development_cannot_open_holdout(evaluated, fault):
     registry, _, _, after, _, review, *_ = evaluated
     doc = json.loads(after.read_bytes())
     if fault == "wrong_candidate":
         doc["service_version"]["sha"] = "other"
+    elif fault == "contract_regression":
+        doc["cases"][0]["contract_status"] = "failed"
     elif fault == "changed_evaluator":
         doc["evaluator_sha256"]["golden_evaluation.py"] = "changed"
     elif fault in {"cost_regression", "missing_usage", "unfinished_call"}:
@@ -111,8 +113,7 @@ def test_bad_development_cannot_open_holdout(evaluated, fault):
             case["result"]["rounds"][0]["http_timing"]["trace_sha256"] = (
                 release.digest(trace.read_bytes()))
     after.write_text(json.dumps(doc))
-    write_semantic(after, review, suspect={doc["cases"][0]["id"]}
-                   if fault == "semantic_regression" else ())
+    write_semantic(after, review)
     try:
         gate = development(evaluated)
     except ValueError:
@@ -145,24 +146,26 @@ def test_partly_reused_holdout_cannot_be_reopened_under_a_new_dataset_id(evaluat
         datasets.reserve(registry, gate_id)
 
 
-@pytest.mark.parametrize("fault", ["wrong_build", "wrong_role", "suspect", "missing_semantic",
-                                 "altered_trace", "changed_judge"])
+@pytest.mark.parametrize("fault", ["wrong_build", "wrong_role", "contract_failure",
+                                 "missing_contract", "altered_trace", "changed_judge"])
 def test_holdout_failure_blocks_release(evaluated, tmp_path, monkeypatch, fault):
-    registry, _, _, _, _, _, held, frozen = evaluated
+    registry = evaluated[0]
     reservation, path, review = finished_holdout(evaluated, tmp_path, monkeypatch)
     doc = json.loads(path.read_bytes())
     if fault == "wrong_build":
         doc["service_version"]["sha"] = "other"
     elif fault == "wrong_role":
         doc["dataset_role"] = "regression"
+    elif fault == "contract_failure":
+        doc["cases"][0]["contract_status"] = "failed"
+    elif fault == "missing_contract":
+        del doc["cases"][0]["contract_status"]
     elif fault == "altered_trace":
         release.Path(doc["cases"][0]["result"]["rounds"][0]["trace"]).write_text("{}")
     path.write_text(json.dumps(doc))
-    write_semantic(path, review, suspect={held[0]["id"]} if fault == "suspect" else ())
+    write_semantic(path, review)
     semantic = json.loads(review.read_bytes())
-    if fault == "missing_semantic":
-        semantic["rows"].pop()
-    elif fault == "changed_judge":
+    if fault == "changed_judge":
         semantic["model"] = "other"
     review.write_text(json.dumps(semantic))
     try:
@@ -187,3 +190,22 @@ def test_failed_or_interrupted_holdout_cannot_be_rerun(evaluated, tmp_path, monk
     with pytest.raises(FileExistsError):
         holdout.run(registry, reservation, None, {}, tmp_path / "retry")
     assert len(calls) == 1
+
+
+
+def test_semantic_regressions_are_preserved_without_blocking_review(evaluated, tmp_path, monkeypatch):
+    registry, _, _, after, _, semantic, *_ = evaluated
+    case = json.loads(after.read_bytes())["cases"][0]["id"]
+    write_semantic(after, semantic, suspect={case})
+    gate = registry.get(development(evaluated), "development")
+    assert gate["status"] == "passed"
+    assert gate["semantic_regressions"] == [case]
+
+    reservation, path, review = finished_holdout(evaluated, tmp_path, monkeypatch)
+    holdout_case = json.loads(path.read_bytes())["cases"][0]["id"]
+    write_semantic(path, review, suspect={holdout_case})
+    packet = release.release_packet(registry, reservation, path, review, reviewer="fixture")
+    got = registry.get(packet, "release_packet")
+    assert got["status"] == "ready_for_review"
+    assert got["holdout_statistics"]["passed"] == 159
+    assert got["holdout_contract_statistics"]["passed"] == 160

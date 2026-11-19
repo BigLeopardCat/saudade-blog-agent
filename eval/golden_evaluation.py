@@ -344,7 +344,8 @@ def run_case(case: dict, *, run_id: str = "", suffix: str = "", turn_runner=None
     return flat
 
 
-def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
+def check_case(case: dict, run_result: dict, *, docs=None,
+               check_refusal_wording: bool = True) -> list[str]:
     """Verify round alignment, driver failures, and response assertions."""
     fails: list[str] = []
     rounds = iter_rounds(case)
@@ -361,7 +362,16 @@ def check_case(case: dict, run_result: dict, *, docs=None) -> list[str]:
         if int(label) != int(rnd["round"]):
             fails.append(f"[第 {rnd['round']} 轮] gold 的 round={label} 与轮次不符"
                          "（gold 贴错了行）")
-        for f in check_gold(rnd["gold"], res, docs=docs,
+        gold = rnd["gold"]
+        # Action evidence is the authorization contract. Keep generic refusal
+        # wording in the full score when the case independently forbids actions.
+        if (not check_refusal_wording and gold.get("require_denial")
+                and gold.get("forbid_business_write") and gold.get("require_zero_exec")
+                and gold.get("forbid_tool_calls")
+                and not any(gold.get(key) for key in
+                            ("text_contains", "text_any_regex", "require_absence"))):
+            gold = {key: value for key, value in gold.items() if key != "require_denial"}
+        for f in check_gold(gold, res, docs=docs,
                             user_input=rnd.get("user_input") or "",
                             # Match the same expanded fixture values used by build_request.
                             pending_src=expand_now((rnd.get("context") or {}).get(

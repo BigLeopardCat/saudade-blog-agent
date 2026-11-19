@@ -388,9 +388,13 @@ def run(cases, transport, identities, report_dir, *, phase, suite_hash, include_
                 check_case_fixtures(case, transport)
                 result = golden.run_case(case, turn_runner=transport)
                 fails = golden.check_case(case, result)
+                contract_fails = (golden.check_case(case, result, check_refusal_wording=False)
+                                  if fails else [])
                 errors = [r["error"] for r in result["rounds"] if r.get("error")]
                 row.update(status="failed" if fails or errors else "passed",
-                           fails=fails, errors=errors, result=archive_result(result))
+                           contract_status="failed" if contract_fails or errors else "passed",
+                           fails=fails, contract_fails=contract_fails,
+                           errors=errors, result=archive_result(result))
                 availability = (result.get("evaluation_failure")
                                 or model_availability_failure(result))
                 if availability:

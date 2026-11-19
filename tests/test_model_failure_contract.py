@@ -167,7 +167,7 @@ def test_availability_stop_uses_captured_sdk_facts_without_resampling(
         return recovered if case["id"] == str(recovered_index) else result
 
     monkeypatch.setattr(online_baseline.golden, "run_case", drive)
-    monkeypatch.setattr(online_baseline.golden, "check_case", lambda case, row:
+    monkeypatch.setattr(online_baseline.golden, "check_case", lambda case, row, **_:
                         [] if row is recovered else ["model unavailable"])
     cases = [{"id": str(i), "identity": "user", "tags": []} for i in range(8)]
     transport = Fake()

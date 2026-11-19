@@ -540,7 +540,7 @@ def test_failure_is_recorded_once_without_resampling(tmp_path, monkeypatch):
         return {"rounds": [{"error": None}]}
 
     monkeypatch.setattr(online_baseline.golden, "run_case", drive)
-    monkeypatch.setattr(online_baseline.golden, "check_case", lambda *_: ["wrong target"])
+    monkeypatch.setattr(online_baseline.golden, "check_case", lambda *_, **__: ["wrong target"])
     case = {"id": "broken", "identity": "user", "tags": ["regression"]}
     report = online_baseline.run([case], Fake(), {"user": 7}, tmp_path / "report",
                                  phase="full", suite_hash="hash")

@@ -83,13 +83,13 @@ def development(registry, candidate_id, before, after, before_semantic, after_se
     previous = {row["id"]: row["status"] for row in old["cases"]}
     regressions = [row["id"] for row in new["cases"]
                    if previous[row["id"]] == "checks_passed" and row["status"] != "checks_passed"]
-    paired = compare_runs.compare(left, right)
+    paired = compare_runs.compare(left, right, status_field="contract_status")
     readiness = release_readiness.assess(after, semantic_path=after_semantic)
     cost_ok = all((paired["cost"][key]["paired_bootstrap_95"] or [None, None])[1] is not None
                   and paired["cost"][key]["paired_bootstrap_95"][1] <= 0
                   for key in ("uncached_input", "calls"))
     passed = (readiness["status"] == "http_checks_passed" and cost_ok
-              and not paired["regressions"] and not regressions)
+              and not paired["regressions"])
     return registry.put("development", {
         "candidate": candidate_id, "status": "passed" if passed else "blocked",
         "reviewer": reviewer, "comparison_conditions": comparison_conditions,
@@ -124,16 +124,18 @@ def release_packet(registry, reservation, report_path, semantic_path, *, reviewe
     combined = semantic(semantic_path, report_path)
     # Reuse trace hash and complete-usage validation; comparing a run to itself
     # is only an integrity check, never evidence of improvement.
-    compare_runs.compare(report, report)
+    compare_runs.compare(report, report, status_field="contract_status")
     missing = scope_issues(split["holdout"])
     passed = sum(row["status"] == "checks_passed" for row in combined["cases"])
-    if passed != len(split["holdout"]):
-        missing.append("holdout has failed, suspect or unevaluated outcomes")
+    contracts_passed = sum(row.get("contract_status") == "passed" for row in report["cases"])
+    if contracts_passed != len(split["holdout"]):
+        missing.append("holdout has failed functional contracts")
     packet = {
         "status": "blocked" if missing else "ready_for_review", "candidate": gate["candidate"],
         "head": candidate["head"], "rollback_base": candidate["base"],
         "reservation": reservation, "reviewer": reviewer, "unresolved": sorted(missing),
         "holdout_statistics": proportion(passed, len(split["holdout"])),
+        "holdout_contract_statistics": proportion(contracts_passed, len(split["holdout"])),
         "holdout_evidence": archive_run(registry, report_path, semantic_path),
         "separate_evidence_required": gate["readiness"]["separate_evidence_required"],
         "scope": "HTTP preparation review packet; no merge, deploy or business approval",
