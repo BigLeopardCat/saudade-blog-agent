@@ -44,6 +44,8 @@ def test_runtime_delivers_the_complete_reply_without_a_length_retry(reply):
     visible = "".join(event.content for event in events if isinstance(event, AIMessageChunk))
     final = events[-1]
     assert len(requests) == 1
-    assert "用户希望答复控制在 10 个可见字符内" in requests[0]["messages"][0]["content"]
+    hint = requests[0]["messages"][0]["content"]
+    assert "用户希望答复控制在 10 个可见字符内" in hint
+    assert "字起草" not in hint
     assert visible == final.reply == reply
     assert not (final.execution or {}).get("blocked")

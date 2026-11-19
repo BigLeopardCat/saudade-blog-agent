@@ -49,26 +49,11 @@ flowchart TD
 
 源码入口：[框架执行接线](agent/runtime/execution.py)、[领域执行器登记](agent/domains/registry.py)、[博客产品装配](agent/products/blog/application.py)。新增领域的契约、登记和测试方式见[领域扩展](docs/product-extensions.md)。
 
-## 发布验证
+## 发布与验收
 
-以下为 **v0.3.0，2026-11-16** 的冻结结果：OpenCode / DeepSeek V4.1 Flash，Agent 推理强度 low，248 个文本场景、289 轮请求。
+从 [最新发行版](https://github.com/BigLeopardCat/saudade-blog-agent/releases/latest) 获取 wheel、源码包和锁定依赖。发行说明与 manifest 记录固定提交、配套博客及该版的验证范围。
 
-| 指标 | 本轮结果 |
-| --- | ---: |
-| 确定性检查 | 247 / 248 |
-| 综合通过：确定性检查与语义复核 | 244 / 248（98.39%） |
-| 核心场景综合通过 | 207 / 210（98.57%） |
-| Agent 模型调用 | 626 次 |
-| 总输入 / 其中未缓存输入 | 3,559,936 / 1,057,792 token |
-| 总输入缓存命中 / 已知稳定前缀复用 | 70.29% / 98.58% |
-| 每轮 HTTP 端到端 P50 / P95 | 9.10s / 18.62s |
-| 文章阅读首段正文 P95 | 29.91s |
-
-这是固定、低并发文本集的验收数据；两个已知不支持的视觉场景单列排除。HTTP 回归覆盖读取和写入准备，不批准业务写入；浏览器交互、数据库契约和安装恢复另由 [CI](https://github.com/BigLeopardCat/saudade-blog-agent/actions) 验证。综合结果包含 OpenEvals / DeepSeek 初审与逐项 Codex 证据复核，不是独立人工评审或生产成功率的随机抽样。
-
-该批次记录了[总结漏来源](https://github.com/BigLeopardCat/saudade-blog-agent/issues/476)、[统计解读矛盾](https://github.com/BigLeopardCat/saudade-blog-agent/issues/477)、[组合任务误拒绝角色调整](https://github.com/BigLeopardCat/saudade-blog-agent/issues/478)和[文章比较夹入无依据内容](https://github.com/BigLeopardCat/saudade-blog-agent/issues/479)。后续修复的验证记录见各 issue，冻结成绩保留当时的判定。缓存两项指标的分母不同，完整口径、费用、用量和来源指纹见 [v0.3.0 验收附件](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0)。
-
-长期可用性和多用户负载仍需持续观察。当前保持 0.x 迭代；发布目标及复现方法见[发布验收](docs/release-acceptance.md)和[评测与观测](docs/eval-observability.md)。
+[发布证据索引](eval/release-status.md)按版本链接冻结的结果和已知限制。HTTP 功能回归覆盖读取、写入准备和权限边界。数据库执行、浏览器交互与恢复由各自的契约检查验证。语义评审用于定位答复质量问题，持续观测见[评测与观测](docs/eval-observability.md)。
 
 ## 开发起步
 
