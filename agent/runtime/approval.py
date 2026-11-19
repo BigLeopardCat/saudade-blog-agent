@@ -28,6 +28,7 @@ class ConversationState(TypedDict, total=False):
     turn: dict | None
     last_outcome: str | None
     tool_domains: ToolDomains | None
+    operation_input: dict | None
 
 
 def binding(config):

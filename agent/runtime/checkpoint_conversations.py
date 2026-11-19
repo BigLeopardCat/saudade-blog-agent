@@ -64,6 +64,7 @@ class CheckpointConversationStore:
             receipts=list(values.get("receipts") or []),
             last_outcome=values.get("last_outcome"),
             tool_domains=values.get("tool_domains"),
+            operation_input=values.get("operation_input"),
             unfinished=bool(values.get("run")),
             initialized=snapshot.created_at is not None,
         )

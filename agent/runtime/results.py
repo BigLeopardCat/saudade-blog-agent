@@ -27,6 +27,7 @@ def turn_phase(result):
     return ("paused" if execution.get("paused_task") else
             "awaiting_browser" if execution.get("client_action") else
             "awaiting_confirmation" if execution.get("pending_confirm") else
+            "awaiting_input" if execution.get("awaiting_input") else
             "blocked" if execution.get("blocked") else
             "cancelled" if (execution.get("pending_event") or {}).get("event") == "cancelled"
             else "responded")

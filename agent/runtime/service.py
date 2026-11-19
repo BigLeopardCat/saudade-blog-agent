@@ -8,7 +8,14 @@ from functools import partial
 from langchain_core.messages import AIMessageChunk, SystemMessage
 from openai import OpenAIError
 
-from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
+from agent.runtime import (
+    approval,
+    checkpoint_store,
+    memory,
+    operation_input,
+    recovery,
+    trace_context,
+)
 from agent.runtime.output_budget import OutputBudget
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
@@ -110,6 +117,10 @@ class AgentRuntime:
         incoming = [*recovery.input_context(snapshot, config), *incoming]
         prompt = self.application.prompt([*snapshot.messages, *incoming], principal)
         session = self._session(config, snapshot, None)
+        if not event_seed:
+            session.state["operation_input"] = snapshot.operation_input
+            session.state["operation_input"] = operation_input.current(session)
+            session.refresh_menu()
         session.state["effects"].update(effects or {})
         session.event_seed = event_seed
         session.turn_input = incoming

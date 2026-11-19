@@ -10,7 +10,7 @@ import json
 from langchain_core.messages import AIMessageChunk, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
-from agent.runtime import tool_evidence, tool_execution
+from agent.runtime import operation_input, tool_evidence, tool_execution
 from agent.runtime.budget import (
     BudgetExceeded,
     TaskBudget,
@@ -96,6 +96,10 @@ class ToolSession:
                 if message.additional_kwargs["task_input"]["id"] in self.state["applied_inputs"]]
 
     def refresh_menu(self):
+        continuation = operation_input.menu(self)
+        if continuation is not None:
+            self.menu = continuation
+            return
         # Keep discovery schemas in place; domain tools extend the request prefix.
         initial = [tool for name, tool in self.tools.items() if name in self.initial_names]
         loaded = [tool for name, tool in self.tools.items() if name not in self.initial_names]
@@ -116,7 +120,8 @@ class ToolSession:
         return self._with_receipts(TurnResult(reply, {"blocked": [{"reason": reason}]}))
 
     def _result(self, reply):
-        return self._with_receipts(TurnResult(reply))
+        execution = {"awaiting_input": True} if operation_input.current(self) else None
+        return self._with_receipts(TurnResult(reply, execution))
 
     def _with_receipts(self, result):
         if not self.receipts and not self.state["effects"]:
@@ -133,6 +138,8 @@ class ToolSession:
         return self.outcome
 
     def _accept_calls(self, calls, round_index):
+        if len(calls) > 1 and operation_input.current(self) is not None:
+            return "pending_input_requires_single_call"
         for call in calls:
             if (not isinstance(call, dict) or not isinstance(call.get("name"), str)
                     or not call.get("name") or not isinstance(call.get("id"), str)

@@ -22,6 +22,8 @@ def prepare(session, state):
         committed[-1] = committed[-1].model_copy(update={"id": "result:" + event_id})
     return {"reply": result.reply, "execution": result.execution,
             "messages": committed,
+            "operation_input": (state.get("operation_input") if event_id
+                                else session.state["operation_input"]),
             "tool_domains": session.state.get("tool_domains")}
 
 
@@ -34,6 +36,7 @@ def commit(state, config, *, session):
         "run": ({**state["run"], "input_saved": True}
                 if state.get("approval") and state.get("run") else None),
         "turn": None, "last_outcome": turn_phase(TurnResult(turn["reply"], turn["execution"])),
+        "operation_input": turn.get("operation_input"),
         "tool_domains": turn.get("tool_domains")}
     execution = turn["execution"] or {}
     if "receipts" in execution:

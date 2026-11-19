@@ -117,6 +117,118 @@ def test_existing_runtime_preserves_sequential_preparation_and_approval_on_the_s
         assert token not in json.dumps(requests) and next_token not in json.dumps(requests)
 
 
+@pytest.mark.parametrize("decision", ["complete", "cancel", "replace", "drop", "role_change"])
+def test_account_input_handoff_uses_checkpoint_after_rebuild(tmp_path, monkeypatch, decision):
+    from langchain_core.messages import RemoveMessage
+    from langgraph.graph.message import REMOVE_ALL_MESSAGES
+
+    cfg = admin_config()
+    ledger = Ledger(str(tmp_path / "ledger.sqlite3"))
+    monkeypatch.setattr(writes, "ledger_for", lambda _: ledger)
+    saver = InMemorySaver()
+
+    def runtime(model):
+        return AgentRuntime(CheckpointConversationStore(saver), application=BlogApplication(),
+                            model_factory=lambda **_: model)
+
+    def send(agent, message):
+        return list(agent.stream_events({"messages": [HumanMessage(content=message)]}, cfg))[-1]
+
+    def approve(agent, result):
+        grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+        return list(agent.stream_events({"confirm_grant": grant}, cfg))[-1]
+
+    with backend() as business, model_replies(
+        {"tool_calls": [call("load_admin_notices_info_tools", "load-notices")]},
+        {"tool_calls": [call("prepare_user_notice", "notice", user_id=20, content="测试通知")]},
+        {"content": "请核对通知。"},
+        {"tool_calls": [call("load_admin_account_actions_info_tools", "load-accounts")]},
+        {"tool_calls": [call("prepare_account_role", "missing-role", account_id=20)]},
+    ) as (model, _):
+        first = runtime(model)
+        waiting = approve(first, send(first, "给青叶发测试通知，之后修改身份，问我改成哪种。"))
+        assert waiting.execution["awaiting_input"] and len(waiting.execution["receipts"]) == 1
+        snapshot = first.store.load(cfg)
+        operation = snapshot.operation_input
+        assert operation["tool"] == "prepare_account_role" and operation["fields"] == ["role"]
+        assert operation["fixed"]["account_id"] == 20
+        assert not snapshot.unfinished and not snapshot.has_pending
+        assert business["writes"] == ["notice"]
+        if decision == "drop":
+            from agent.checkpoint import drop_last_user_turn
+
+            assert drop_last_user_turn(first, 42, operation["turn_id"],
+                                       cfg["configurable"]["principal"])["dropped"]
+            assert first.store.load(cfg).operation_input is None
+            assert business["writes"] == ["notice"]
+            return
+        if decision == "role_change":
+            cfg["configurable"]["principal"] = Principal(
+                uid=7, role="user", source=SOURCE_ASSERTION)
+            with model_replies({"content": "当前身份无法修改账号。"}) as (model, wire):
+                agent = runtime(model)
+                send(agent, "改成杂鱼。")
+                assert agent.store.load(cfg).operation_input is None
+                assert all(item["function"]["name"] != "prepare_account_role"
+                           for item in wire[0]["tools"])
+                assert "已发送个人通知" not in json.dumps(wire, ensure_ascii=False)
+            assert business["writes"] == ["notice"]
+            return
+
+        # Equivalent to an empty model history after rebuild. The pending operation is independent.
+        first.update_state(cfg, {"messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES)]})
+        with model_replies(
+            {"tool_calls": [call("prepare_user_notice", "wrong-notice", user_id=20,
+                                 content="测试通知")]},
+            {"tool_calls": [call("prepare_account_role", "wrong-target", account_id=21,
+                                 role="zako")]},
+            {"content": "还需要指定新的身份。"},
+        ) as (model, wire):
+            rebuilt = runtime(model)
+            wrong = send(rebuilt, "我说的是身份。")
+            assert not (wrong.execution or {}).get("pending_confirm")
+            assert wrong.execution["awaiting_input"]
+            assert rebuilt.store.load(cfg).operation_input == operation
+            tools = [item["function"] for item in wire[0]["tools"]]
+            assert [item["name"] for item in tools] == ["prepare_account_role"]
+            assert set(tools[0]["parameters"]["properties"]) == {"role", "resolution"}
+            assert "已发送个人通知" in tools[0]["description"]
+            assert business["writes"] == ["notice"]
+            assert sum(req.url.path.endswith("notice-actions/prepare")
+                       for req in business["requests"]) == 2  # prepare and execution recheck
+            assert not any(req.url.path.endswith("account-actions/prepare")
+                           for req in business["requests"])
+
+        if decision == "complete":
+            args = {"role": "zako"}
+            responses = [{"content": "请确认身份变更。"}, {"content": "身份已变更。"}]
+            text = "改成杂鱼。"
+        else:
+            args = {"resolution": decision}
+            responses = [{"content": "可以处理新的请求。"}] if decision == "replace" else []
+            text = "取消身份变更。" if decision == "cancel" else "换个任务，先解释站点身份。"
+        with model_replies(
+            {"tool_calls": [call("prepare_account_role", "resolve-role", **args)]}, *responses
+        ) as (model, wire):
+            agent = runtime(model)
+            result = send(agent, text)
+            assert agent.store.load(cfg).operation_input is None
+            assert business["writes"] == ["notice"]
+            if decision == "complete":
+                grant = confirm.verify(result.execution["pending_confirm"]["token"], 7, 42)
+                spec = grant["specs"][0]
+                assert spec["tool"] == "set_account_role"
+                assert spec["args"]["intent"]["target"]["id"] == 20
+                assert spec["args"]["intent"]["role"] == "zako"
+                approve(agent, result)
+                assert business["writes"] == ["notice", "role"]
+            else:
+                assert not (result.execution or {}).get("pending_confirm")
+                if decision == "replace":
+                    assert any(item["function"]["name"] == "load_admin_notices_info_tools"
+                               for item in wire[-1]["tools"])
+
+
 def test_framework_middleware_filters_the_actual_model_menu():
     @wrap_model_call
     def no_tools(model_request, handler):

@@ -9,6 +9,7 @@ from langchain.agents.middleware import AgentState
 from agent.contracts.client import ClientOperationRef
 from agent.runtime import tool_state
 from agent.runtime.conversation_store import ToolDomains, replace_tool_domains
+from agent.runtime.operation_input import OperationInput
 from agent.runtime.progress import current_emitter
 
 
@@ -20,6 +21,7 @@ class ExecutionState(AgentState, total=False):
     resume: dict | None
     run_id: str | None
     terminal: dict | None
+    operation_input: OperationInput | None
     response_repairs: int
     output_revision: int
     effects: Annotated[dict, or_]
@@ -37,6 +39,7 @@ def initial_state():
     return ExecutionState(context_update=None, context_anchor=None,
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
+                          operation_input=None,
                           effects={}, client_operations={}, applied_inputs=[], progress_keys=[],
                           response_repairs=0, output_revision=0,
                           tool_domains=None, used_tool_domains=[])
