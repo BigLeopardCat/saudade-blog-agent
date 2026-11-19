@@ -57,7 +57,6 @@ def length_instruction(system, limit):
         return system
     instruction = (
         f"用户希望答复控制在 {limit} 个可见字符内。"
-        f"先以约 {max(1, limit * 2 // 3)} 字起草，给标点和链接文字留出空间。"
         "直接作答，删掉问候、复述和重复说明。每个必答主题只写最关键的短句，"
         "用简短的 Markdown 链接文字保留所需来源。空间不足时交付最短的完整答复。"
         "空白和链接目标地址不计。")

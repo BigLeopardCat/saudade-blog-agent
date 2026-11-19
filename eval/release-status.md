@@ -1,13 +1,9 @@
 # 发布验收
 
-各发行版的固定提交、配套博客版本、测试结果及已知限制见
-[Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)。
-[v0.3.0](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0)附件记录该版的冻结验收；
-后续源码或实际部署是否达到相同结果须分别验证，不能沿用旧成绩。
+各版的固定提交、配套博客、测试范围和已知限制随 [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases) 保存。
 
-- `release-acceptance.json`：确定性与语义检查、模型用量、缓存、端到端耗时及未达效率目标。
-- `release-provenance.json`：源码与宿主版本、CI、部署和回滚核对，以及私有原始报告的指纹。
-- `SHA256SUMS`：公开验收附件的校验值。
+- [v0.3.1](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.1) 的发行说明记录对应候选的 245 项文本功能契约、复算范围和已知质量问题。附件为 wheel、源码包、锁定依赖、manifest 和 SHA256SUMS。
+- [v0.3.0（历史）](https://github.com/BigLeopardCat/saudade-blog-agent/releases/tag/v0.3.0) 的 `release-acceptance.json` 与 `release-provenance.json` 对应该版冻结证据，包含当时使用的语义判定、用量、缓存和端到端耗时。
 
 当前发布规则以[发布验收标准](../docs/release-acceptance.md)及其机器配置为准。权限、
 未确认写入、隔离、功能契约和证据完整性须通过验收。模型语义评审是可选观察。新版报告单列用量、调用、
