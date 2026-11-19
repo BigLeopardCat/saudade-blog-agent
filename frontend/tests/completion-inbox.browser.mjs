@@ -39,19 +39,18 @@ export async function assertCompletionInbox({page,reset,streamCount,passed}) {
       ctx.state.items.push(item);engine.appendMsg(item);
       window.dispatchEvent(new Event('agent-turn-done'));
     },{turn:longTurn});
-    await page.waitForTimeout(100);
-    await page.evaluate(()=>{
+    await page.evaluate(()=> {
       const box=window.__chatTest.ctx.dom.messages;
-      box.scrollTop=0;box.dispatchEvent(new Event('scroll'));box.dispatchEvent(new Event('scroll'));
-    });
-    await page.waitForTimeout(800);
-    assert.equal(reads,1,'A long report outside the viewport remains unread');
-    await page.evaluate(()=>{
-      const box=window.__chatTest.ctx.dom.messages;
-      box.scrollTop=box.scrollHeight;box.dispatchEvent(new Event('scroll'));
+      const report=[...box.querySelectorAll('.chat-msg.agent')].at(-1);
+      box.scrollTop+=report.getBoundingClientRect().top-box.getBoundingClientRect().top+40;
+      assertReportTailOutside(report,box);
+      function assertReportTailOutside(node,viewport) {
+        if (node.getBoundingClientRect().bottom<=viewport.getBoundingClientRect().bottom)
+          throw new Error('Fixture expected the report tail to be below the viewport');
+      }
     });
     await page.waitForFunction(()=>document.querySelector('.chat-unread-dot').hidden);
-    assert.equal(reads,2,'Scrolling to the report tail acknowledges the exact report');
+    assert.equal(reads,2,'Reading part of a long report acknowledges it without finding its tail');
 
     row.id='run_history_retry';row.version='c'.repeat(64);pending=true;
     const recoveredTurn='task_'+createHash('sha256').update(`${row.id}:${row.version}`).digest('hex');
@@ -68,6 +67,12 @@ export async function assertCompletionInbox({page,reset,streamCount,passed}) {
     await page.waitForFunction(()=>document.querySelector('.chat-unread-dot').hidden);
     assert.equal(historyAttempts,2);
     assert.equal(reads,3,'A temporary history failure allows the same report to recover and be read');
+    row.id='run_outside_history';row.version='d'.repeat(64);pending=true;
+    await page.evaluate(()=>window.dispatchEvent(new Event('agent-turn-done')));
+    await page.getByRole('button',{name:/将 1 条已汇报结果标为已读/}).click();
+    await page.waitForFunction(()=>document.querySelector('.chat-unread-dot').hidden);
+    assert.equal(reads,4,'The title button can acknowledge a report outside the loaded history');
+    assert.equal(streamCount(),before,'Acknowledging reported results does not call the model');
     passed('completion read receipts follow report identity, visibility and history recovery');
   } finally {
     await page.unroute('**/api/chat/history?*');

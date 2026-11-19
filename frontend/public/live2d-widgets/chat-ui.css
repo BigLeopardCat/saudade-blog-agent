@@ -853,7 +853,13 @@
 
 /* The badge overlays its anchor without moving the centered conversation title. */
 #waifu-chat .chat-unread-dot {
-  position: absolute; top: -3px; right: -4px; width: 8px; height: 8px;
+  position: absolute; top: -10px; right: -12px; width: 24px; height: 24px;
+  border: 0; padding: 0; background: transparent; pointer-events: auto; cursor: pointer;
+  display: grid; place-items: center;
+}
+#waifu-chat .chat-unread-dot:disabled { cursor: default; }
+#waifu-chat .chat-unread-dot::before {
+  content: ''; width: 8px; height: 8px;
   border-radius: 50%; background: #e85275; box-shadow: 0 0 0 2px var(--chat-bg, #fff7fc);
 }
 #waifu-chat .chat-unread-dot[hidden] { display: none; }
