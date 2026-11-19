@@ -68,6 +68,23 @@ def fixture_account_eligibility(case):
     return dict(value)
 
 
+def fixture_catalog(case):
+    value = case.get("requires_catalog", {})
+    if not isinstance(value, dict) or set(value) - {"article_tag", "root_tag", "category", "board"}:
+        raise ValueError(f"invalid catalog fixture: {case['id']}")
+    for key, target in value.items():
+        if key == "root_tag" and isinstance(target, str) and target.strip():
+            continue
+        if key == "board" and type(target) is int and target > 0:
+            continue
+        if (key in {"article_tag", "category"} and isinstance(target, list) and len(target) == 2
+                and type(target[0]) is int and target[0] > 0
+                and isinstance(target[1], str) and target[1].strip()):
+            continue
+        raise ValueError(f"invalid {key} fixture: {case['id']}")
+    return value
+
+
 def _call_limits(gold, case_id):
     """Validate evaluation ceilings before any model or business request."""
     diagnostic = gold.get("diagnostic_limits", [])
@@ -117,6 +134,9 @@ def load_suite(path=SUITE):
         fixture_articles(case)
         fixture_images(case)
         fixture_account_eligibility(case)
+        fixture_catalog(case)
+        if "requires_device_gateway" in case and type(case["requires_device_gateway"]) is not bool:
+            raise ValueError(f"invalid device fixture: {case['id']}")
         if case["identity"] not in {"admin", "user", "zako"}:
             raise ValueError(f"unknown identity in {case['id']}")
         for rnd in golden.iter_rounds(case):
@@ -202,6 +222,10 @@ def check_case_fixtures(case, transport):
         transport.check_quota_fixture(case["requires_quota_usage"])
     if case.get("requires_category_creation"):
         transport.check_category_fixture(case["requires_category_creation"])
+    for kind, target in fixture_catalog(case).items():
+        transport.check_catalog_fixture(kind, target)
+    if case.get("requires_device_gateway"):
+        transport.check_device_gateway_fixture()
 
 
 def fixture_preflight(cases, transport, identities):

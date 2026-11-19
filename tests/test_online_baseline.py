@@ -759,6 +759,20 @@ def test_fixture_preflight_uses_each_cases_identity_and_restores_actor():
     assert seen == [(1, 72), (4, 72)] and adapter.uid == 99
 
 
+def test_missing_catalog_fixture_is_an_evaluation_error():
+    class Fake:
+        uid = None
+
+        def check_catalog_fixture(self, kind, target):
+            assert (kind, target, self.uid) == ("article_tag", [23, "Python"], 7)
+            raise EvaluationError("tag absent")
+
+    case = {"id": "remove", "identity": "admin",
+            "requires_catalog": {"article_tag": [23, "Python"]}}
+    result, = online_baseline.fixture_preflight([case], Fake(), {"admin": 7})
+    assert result["status"] == "evaluation_error"
+
+
 def test_poc_selection_preserves_order_and_rejects_duplicates_unknown_ids_and_partial_full():
     cases = [{"id": "first"}, {"id": "second"}]
     assert online_baseline.select_cases(cases, "poc", ["second", "first"]) == cases[::-1]

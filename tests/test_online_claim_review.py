@@ -7,6 +7,17 @@ import pytest
 from eval import online_judge, semantic_judge
 
 
+def test_compact_tool_catalogs_preserve_each_menu_and_contract():
+    a = {"name": "read", "description": "original"}
+    b = {"name": "read", "description": "updated"}
+    c = {"name": "prepare"}
+    catalogs = [[a, c], [b, c], [c]]
+    compact = online_judge._intern_tool_catalogs({"tool_catalogs": catalogs})
+    pool = compact["tool_contract_pool"]
+    assert [[pool[i] for i in menu] for menu in compact["tool_catalogs"]] == catalogs
+    assert len(pool) == 3
+
+
 @pytest.mark.parametrize("scope", ["article_sources", "account_authority"])
 def test_focused_review_catches_claim_missed_by_general_review(monkeypatch, scope):
     answer = "已回答请求。无依据的补充结论。"

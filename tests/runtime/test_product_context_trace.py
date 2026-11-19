@@ -36,7 +36,8 @@ def test_recorded_product_fact_is_the_template_used_by_the_model(monkeypatch):
     assert facts["administration_requires"] == ["admin", "superadmin"]
     assert facts["can_access_admin_console"] is False
     assert facts["account_roles"] == context["account_roles"] == {
-        "assign_admin_requires": "superadmin"}
+        "assign_admin_requires": "superadmin",
+        "admin_change_between": ["user", "zako"]}
     assert facts["guestbook"]["post"] == "login"
     assert facts["guestbook"] == context["guestbook"]
     assert facts["guestbook"]["read"] == "public"

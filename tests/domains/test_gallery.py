@@ -42,7 +42,9 @@ def gallery(monkeypatch):
         if request.method == "GET":
             if request.url.path.endswith("/images"):
                 return httpx.Response(
-                    200, json={"code": 200, "data": {"items": [state["row"]], "nextCursor": None}}
+                    200, json={"code": 200, "data": {
+                        "items": [] if state.get("empty_index") else [state["row"]],
+                        "nextCursor": None}}
                 )
             if "/articles/" in request.url.path:
                 data = dict(articleId=3, title="文章", coverUrl=None, fit=None, version="b" * 64)
@@ -82,6 +84,16 @@ def test_index_is_compact_and_has_no_pixels_or_storage_tokens(gallery):
     assert "imageUrl" not in str(result) and "version" not in str(result)
     assert gallery["requests"][0].url.params["limit"] == "20"
     assert not gallery["writes"]
+
+
+def test_empty_storage_page_is_scoped_and_exhausted(gallery):
+    gallery["empty_index"] = True
+    result = reads.get_gallery_index.invoke({"storage": "r2", "limit": 6}, config=admin())
+    assert result.kind == "empty"
+    assert result.data == {"items": [], "next_cursor": None}
+    assert "R2" in str(result) and "本次筛选范围" in str(result)
+    request, = gallery["requests"]
+    assert request.url.params["storage"] == "r2"
 
 
 @pytest.mark.parametrize("name_length,description_length", [(0, 0), (120, 160), (121, 161)])
