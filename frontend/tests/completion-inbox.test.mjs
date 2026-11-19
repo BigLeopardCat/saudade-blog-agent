@@ -39,11 +39,11 @@ function scenario(data={unread:1,conversations:[{id:42,unread:1}],items:[row]}) 
   const inbox=createCompletionInbox(ctx,async options=>{sends.push(options);return true;}, {
     pullHistory:async()=>{pulls++;return historyAvailable;},
   });
-  const show=async(event=row,{bottom=90,finished=true}={})=>{
+  const show=async(event=row,{bottom=90,height=30,finished=true}={})=>{
     const turn=await completionTurnId(event.kind,event.id,event.version);
     const item=core.migrateItem(core.dbRowToItem({id:nodes.length+1,role:'assistant',turn_id:turn,content:'完成报告',time:1}));
     ctx.state.items.push(item);
-    const node={dataset:{mid:item.id,finished:finished?'1':''},getBoundingClientRect:()=>({height:30,bottom})};
+    const node={dataset:{mid:item.id,finished:finished?'1':''},getBoundingClientRect:()=>({height,top:bottom-height,bottom})};
     nodes.push(node);return node;
   };
   return {ctx,badge,requests,sends,toggles,inbox,show,pulls:()=>pulls,logout:()=>{token='';},
@@ -82,6 +82,12 @@ for(const state of ['outside','streaming','hidden'])test(`never reads a ${state}
   const f=scenario(reported());await f.show(row,{bottom:state==='outside'?180:90,finished:state!=='streaming'});
   if(state==='hidden')document.hidden=true;
   await f.read();assert.equal(f.requests.filter(r=>r.options.method==='POST').length,0);
+});
+test('a readable part of a long report counts even with its tail below the viewport',async()=>{
+  const f=scenario(reported());await f.show(row,{bottom:160,height:100});await f.read();
+  assert.equal(f.requests.filter(r=>r.options.method==='POST').length,0,'A sliver of a report does not count');
+  await f.show(row,{bottom:180,height:140});await f.read();
+  assert.equal(f.badge.hidden,true);
 });
 test('a missing old report does not block reading the visible report or loop history forever',async()=>{
   const old={...row,id:'old_1'};const f=scenario(reported([old,row]));await f.show();await f.read();

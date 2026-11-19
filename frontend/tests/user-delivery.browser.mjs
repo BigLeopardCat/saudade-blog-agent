@@ -10,11 +10,11 @@ export async function assertUserDelivery({page,reset,passed}) {
   try {
     await page.locator('#chat-input').fill('测试送达反馈');await page.locator('#chat-send').click();
     await page.getByText('发送中…',{exact:true}).waitFor();
-    assert.equal(await page.getByText('已接收',{exact:true}).count(),0,'A pending request has no receipt');
+    assert.equal(await page.getByText('已读',{exact:true}).count(),0,'A pending request has no receipt');
     release();
-    await page.getByText('已接收',{exact:true}).waitFor();
+    await page.getByText('已读',{exact:true}).waitFor();
     await page.waitForFunction(()=>!window.__chatTest.ctx.state.isSending);
-    assert.equal(await page.locator('.chat-msg.user .msg-delivery').textContent(),'已接收');
+    assert.equal(await page.locator('.chat-msg.user .msg-delivery').textContent(),'已读');
     assert.equal(await page.evaluate(()=>window.__chatTest.ctx.state.items.find(x=>x.type==='user').delivery),'read');
   } finally {release();await page.unroute('**/api/chat/stream');}
   for(const mode of ['abort','error','malformed']) {
@@ -25,7 +25,7 @@ export async function assertUserDelivery({page,reset,passed}) {
     try {
       await page.locator('#chat-input').fill('尚未确认送达的输入');await page.locator('#chat-send').click();
       await page.getByText('未确认送达',{exact:true}).waitFor();
-      assert.equal(await page.getByText('已接收',{exact:true}).count(),0,`${mode} cannot claim an acceptance receipt`);
+      assert.equal(await page.getByText('已读',{exact:true}).count(),0,`${mode} cannot claim an acceptance receipt`);
     } finally {await page.unroute('**/api/chat/stream');}
   }
   await reset();

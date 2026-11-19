@@ -10,6 +10,7 @@ const valid = row => row && ['task', 'image'].includes(row.kind)
 const READ_DELAY = 600;
 export function createCompletionInbox(ctx, send, engine) {
     const panel = ctx.dom.chatPanel, messages = ctx.dom.messages;
+    const badge = panel.querySelector('.chat-unread-dot');
     let scope = '', snapshot = {unread: 0, conversations: [], items: []};
     let fetching = false, dispatching = false, refreshAt = 0, retryAt = 0, forbidden = false;
     let started = false, timer, historyKey = '', historyRetryAt = 0, readRetryAt = 0;
@@ -20,13 +21,22 @@ export function createCompletionInbox(ctx, send, engine) {
         && (panel.dataset.windowMode || 'expanded') === 'expanded';
     const busy = () => ctx.state.isSending || ctx.state.pendingAsk || ctx.state.approvalBusy
         || ctx.state.stoppedTask || Object.keys(ctx.state.remoteRounds || {}).length;
+    const reportedHere = () => snapshot.items.filter(row => row.conversationId === ctx.state.conv && row.reported);
     const paint = () => {
+        const launcher = ctx.dom.waifu?.querySelector('#waifu-tool-hitokoto');
+        if (launcher) {
+            launcher.toggleAttribute('data-unread', snapshot.unread > 0);
+            launcher.setAttribute('aria-label', snapshot.unread > 0
+                ? `对话，${snapshot.unread} 条未读任务结果` : '对话');
+        }
         const counts = new Map(snapshot.conversations.map(row => [String(row.id), row.unread]));
         const count = counts.get(String(ctx.state.conv)) || 0;
-        const badge = panel.querySelector('.chat-unread-dot');
         if (badge) {
             badge.hidden = !count;
-            badge.setAttribute('aria-label', `${count} 条当前会话未读任务结果`);
+            const readable = reportedHere().length;
+            badge.disabled = !readable;
+            badge.title = readable ? `将 ${readable} 条已汇报结果标为已读` : '等待任务结果汇报';
+            badge.setAttribute('aria-label', `${count} 条当前会话未读任务结果，${badge.title}`);
         }
         for (const row of panel.querySelectorAll('.conv-row')) {
             row.classList.toggle('has-unread-result', !!counts.get(row.dataset.id));
@@ -76,7 +86,10 @@ export function createCompletionInbox(ctx, send, engine) {
             const node = nodes.get(known.get(ids[index]));
             if (!node || node.dataset.finished !== '1' || !messages.clientHeight) return false;
             const rect = node.getBoundingClientRect();
-            if (!rect.height || rect.bottom <= viewport.top || rect.bottom > viewport.bottom + 1) return false;
+            // A readable portion is sufficient even when a long report's tail is below the view.
+            const overlap = Math.min(rect.bottom, viewport.bottom) - Math.max(rect.top, viewport.top);
+            const required = Math.min(48, rect.height, messages.clientHeight);
+            if (required <= 0 || overlap < required - 1) return false;
             const key = ids[index];
             visible.add(key);
             if (!seen.has(key)) seen.set(key, now);
@@ -86,6 +99,25 @@ export function createCompletionInbox(ctx, send, engine) {
         });
         for (const key of seen.keys()) if (!visible.has(key)) seen.delete(key);
         return {result, waiting: visible.size > 0, missing: ids.some(id => !known.has(id))};
+    };
+    const acknowledge = async (cid, rows, anchor) => {
+        await request('/api/chat/completions/read', {method: 'POST', body: JSON.stringify({
+            conversationId: cid, events: rows.map(({kind, id, version}) => ({kind, id, version})),
+        })});
+        if (current() !== anchor) return;
+        readRetryAt = 0;
+        refreshAt = 0;
+        await refresh();
+        paint();
+    };
+    const dismiss = async () => {
+        if (dispatching || !ctx.state.conv) return;
+        const rows = reportedHere();
+        if (!rows.length) return;
+        dispatching = true;
+        try { await acknowledge(ctx.state.conv, rows, current()); }
+        catch { ctx.ui.notify?.('未能标为已读，请重试'); }
+        finally { dispatching = false; }
     };
     const consume = async () => {
         if (!expanded()) { seen.clear(); return; }
@@ -123,15 +155,7 @@ export function createCompletionInbox(ctx, send, engine) {
             }
             if (Date.now() < readRetryAt) return;
             readRetryAt = Date.now() + 5000;
-            await request('/api/chat/completions/read', {method: 'POST', body: JSON.stringify({
-                conversationId: cid, events: result.map(({kind, id, version}) => ({kind, id, version})),
-            })});
-            if (current() === anchor) {
-                readRetryAt = 0;
-                refreshAt = 0;
-                await refresh();
-                paint();
-            }
+            await acknowledge(cid, result, anchor);
         } finally { dispatching = false; }
     };
     const tick = async () => {
@@ -150,6 +174,7 @@ export function createCompletionInbox(ctx, send, engine) {
     return {tick, start() {
         if (started) return;
         started = true;
+        badge?.addEventListener('click', dismiss);
         setInterval(() => { void tick().catch(() => {}); }, 5000);
         document.addEventListener('visibilitychange', () => { seen.clear(); update(); });
         window.addEventListener('agent-turn-done', update);

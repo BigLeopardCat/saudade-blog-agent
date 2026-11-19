@@ -46,7 +46,7 @@
       <header class="chat-header">
         <span id="chat-service-indicator" class="chat-service-indicator" role="status" aria-label="正在检查对话服务" data-state="checking"></span>
         <div class="chat-heading">
-          <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span><span class="chat-unread-dot" role="status" aria-label="未读任务结果" hidden></span></div>
+          <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span><button type="button" class="chat-unread-dot" aria-label="未读任务结果" hidden disabled></button></div>
         </div>
         <div class="chat-header-tasks">
           <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></button>
