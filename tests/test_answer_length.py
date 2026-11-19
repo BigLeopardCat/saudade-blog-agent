@@ -34,18 +34,19 @@ def test_visible_markdown_counts_punctuation_and_link_labels_without_url_or_mark
     "部署、配置、产物、限制。见[原文](https://example.test/article/131)。",
 ])
 def test_runtime_delivers_the_complete_reply_without_a_length_retry(reply):
+    prompt = "请用10字以内总结。"
     with model_replies({"content": reply}) as (model, requests):
         runtime = AgentRuntime(CheckpointConversationStore(InMemorySaver()),
                                application=BlogApplication(), model_factory=lambda **_: model)
         config = {"configurable": {"thread_id": "conv_42", "user_id": 7, "conversation_id": 42,
                                    "principal": Principal(7, "user", SOURCE_ASSERTION)}}
         events = list(runtime.stream_events({
-            "messages": [HumanMessage(content="请用10字以内总结。")]}, config))
+            "messages": [HumanMessage(content=prompt)]}, config))
     visible = "".join(event.content for event in events if isinstance(event, AIMessageChunk))
     final = events[-1]
     assert len(requests) == 1
-    hint = requests[0]["messages"][0]["content"]
-    assert "用户希望答复控制在 10 个可见字符内" in hint
-    assert "字起草" not in hint
+    messages = requests[0]["messages"]
+    assert any(message["role"] == "user" and message["content"] == prompt for message in messages)
+    assert "可见字符内" not in messages[0]["content"]
     assert visible == final.reply == reply
     assert not (final.execution or {}).get("blocked")

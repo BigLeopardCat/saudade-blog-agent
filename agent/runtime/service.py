@@ -5,12 +5,10 @@ import uuid
 from dataclasses import replace
 from functools import partial
 
-from langchain_core.messages import AIMessageChunk, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessageChunk, SystemMessage
 from openai import OpenAIError
 
 from agent.runtime import approval, checkpoint_store, memory, recovery, trace_context
-from agent.runtime.answer_length import requested_limit
-from agent.runtime.message_content import text_content
 from agent.runtime.output_budget import OutputBudget
 from agent.runtime.results import ReplyReset, TurnResult
 from agent.runtime.session import ToolSession
@@ -115,9 +113,6 @@ class AgentRuntime:
         session.state["effects"].update(effects or {})
         session.event_seed = event_seed
         session.turn_input = incoming
-        user_request = next((text_content(message.content) for message in reversed(incoming)
-                             if isinstance(message, HumanMessage)), "")
-        session.state["answer_character_limit"] = requested_limit(user_request)
         session.task = recovery.new_run(config, incoming, task_id)
         if (self.inputs and snapshot.run and session.task
                 and snapshot.run["id"] != session.task["id"]):

@@ -21,7 +21,6 @@ class ExecutionState(AgentState, total=False):
     run_id: str | None
     terminal: dict | None
     response_repairs: int
-    answer_character_limit: int | None
     output_revision: int
     effects: Annotated[dict, or_]
     client_operations: Annotated[dict[str, ClientOperationRef], or_]
@@ -39,7 +38,7 @@ def initial_state():
                           proposal=None,
                           awaiting_call=None, resume=None, run_id=None, terminal=None,
                           effects={}, client_operations={}, applied_inputs=[], progress_keys=[],
-                          response_repairs=0, answer_character_limit=None, output_revision=0,
+                          response_repairs=0, output_revision=0,
                           tool_domains=None, used_tool_domains=[])
 
 
