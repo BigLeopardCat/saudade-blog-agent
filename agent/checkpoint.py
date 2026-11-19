@@ -307,6 +307,8 @@ def _drop_turn(agent, config, turn_id):
     update = {}
     if tool_state.contains_turn(values.get("tool_domains"), turn_id):
         update["tool_domains"] = tool_state.without_turn(values["tool_domains"], turn_id)
+    if (values.get("operation_input") or {}).get("turn_id") == turn_id:
+        update["operation_input"] = None
     if index is not None:
         update["messages"] = [RemoveMessage(id=message.id) for message in messages[index:]]
     if active_matches or index is not None:

@@ -5,7 +5,7 @@ import json
 from langchain_core.messages import ToolMessage, trim_messages
 from langgraph.types import Command
 
-from agent.runtime import tool_evidence, tool_state
+from agent.runtime import operation_input, tool_evidence, tool_state
 from agent.runtime.budget import native_tool
 from agent.runtime.memory_media import tool_messages
 from agent.runtime.message_content import estimate_tokens, text_content
@@ -61,6 +61,10 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     call = request.tool_call
     name = call["name"]
     record("native", "tool_requested", name=name, call_id=call["id"])
+    call, resolution = operation_input.complete_args(session, call)
+    if resolution is not None:
+        prompt.append(resolution)
+        return None
     if name in session.loaders:
         if call["args"]:
             prompt.append(ToolMessage(content=json.dumps({"status": "invalid_args",
@@ -95,7 +99,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     plan = plan_observation(session, prompt, call, request.state.get("context_anchor"))
     with (native_tool(session.budget), tool_evidence.scope(call, round_index),
           observation_scope(plan)):
-        output = handler(request.override(tool=framework_tool(
+        output = handler(request.override(tool_call=call, tool=framework_tool(
             session.execution_tools[name], on_error=failures.append)))
     command = output if isinstance(output, Command) else None
     messages = output.update["messages"] if command else [output]
@@ -110,7 +114,8 @@ def append_result(session, request, handler, prompt, round_index, attachments):
     attachments.extend(m for m in messages if m is not message)
     prepared = prepared_result(message)
     if prepared is not None:
-        session._prepared_result(prepared, call, prompt, round_index)
+        session._prepared_result(operation_input.accept(session, call, prepared),
+                                 call, prompt, round_index)
         return command
     artifact = message.artifact if isinstance(message.artifact, dict) else {}
     kind = artifact.get("kind", "ok")

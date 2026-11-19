@@ -192,6 +192,74 @@ def test_admin_compound_task_preserves_approval_stages_and_final_business_state(
     assert "confirm_tokens" not in json.dumps(report)
 
 
+@pytest.mark.parametrize(
+    ("case", "wrong_call", "writes"),
+    [
+        ("notice_then_role_after_clarification", None, 2),
+        ("notice_then_unsupported_delayed_mute", None, 1),
+        ("notice_then_unsupported_delayed_mute", "duplicate_notice", 1),
+        ("notice_then_unsupported_delayed_mute", "duplicate_after_correction", 1),
+        ("notice_then_unsupported_delayed_mute", "pause_unknown_plan", 1),
+    ],
+)
+def test_admin_task_clarification_contracts(monkeypatch, tmp_path, case, wrong_call, writes):
+    from eval.admin_task_contracts import BODY
+
+    def call(name, call_id, **args):
+        return AIMessage(content="", tool_calls=[
+            {"name": name, "args": args, "id": call_id, "type": "tool_call"}])
+
+    responses = [
+        call("load_admin_notices_info_tools", "notice-domain"),
+        call("prepare_user_notice", "notice", user_id=20, content=BODY),
+    ]
+    if case == "notice_then_role_after_clarification":
+        responses.extend([
+            call("load_admin_account_actions_info_tools", "account-domain"),
+            call("prepare_account_role", "missing-role", account_id=20),
+            call("prepare_account_role", "role", role="zako"),
+            AIMessage(content="账号已改为杂鱼。"),
+        ])
+    else:
+        unsupported = AIMessage(content="通知已发送。当前不支持定时禁言。")
+        responses.append(unsupported.model_copy())
+        if wrong_call in {"duplicate_notice", "duplicate_after_correction"}:
+            if wrong_call == "duplicate_after_correction":
+                responses.append(unsupported.model_copy())
+            responses.extend([
+                call("load_admin_notices_info_tools", "load-duplicate"),
+                call("prepare_user_notice", "duplicate", user_id=20, content=BODY),
+            ])
+        elif wrong_call == "pause_unknown_plan":
+            responses.extend([
+                call("load_admin_automations_info_tools", "schedule-domain"),
+                call("prepare_automation_control", "pause", schedule_id="sc_" + "0" * 32,
+                     action="pause"),
+                unsupported.model_copy(),
+            ])
+        else:
+            responses.extend([unsupported.model_copy(), unsupported.model_copy()])
+    remaining = iter(responses)
+
+    class Model:
+        def bind_tools(self, tools, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(remaining)
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run([case])["cases"][0]
+    assert row["evaluated"], row.get("reason")
+    assert row["passed"] is (wrong_call is None), row.get("reason")
+    assert row["business_writes"] == writes
+    if wrong_call:
+        expected = ("prepare_user_notice" if wrong_call.startswith("duplicate")
+                    else "prepare_automation_control")
+        assert expected in row["reason"]
+
+
 def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypatch, tmp_path):
     def call(name, args):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])

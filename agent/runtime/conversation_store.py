@@ -95,6 +95,7 @@ class ConversationSnapshot:
     receipts: list = field(default_factory=list)
     last_outcome: str | None = None
     tool_domains: ToolDomains | None = None
+    operation_input: dict | None = None
     unfinished: bool = False
     initialized: bool = False
 

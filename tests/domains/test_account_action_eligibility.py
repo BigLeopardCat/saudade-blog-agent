@@ -7,6 +7,7 @@ import httpx
 import pytest
 from _own_support import config
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
 from pydantic import ValidationError
 
 from agent.domains.account_actions import eligibility, preparation
@@ -70,6 +71,28 @@ def test_mute_eligibility_needs_no_duration_or_preparation(backend):
     missing = preparation.prepare_account_mute.invoke({"account_id": 11}, config=admin_config())
     assert missing.kind == "invalid_args" and len(backend["requests"]) == 1
     assert not getattr(missing, "execution", {}).get("pending_confirm")
+
+
+def test_immediate_mute_missing_deadline_requests_input_without_preparing(backend):
+    waiting = preparation.prepare_account_mute.invoke(
+        {"account_id": 11}, config=admin_config(browser_task="interactive-request"))
+    request = waiting.execution["input_request"]
+    assert request["fields"] == ["hours", "permanent"]
+    assert request["fixed"]["account_id"] == 11
+    assert not waiting.execution.get("pending_confirm")
+    assert not backend["requests"]
+
+
+def test_mute_schedule_is_absent_from_model_schema_and_rejected_for_old_callers(backend):
+    mute = preparation.prepare_account_mute
+    schema = convert_to_openai_tool(mute)["function"]["parameters"]["properties"]
+    assert "schedule" not in schema
+    assert "schedule" in convert_to_openai_tool(preparation.prepare_account_freeze)[
+        "function"]["parameters"]["properties"]
+    result = mute.invoke({"account_id": 11, "hours": 1, "schedule": {"delay_seconds": 300}},
+                         config=admin_config())
+    assert result.kind == "invalid_args"
+    assert not backend["requests"]
 
 
 def test_policy_denial_remains_a_successful_read_not_an_absent_account(backend):

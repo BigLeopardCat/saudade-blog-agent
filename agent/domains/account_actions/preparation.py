@@ -6,11 +6,13 @@ from typing import Annotated
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from pydantic import Field, StrictBool, StrictInt
+from pydantic.json_schema import SkipJsonSchema
 
 from agent.domains.account_actions import targets
 from agent.domains.admin_writes import available
 from agent.proposals import proposal
 from agent.role_labels import role_cn
+from agent.runtime import operation_input
 from agent.runtime.results import TurnResult
 from agent.runtime.turns import check_cancelled
 from agent.runtime.writes import bound_context
@@ -167,8 +169,8 @@ def prepare_account_unfreeze(
 
 @tool(return_direct=True)
 def prepare_account_role(
-    role: targets.Role,
     config: RunnableConfig,
+    role: targets.Role | None = None,
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
     schedule: WriteSchedule | None = None,
@@ -178,7 +180,15 @@ def prepare_account_role(
     同时提供account_id和username时必须匹配。真实变更使旧登录状态失效。
     Automatic status notices do not deliver user-authored messages. Use prepare_user_notice
     for those, preserving any requested order before preparing this change.
+    目标已明确但新身份缺失时，省略 role 调用本工具来保存待补项并向用户提问。
     """
+    if role is None:
+        if not available(config) or (account_id is None and username is None):
+            return invalid_args("请先明确要变更身份的账号。")
+        return operation_input.request(config, fields=("role",),
+            fixed={"account_id": account_id, "username": username,
+                   **({"schedule": schedule.model_dump(mode="json")} if schedule else {})},
+            question="要把该账号改成哪种身份？")
     return _prepare(
         "set_role", {"id": account_id, "username": username}, role, None, config, schedule=schedule
     )
@@ -191,16 +201,24 @@ def prepare_account_mute(
     username: targets.Username | None = None,
     hours: Hours | None = None,
     permanent: StrictBool = False,
-    schedule: WriteSchedule | None = None,
+    schedule: SkipJsonSchema[WriteSchedule | None] = None,
 ) -> object:
-    """准备禁言确认，只读。明确指定正数hours或permanent=true，二选一。
-    未给期限时可先用get_account_action_eligibility核实资格，允许禁言再询问期限。
+    """准备即时禁言确认，只读。支持正整数小时或明确选择永久禁言。
+    延后开始的禁言暂不支持。即时禁言资格允许但缺少期限时，省略期限调用本工具，
+    由工具保存待补项并向用户提问。
     冻结北京时间到期时刻；永久需明确选择。仅限制评论与留言，不改身份、冻结或登录状态。
     """
+    # Old callers can submit this field. Reject it before preparing an immediate effect.
     if schedule is not None:
         return invalid_args("定时禁言需明确到期语义，请先使用即时禁言；本次没有创建计划。")
-    if permanent and hours is not None or not permanent and hours is None:
+    if permanent and hours is not None:
         return invalid_args("请明确指定正数小时数或永久禁言，二选一；未指定时不会默认永久。")
+    if not permanent and hours is None:
+        if not available(config) or (account_id is None and username is None):
+            return invalid_args("请先明确要禁言的账号。")
+        return operation_input.request(config, fields=("hours", "permanent"),
+            fixed={"account_id": account_id, "username": username},
+            question="即时禁言需要明确期限。要禁言几个小时，还是永久禁言？")
     return _prepare(
         "mute",
         {"id": account_id, "username": username},

@@ -43,7 +43,8 @@ DOMAIN_DESCRIPTIONS = {
     "Article-tag assignment uses admin_article_management.",
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",
-    "admin_account_actions": "Prepare account freeze, mute or role changes. "
+    "admin_account_actions": "Prepare account freeze, immediate mute or role changes. "
+    "Scheduled mute is unsupported. "
     "Known IDs or full usernames go directly to preparation; it verifies target and eligibility. "
     "Missing mute duration uses admin_accounts; custom messages use admin_notices. "
     + ", ".join(f"{role.value}={role_cn(role.value)}" for role in Role),
