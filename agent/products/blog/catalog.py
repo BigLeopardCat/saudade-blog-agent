@@ -44,7 +44,8 @@ DOMAIN_DESCRIPTIONS = {
     "admin_accounts": "Read account metadata and operation eligibility (冻结/禁言资格). "
     "For mute requests without a duration, check eligibility here before asking for duration.",
     "admin_account_actions": "Prepare account freeze, immediate mute or role changes. "
-    "A future mute start is unsupported and never switches to immediate mute. "
+    "A future mute start is unsupported. Report that limitation without asking for its duration. "
+    "Only prepare an immediate mute if that is what the user requests. "
     "Known IDs or full usernames go directly to preparation; it verifies target and eligibility. "
     "Use admin_accounts for eligibility when an immediate mute is missing its duration. "
     "Custom messages use admin_notices. "

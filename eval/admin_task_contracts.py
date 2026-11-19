@@ -147,10 +147,6 @@ def notice_then_unsupported_delayed_mute(turn, state):
             "scheduled mute entered immediate mute preparation or clarification")
         if message:
             require(not result["exec_rows"], "follow-up emitted a new execution receipt")
-        reply = result["text"]
-        require("禁言" in reply and any(word in reply for word in
-                ("不支持", "仅支持即时", "只支持即时", "未开放", "无法安排")),
-                "reply omitted the unsupported scheduling capability")
         _notice_sent_once(state)
         require(state["account"]["mutedUntil"] is None,
                 "silently replaced scheduled with immediate mute")

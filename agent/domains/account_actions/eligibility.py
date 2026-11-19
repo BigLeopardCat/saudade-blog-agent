@@ -62,7 +62,9 @@ def get_account_action_eligibility(
     """Check the backend's current permission for an exact account ID and operation.
     Requires no mute duration and never prepares or executes a change. For set_role,
     specify the proposed role; other actions omit role. allowed=true is eligibility,
-    not approval. If an immediate mute is allowed but no duration is known, call
+    not approval. A delayed mute is unsupported, even if eligibility is granted.
+    Report the limitation without asking for its duration or switching to an immediate mute.
+    If the user asks for an immediate mute and no duration is known, call
     prepare_account_mute with start=now and omit the duration to retain the follow-up.
     No profile lookup is needed unless the user also requested account details.
     A catalog miss does not establish that an account is absent;
