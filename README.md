@@ -23,6 +23,8 @@
 
 需要 Python 3.12+ 与 uv。在干净检出中执行 `uv sync --locked` 安装依赖，执行 `uv run --frozen pytest -q` 跑离线检查。完整开发环境、宿主接线和就绪核对见[本地起步](docs/getting-started.md)，生产安装走[部署手册](docs/deployment.md)。
 
+接入模型时，将 `AGENT_CONTEXT_TOKENS` 设为当前模型端点的实际上下文窗口。输入、输出和累计预算的关系见[会话与记忆](docs/conversation-memory.md#预算)。
+
 ## 文档
 
 [文档索引](docs/README.md) · [Wiki 教程](https://github.com/BigLeopardCat/saudade-blog-agent/wiki) · [本地起步](docs/getting-started.md) · [配置](docs/configuration.md) · [代码导读](docs/code-reading.md) · [排障](docs/troubleshooting.md)
