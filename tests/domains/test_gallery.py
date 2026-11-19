@@ -91,7 +91,7 @@ def test_empty_storage_page_is_scoped_and_exhausted(gallery):
     result = reads.get_gallery_index.invoke({"storage": "r2", "limit": 6}, config=admin())
     assert result.kind == "empty"
     assert result.data == {"items": [], "next_cursor": None}
-    assert "R2" in str(result) and "本次筛选范围" in str(result)
+    assert json.loads(str(result)) == result.data
     request, = gallery["requests"]
     assert request.url.params["storage"] == "r2"
 

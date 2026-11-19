@@ -23,7 +23,7 @@ def index_page(rows, cursor):
         if estimate_tokens([message]) <= budget:
             if rows and not visible:
                 break
-            return base.ok(encoded, data=page)
+            return (base.ok if visible else base.empty)(encoded, data=page)
         if not visible:
             break
         visible.pop()
