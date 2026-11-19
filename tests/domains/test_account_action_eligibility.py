@@ -68,31 +68,58 @@ def test_mute_eligibility_needs_no_duration_or_preparation(backend):
     assert result.data["reasonCode"] is None
     assert json.loads(result.text) == result.data
     assert dict(backend["requests"][0].url.params) == {"accountId": "11", "action": "mute"}
-    missing = preparation.prepare_account_mute.invoke({"account_id": 11}, config=admin_config())
+    missing = preparation.prepare_account_mute.invoke(
+        {"account_id": 11, "start": "now"}, config=admin_config())
     assert missing.kind == "invalid_args" and len(backend["requests"]) == 1
     assert not getattr(missing, "execution", {}).get("pending_confirm")
 
 
 def test_immediate_mute_missing_deadline_requests_input_without_preparing(backend):
     waiting = preparation.prepare_account_mute.invoke(
-        {"account_id": 11}, config=admin_config(browser_task="interactive-request"))
+        {"account_id": 11, "start": "now"}, config=admin_config(browser_task="interactive-request"))
     request = waiting.execution["input_request"]
     assert request["fields"] == ["hours", "permanent"]
     assert request["fixed"]["account_id"] == 11
+    assert request["fixed"]["start"] == "now"
     assert not waiting.execution.get("pending_confirm")
     assert not backend["requests"]
 
 
 def test_mute_schedule_is_absent_from_model_schema_and_rejected_for_old_callers(backend):
     mute = preparation.prepare_account_mute
-    schema = convert_to_openai_tool(mute)["function"]["parameters"]["properties"]
-    assert "schedule" not in schema
+    schema = convert_to_openai_tool(mute)["function"]["parameters"]
+    assert "schedule" not in schema["properties"] and "start" in schema["required"]
     assert "schedule" in convert_to_openai_tool(preparation.prepare_account_freeze)[
         "function"]["parameters"]["properties"]
-    result = mute.invoke({"account_id": 11, "hours": 1, "schedule": {"delay_seconds": 300}},
-                         config=admin_config())
+    result = mute.invoke(
+        {"account_id": 11, "start": "now", "hours": 1, "schedule": {"delay_seconds": 300}},
+        config=admin_config())
     assert result.kind == "invalid_args"
     assert not backend["requests"]
+
+
+@pytest.mark.parametrize("hours", [None, 1])
+def test_scheduled_mute_does_not_create_a_card_or_request_immediate_input(backend, hours):
+    result = preparation.prepare_account_mute.invoke(
+        {"account_id": 11, "start": "scheduled", "hours": hours}, config=admin_config())
+    assert result.execution == {"blocked": [{"reason": "scheduled_mute_unsupported"}]}
+    assert "不支持定时禁言" in result.reply
+    assert not backend["requests"]
+
+
+def test_old_waiting_mute_without_start_cannot_resume():
+    from types import SimpleNamespace
+
+    from agent.runtime import operation_input
+    from agent.runtime.task_scope import binding
+
+    cfg = admin_config()
+    mute = preparation.prepare_account_mute
+    session = SimpleNamespace(config=cfg, execution_tools={mute.name: mute}, state={
+        "operation_input": {"scope": binding(cfg), "tool": mute.name,
+                            "fields": ["hours", "permanent"], "fixed": {"account_id": 11}},
+    })
+    assert operation_input.current(session) is None
 
 
 def test_policy_denial_remains_a_successful_read_not_an_absent_account(backend):

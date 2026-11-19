@@ -260,6 +260,42 @@ def test_admin_task_clarification_contracts(monkeypatch, tmp_path, case, wrong_c
         assert expected in row["reason"]
 
 
+@pytest.mark.parametrize("start", ["scheduled", "now"])
+def test_deferred_mute_preserves_requested_start(monkeypatch, tmp_path, start):
+    from eval.admin_task_contracts import BODY
+
+    def call(name, **args):
+        return {"name": name, "args": args, "id": name, "type": "tool_call"}
+
+    responses = iter([
+        AIMessage(content="", tool_calls=[
+            call("load_admin_notices_info_tools"), call("load_admin_account_actions_info_tools")]),
+        AIMessage(content="", tool_calls=[
+            call("prepare_user_notice", user_id=20, content=BODY),
+            call("prepare_account_mute", account_id=20, start=start)]),
+        AIMessage(content="当前不支持定时禁言。"),
+        AIMessage(content="当前不支持定时禁言。"),
+    ])
+
+    class Model:
+        def bind_tools(self, *args, **kwargs):
+            return self
+
+        def invoke(self, prompt, **kwargs):
+            return next(responses)
+
+    monkeypatch.setattr("agent.runtime.service.get_llm", lambda **_: Model())
+    monkeypatch.setattr(golden_trace, "trace_root", lambda: str(tmp_path / "traces"))
+    row = native_contracts.run(["notice_then_unsupported_delayed_mute"])["cases"][0]
+    assert row["evaluated"] and row["business_writes"] == 1
+    assert row["passed"] is (start == "scheduled"), row.get("reason")
+    assert row["rounds"][1]["confirmation_count"] == 0
+    if start == "now":
+        assert "immediate mute" in row["reason"] and len(row["rounds"]) == 2
+    else:
+        assert len(row["rounds"]) == 4
+
+
 def test_native_outcome_suite_uses_verified_identity_and_redacts_tokens(monkeypatch, tmp_path):
     def call(name, args):
         return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": name}])

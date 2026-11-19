@@ -134,17 +134,19 @@ def notice_then_role_after_clarification(turn, state):
 
 def notice_then_unsupported_delayed_mute(turn, state):
     waiting = _confirmed_notice(turn, state, "通知发出后，五分钟后自动禁言他，时长我随后告诉你。")
-    forbidden = ("prepare_automation", "prepare_automation_control", "prepare_account_mute")
-    _no_followup_mutations(waiting, tools=forbidden)
-    for text in ("禁言十分钟，还是五分钟后开始。",
-                 "通知已发，不要再准备通知。我说的是定时禁言。"):
-        result = turn(text)
-        _no_followup_mutations(result, tools=forbidden)
-        require(not result["exec_rows"], "follow-up emitted a new execution receipt")
-        reply = result["text"]
-        require("禁言" in reply and any(word in reply for word in
-                ("不支持", "仅支持即时", "只支持即时", "未开放", "无法安排")),
-                "reply omitted the unsupported scheduling capability")
+    followups = ("禁言十分钟，还是五分钟后开始。",
+                 "通知已发，不要再准备通知。我说的是定时禁言。")
+    for message in ("", *followups):
+        result = turn(message) if message else waiting
+        _no_followup_mutations(result, tools=("prepare_automation", "prepare_automation_control"))
+        events = result["native_events"]
+        require(not any(
+            event.get("event") == "account_mute_start" and event.get("mode") == "now"
+            or event.get("event") == "operation_input_requested"
+            and event.get("tool") == "prepare_account_mute" for event in events),
+            "scheduled mute entered immediate mute preparation or clarification")
+        if message:
+            require(not result["exec_rows"], "follow-up emitted a new execution receipt")
         _notice_sent_once(state)
         require(state["account"]["mutedUntil"] is None,
                 "silently replaced scheduled with immediate mute")

@@ -1,7 +1,7 @@
 """Read-only proposals for account status, role and explicit mute deadlines."""
 
 import json
-from typing import Annotated
+from typing import Annotated, Literal
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -19,6 +19,7 @@ from agent.runtime.writes import bound_context
 from agent.scheduling.models import WriteSchedule
 from tools import base
 from tools.result import invalid_args
+from utils.trace import record
 
 TOOLS = {
     "freeze": "freeze_account",
@@ -197,27 +198,34 @@ def prepare_account_role(
 @tool(return_direct=True)
 def prepare_account_mute(
     config: RunnableConfig,
+    start: Annotated[Literal["now", "scheduled"], Field(
+        description="用户要求的生效时间。明确要求未来、到点或延时开始用 scheduled。"
+                    "直接要求现在禁言或未指定未来时间的直接禁言命令用 now。"
+                    "持续时长和开始时间是独立参数。")],
     account_id: targets.Identifier | None = None,
     username: targets.Username | None = None,
     hours: Hours | None = None,
     permanent: StrictBool = False,
     schedule: SkipJsonSchema[WriteSchedule | None] = None,
 ) -> object:
-    """准备即时禁言确认，只读。支持正整数小时或明确选择永久禁言。
-    延后开始的禁言暂不支持。即时禁言资格允许但缺少期限时，省略期限调用本工具，
-    由工具保存待补项并向用户提问。
+    """根据用户要求的开始时间处理禁言，只读。定时请求直接返回不支持。
+    即时禁言支持正整数小时或永久。只有即时请求才可省略期限来保存待补项。
     冻结北京时间到期时刻；永久需明确选择。仅限制评论与留言，不改身份、冻结或登录状态。
     """
-    # Old callers can submit this field. Reject it before preparing an immediate effect.
+    # Preserve rejection of the deprecated schedule field.
     if schedule is not None:
         return invalid_args("定时禁言需明确到期语义，请先使用即时禁言；本次没有创建计划。")
+    record("native", "account_mute_start", mode=start)
+    if start == "scheduled":
+        return TurnResult("当前不支持定时禁言。本次没有排期，也没有准备即时禁言。",
+                          {"blocked": [{"reason": "scheduled_mute_unsupported"}]})
     if permanent and hours is not None:
         return invalid_args("请明确指定正数小时数或永久禁言，二选一；未指定时不会默认永久。")
     if not permanent and hours is None:
         if not available(config) or (account_id is None and username is None):
             return invalid_args("请先明确要禁言的账号。")
         return operation_input.request(config, fields=("hours", "permanent"),
-            fixed={"account_id": account_id, "username": username},
+            fixed={"start": start, "account_id": account_id, "username": username},
             question="即时禁言需要明确期限。要禁言几个小时，还是永久禁言？")
     return _prepare(
         "mute",
