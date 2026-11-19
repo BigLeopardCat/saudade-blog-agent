@@ -81,7 +81,7 @@ def get_gallery_index(
         if cursor is not None and (not ids or type(cursor) is not int or cursor != ids[-1]):
             raise ValueError("Invalid image continuation")
         if not rows:
-            scope = {"r2": "R2 存储", "local": "本地存储"}.get(storage, "图库")
+            scope = {"r2": "R2 存储", "local": "本地存储"}.get(storage or "", "图库")
             return base.empty(f"{scope}在本次筛选范围内没有匹配图片，已到末页。",
                               data={"items": [], "next_cursor": None})
         rows = [_index_item(row, detail) for row in rows]
