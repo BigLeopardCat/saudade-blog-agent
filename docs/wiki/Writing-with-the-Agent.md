@@ -24,4 +24,4 @@
 图库、生图和发布的完整操作步骤由博客维护：
 [写作与发布](https://github.com/BigLeopardCat/Saudade-Blog/wiki/Writing-and-Publishing)、
 [图库与生图](https://github.com/BigLeopardCat/Saudade-Blog/wiki/Gallery-and-Image-Generation)。
-编辑版本和保存边界见[宿主协作契约](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/docs/article-collaboration.md)。
+编辑版本和保存边界见[宿主协作契约](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/docs/article-collaboration.md)。

@@ -30,5 +30,5 @@
 和[部署](docs/deployment.md)。普通模型答错通过 issue 反馈；涉及数据泄露或越权时使用私密通道。
 已获得管理员权限也不代表可以突破确认、账号隔离或运行服务的权限边界。
 
-Rust 宿主的问题按[博客安全政策](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/SECURITY.md)报告。
+Rust 宿主的问题按[博客安全政策](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/SECURITY.md)报告。
 依赖漏洞请说明受影响版本和可达路径；发现凭据泄露时先撤销相关凭据，并私下联系维护者。
