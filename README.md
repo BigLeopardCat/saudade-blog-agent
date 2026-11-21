@@ -46,6 +46,8 @@ uv run --frozen pytest -q tests/test_docs_links.py tests/runtime/test_applicatio
 
 These offline checks do not require a model key or a running blog. A working chat deployment also needs the [blog host](https://github.com/BigLeopardCat/Saudade-Blog), service identity configuration, a model provider, and the state stores required by the enabled features. Follow the [English setup guide](docs/en/getting-started.md); production installation is documented in the [deployment manual (中文)](docs/deployment.md).
 
+Set `AGENT_CONTEXT_TOKENS` to the actual context window of your model endpoint. Input capacity, output reservations, and cumulative task limits have separate roles; see [context and budgets](docs/en/context-and-retrieval.md).
+
 ## Read the engineering
 
 Start with [the system boundary](docs/en/architecture.md), then follow [three engineering cases](docs/en/engineering-cases.md): preserving full-document coverage, recovering a write after a lost response, and evaluating answers against actual evidence. Each case links to implementation and regression tests.
