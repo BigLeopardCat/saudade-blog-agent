@@ -1,3 +1,4 @@
+import {assertWindowRaces} from './chat-window-race.browser.mjs';
 import {assertChatLocale} from './chat-locale.browser.mjs';
 import {assertCompletionInbox} from './completion-inbox.browser.mjs';
 import {assertUserDelivery} from './user-delivery.browser.mjs';
@@ -407,6 +408,7 @@ try {
     assert.ok(bounds.history.right <= bounds.composer.left + 1, JSON.stringify(bounds));
     assert.ok(bounds.messages.width >= 150, JSON.stringify(bounds));
   };
+  await assertWindowRaces({page,reset,streamCount,passed});
   await assertReaderLayout({page,reset,streamCount,passed});
   await assertCompletionInbox({page,reset,streamCount,passed});
   await assertUserDelivery({page,reset,passed});

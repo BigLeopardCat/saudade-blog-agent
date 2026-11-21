@@ -254,9 +254,11 @@
       const article = document.documentElement.dataset.readerArticle;
       if (article && wide.matches) {
         if (!snapshot) {
+          windowUI.settle();
           snapshot = {parent: panel.parentNode, style: panel.style.cssText,
             mode: windowUI.mode(), geometry: windowUI.snapshot(), active: panel.classList.contains('active'), detached: panel.dataset.detached};
           windowUI.setMode('expanded');
+          windowUI.settle();
           panel.dataset.readerDocked = 'true';
           // The mascot is transformed; a viewport dock must live outside that containing block.
           document.body.appendChild(panel);
@@ -305,35 +307,50 @@
     if (!minimize || !restore || !header) return;
     const home = panel.parentNode;
     let expandedHeight = '', expandedSize = 0, dockStyle = '', drag = null, dragged = false;
-    let transitionTimer;
+    let transitionTimer, windowAnimation;
     const mode = () => panel.dataset.windowMode || 'expanded';
+    const cancelTransition = (settle = false) => {
+      const pending = panel.dataset.windowTransition;
+      clearTimeout(transitionTimer);
+      windowAnimation?.cancel();
+      windowAnimation = null;
+      delete panel.dataset.windowTransition;
+      if (settle && pending && mode() === 'expanded') panel.style.height = expandedHeight;
+      // Removing the transition must settle layout before its dimensions become a snapshot.
+      if (pending) void panel.offsetHeight;
+    };
     const fit = () => {
-      if (!panel.classList.contains('active') || mode() === 'docked') return;
+      if (!panel.classList.contains('active') || mode() === 'docked' || panel.dataset.windowTransition) return;
       const rect = panel.getBoundingClientRect();
       const left = Math.max(8, Math.min(rect.left, innerWidth - rect.width - 8));
       const top = Math.max(8, Math.min(rect.top, innerHeight - rect.height - 8));
-      panel.style.left = panel.offsetLeft + left - rect.left + 'px';
-      panel.style.top = panel.offsetTop + top - rect.top + 'px';
-      panel.style.right = panel.style.bottom = 'auto';
+      // A fitting axis keeps its original bottom/right anchor across route and viewport changes.
+      if (Math.abs(left - rect.left) > 0.5) {
+        panel.style.left = panel.offsetLeft + left - rect.left + 'px';
+        panel.style.right = 'auto';
+      }
+      if (Math.abs(top - rect.top) > 0.5) {
+        panel.style.top = panel.offsetTop + top - rect.top + 'px';
+        panel.style.bottom = 'auto';
+      }
     };
     const setMode = next => {
       const previous = mode();
       if (next === previous) return;
       const before = panel.getBoundingClientRect();
       const returnFocus = panel.contains(document.activeElement);
-      clearTimeout(transitionTimer);
+      cancelTransition(true);
       if (previous === 'docked') {
         (panel.dataset.readerDocked ? document.body : home).appendChild(panel);
         panel.style.cssText = dockStyle;
       }
       if (previous === 'expanded') {
-        const rect = panel.getBoundingClientRect();
         expandedHeight = panel.style.height;
-        expandedSize = rect.height;
+        expandedSize = panel.offsetHeight;
         // Anchor the top edge before shrinking a panel originally anchored to its bottom.
         panel.style.top = panel.offsetTop + 'px';
         panel.style.bottom = 'auto';
-        panel.style.height = rect.height + 'px';
+        panel.style.height = expandedSize + 'px';
         panel.dataset.detached = 'true';
       }
       if (next === 'docked') {
@@ -357,7 +374,7 @@
           && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
         const after = panel.getBoundingClientRect();
         const base = next === 'docked' ? 'translateX(-50%) ' : '';
-        panel.animate([
+        windowAnimation = panel.animate([
           { transform: `${base}translate(${before.left - after.left}px, ${before.top - after.top}px) scale(${before.width / after.width}, ${before.height / after.height})`, transformOrigin: 'top left' },
           { transform: base || 'none', transformOrigin: 'top left' },
         ], { duration: 360, easing: 'cubic-bezier(.22, 1, .36, 1)' });
@@ -365,6 +382,8 @@
       // CSS transitions only during a state change, never while following a pointer.
       panel.dataset.windowTransition = 'true';
       transitionTimer = setTimeout(() => {
+        windowAnimation?.cancel();
+        windowAnimation = null;
         delete panel.dataset.windowTransition;
         if (mode() === 'expanded') panel.style.height = expandedHeight;
         fit();
@@ -381,6 +400,7 @@
       if (mode() === 'docked' || e.button !== 0 || e.target.closest('#chat-minimize, #chat-close, .chat-header-tasks')
           || !e.target.closest('.chat-header, .chat-drag-bar-t')) return;
       e.preventDefault(); e.stopPropagation();
+      cancelTransition(true);
       dragged = false;
       panel.dataset.detached = 'true';
       // Capture on the pressed control so a tap still synthesizes its button click.
@@ -407,13 +427,12 @@
     panel.addEventListener('pointerup', endDrag);
     panel.addEventListener('pointercancel', endDrag);
     window.addEventListener('resize', fit);
-    const cancelTransition = () => { clearTimeout(transitionTimer); delete panel.dataset.windowTransition; };
-    return { setMode, mode,
+    return { setMode, mode, settle: () => cancelTransition(true),
       snapshot: () => ({expandedHeight, expandedSize, dockStyle}),
       adoptGeometry: () => {
         cancelTransition();
         expandedHeight = panel.style.height;
-        expandedSize = parseFloat(expandedHeight) || panel.getBoundingClientRect().height;
+        expandedSize = panel.offsetHeight;
       },
       restoreGeometry: saved => { cancelTransition(); ({expandedHeight, expandedSize, dockStyle} = saved); },
     };
