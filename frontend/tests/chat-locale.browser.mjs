@@ -26,6 +26,11 @@ export async function assertChatLocale(page, output) {
     return box.left >= 0 && box.right <= innerWidth + 1 && element.scrollWidth <= element.clientWidth + 1;
   });
   assert.equal(fits, true, 'English controls fit the existing panel');
+  const languageFits = await page.locator('#chat-language-btn').evaluate(button => {
+    const range = document.createRange(); range.selectNodeContents(button);
+    return range.getClientRects().length === 1 && range.getBoundingClientRect().width <= button.clientWidth;
+  });
+  assert.equal(languageFits, true, 'The language label fits on one line in the compact rail');
   await page.screenshot({path: output + '/chat-english.png'});
   assert.equal(await page.evaluate(() => localStorage.getItem('saudade.locale')), 'en');
   const restored = await page.context().browser().newContext({locale: 'zh-CN',
