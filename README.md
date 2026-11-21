@@ -1,40 +1,63 @@
 # Saudade Blog Agent
 
-「泠月喵」是运行在真实博客中的内容与管理 Agent，通过自然语言检索文章、参与写作、管理内容和安排后台任务。项目包含聊天组件与服务端执行链路，接入博客的身份、编辑器、业务数据和事务。
+English · [简体中文](README.zh-CN.md)
 
-模型负责理解目标、选择工具与解释结果；框架和确定性代码负责持久状态、权限、人工确认及执行回执。用户可以在执行中补充要求、暂停任务，并从保存的进度接续。
+An agent application running inside a live blog. **泠月喵 (Lingyue)** helps readers find and understand articles, assists authors in the editor, and prepares permission-controlled content management operations and scheduled tasks.
 
-[在线博客](https://saudade.site/) · [架构](docs/agent-architecture.md) · [部署](docs/deployment.md) · [发布与验收证据](https://github.com/BigLeopardCat/saudade-blog-agent/releases)
+The project connects a Python agent service and a chat widget to a separate Rust blog host. LangChain and LangGraph provide the model/tool loop and durable execution primitives; application code implements trusted identity, context and task budgets, source evidence, approval handling, and product integration.
 
-在线功能受当前账号权限限制；协作编辑与后台管理需要管理员身份。
+[Live blog](https://saudade.site/) · [Technical guide](docs/en/README.md) · [Engineering cases](docs/en/engineering-cases.md) · [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)
 
-## 使用与开发
+The live site reflects the version currently deployed. Account permissions apply; content administration and collaborative editing require an authorized account. Most of the current UI and content is in Chinese.
 
-- 在配套博客的看板娘中阅读站内文章、比较来源，或由已授权账号准备管理操作。[产品范围](docs/product-scope.md) · [用户教程](docs/wiki/Home.md)
-- 从宿主鉴权、模型与工具执行到确认回执，见[架构](docs/agent-architecture.md)。接线与扩展见[代码导读](docs/code-reading.md)和[领域扩展](docs/product-extensions.md)。
+## What you can inspect
 
-## 发布与验收
+| Capability | Implementation and evidence |
+| --- | --- |
+| Article questions and full-document summaries | Versioned public sources, validated passages, and separate full-document coverage checks. [Retrieval and context](docs/en/context-and-retrieval.md) |
+| Tool use under application permissions | Identity comes from the host; discovery, invocation, and approved execution each enforce permissions. [Safety and recovery](docs/en/safety-and-recovery.md) |
+| Stateful conversations and human approval | Checkpoints, explicit interrupts/resume, and a durable write ledger. [Architecture](docs/en/architecture.md) |
+| Bounded execution | Complete-request capacity checks, cumulative task usage, cancellation, and bounded retries. [Context and budgets](docs/en/context-and-retrieval.md) |
+| Evaluation and delivery | Offline contracts, disposable PostgreSQL, browser tests, model-task evaluation, and installation/recovery checks. [Evaluation](docs/en/evaluation.md) |
 
-从 [最新发行版](https://github.com/BigLeopardCat/saudade-blog-agent/releases/latest) 获取 wheel、源码包和锁定依赖。发行说明与 manifest 记录固定提交、配套博客及该版的验证范围。
+```mermaid
+flowchart LR
+    UI[Chat widget] --> Host[Rust blog host]
+    Host --> API[Python application]
+    API --> Loop[LangChain agent / LangGraph]
+    Loop <--> Checkpoint[Execution checkpoint]
+    Loop --> Tools[Authorized domain tools]
+    Tools --> Host
+    Tools --> Sources[Public article retrieval]
+    API --> Approval[Approval and execution ledger]
+    Approval --> Host
+```
 
-[发布证据索引](eval/release-status.md)按版本链接冻结的结果和已知限制。HTTP 功能回归覆盖读取、写入准备和权限边界。数据库执行、浏览器交互与恢复由各自的契约检查验证。语义评审用于定位答复质量问题，持续观测见[评测与观测](docs/eval-observability.md)。
+## Start locally
 
-## 开发起步
+Use Python 3.12+ and uv in an isolated development environment:
 
-需要 Python 3.12+ 与 uv。在干净检出中执行 `uv sync --locked` 安装依赖，执行 `uv run --frozen pytest -q` 跑离线检查。完整开发环境、宿主接线和就绪核对见[本地起步](docs/getting-started.md)，生产安装走[部署手册](docs/deployment.md)。
+```sh
+git clone https://github.com/BigLeopardCat/saudade-blog-agent.git
+cd saudade-blog-agent
+uv sync --locked
+uv run --frozen pytest -q tests/test_docs_links.py tests/runtime/test_application_boundaries.py
+```
 
-接入模型时，将 `AGENT_CONTEXT_TOKENS` 设为当前模型端点的实际上下文窗口。输入、输出和累计预算的关系见[会话与记忆](docs/conversation-memory.md#预算)。
+These offline checks do not require a model key or a running blog. A working chat deployment also needs the [blog host](https://github.com/BigLeopardCat/Saudade-Blog), service identity configuration, a model provider, and the state stores required by the enabled features. Follow the [English setup guide](docs/en/getting-started.md); production installation is documented in the [deployment manual (中文)](docs/deployment.md).
 
-## 文档
+## Read the engineering
 
-[文档索引](docs/README.md) · [Wiki 教程](https://github.com/BigLeopardCat/saudade-blog-agent/wiki) · [本地起步](docs/getting-started.md) · [配置](docs/configuration.md) · [代码导读](docs/code-reading.md) · [排障](docs/troubleshooting.md)
+Start with [the system boundary](docs/en/architecture.md), then follow [three engineering cases](docs/en/engineering-cases.md): preserving full-document coverage, recovering a write after a lost response, and evaluating answers against actual evidence. Each case links to implementation and regression tests.
 
-Wiki 按阅读、确认、写作和后台计划组织教程，[源稿](docs/wiki/Home.md)随 PR 维护。
-架构、接口、配置和运维契约保留在仓库，按所用版本查阅；博客安装与站点管理见
-[博客文档](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/docs/README.md)。
+The application does not claim arbitrary writes execute exactly once, that a checkpoint keeps a disconnected chat running, or that reading every source character guarantees a faithful summary. Current boundaries and tradeoffs are part of the guides. Release-specific results belong to the [evidence index](eval/release-status.md), rather than a floating README score.
 
-## 参与与许可
+## Documentation and contribution
 
-提交规范及验证入口见 [CONTRIBUTING.md](CONTRIBUTING.md)，计划见 [ROADMAP.md](ROADMAP.md)，安全问题见 [SECURITY.md](SECURITY.md)。
+[English documentation](docs/en/README.md) · [中文文档](docs/README.md) · [Code reading (中文)](docs/code-reading.md) · [Wiki tutorials (中文)](https://github.com/BigLeopardCat/saudade-blog-agent/wiki) · [Contribution rules](CONTRIBUTING.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
-代码按 [MIT](LICENSE) 发布。角色模型、贴图及美术资源使用单独的 [CC BY-NC-SA 4.0 许可](frontend/ASSETS-LICENSE.md)；第三方依赖见 [frontend/THIRD-PARTY.md](frontend/THIRD-PARTY.md)。
+English guides explain the core paths; the Chinese reference documents retain detailed operational and protocol contracts. Follow the documentation for the source revision or release you use. English contributions are welcome; the contribution guide describes the shared checks and commit format.
+
+## License
+
+Code is [MIT licensed](LICENSE). Character models, textures, and artwork have a separate [CC BY-NC-SA 4.0 license](frontend/ASSETS-LICENSE.md); see the [third-party notices](frontend/THIRD-PARTY.md) for other assets and dependencies.

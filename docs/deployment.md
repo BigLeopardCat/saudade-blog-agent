@@ -1,6 +1,6 @@
 # 生产部署
 
-Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 PostgreSQL 16，需要 Git、uv、curl、OpenSSL 和 util-linux 的 `flock`。浏览器经 [Saudade Blog](https://github.com/BigLeopardCat/Saudade-Blog) 登录和转发聊天；业务 API 由宿主提供。全新安装也可使用宿主的[一键部署与 Docker Compose](https://github.com/BigLeopardCat/Saudade-Blog/tree/cn_sora_blog/deploy)，下文保留现有 systemd 服务的安装、独立升级与回滚流程。
+Linux + systemd 的博客集成部署参考 Ubuntu 24.04、Python 3.12 和 PostgreSQL 16，需要 Git、uv、curl、OpenSSL 和 util-linux 的 `flock`。浏览器经 [Saudade Blog](https://github.com/BigLeopardCat/Saudade-Blog) 登录和转发聊天；业务 API 由宿主提供。全新安装也可使用宿主的[一键部署与 Docker Compose](https://github.com/BigLeopardCat/Saudade-Blog/tree/main/deploy)，下文保留现有 systemd 服务的安装、独立升级与回滚流程。
 
 首次安装与升级是不同操作。下文初始化命令只用于新安装；已有站点不要重建数据库、覆盖配置或重新初始化 `current`。
 
@@ -28,7 +28,7 @@ SAUDADE_IGNORE_ENV_FILE=1 .venv/bin/python -I -c 'from agent.main import app; pr
 导入通过只证明包及依赖可加载，不证明数据库、模型或宿主已就绪。
 博客集成服务继续按下文的固定源码/systemd 或 Compose 流程安装，
 wheel 不包含 systemd 发布脚本和博客服务。容器快速安装包由配套博客 Release 提供，
-可跳过 Rust 与前端编译，见[预构建安装](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/prebuilt.md)。
+可跳过 Rust 与前端编译，见[预构建安装](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/deploy/prebuilt.md)。
 
 ## 版本与配置边界
 
@@ -49,7 +49,7 @@ wheel 不包含 systemd 发布脚本和博客服务。容器快速安装包由�
 
 本仓根目录的 `Dockerfile` 构建 Python 3.12、锁定生产依赖的 Agent 镜像，以 UID/GID `10002:10002` 运行，入口 `agent.main:app`，内部端口 8010。完整提交通过构建参数 `REVISION` 写入 `DEPLOY_SHA`，供 `/version` 核对；凭据和 `.env` 不进入镜像。容器 CI 检查无网络、无凭据时的导入和镜像用户。
 
-完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。 scheduler 的 Compose 健康检查在 DBOS 初始化及队列注册完成后检查进程标记；它证明启动与进程存活，不证明数据库持续可用或任务处理时延。探针不调用模型和博客接口，原生 systemd worker 不启用容器标记。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
+完整安装由[博客 Compose 指南](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/deploy/docker/README.md)统一编排，分别提供 Agent HTTP 与可选 scheduler，连接独立 Agent PostgreSQL。不要将 8010 发布到公网。持久目录挂载 `/var/lib/saudade-agent`，日志和临时缓存由 Compose 提供可写挂载。 scheduler 的 Compose 健康检查在 DBOS 初始化及队列注册完成后检查进程标记；它证明启动与进程存活，不证明数据库持续可用或任务处理时延。探针不调用模型和博客接口，原生 systemd worker 不启用容器标记。基础镜像不含可选 tokenizer、embedding 或 GPU 服务；启用检索前按本页相应章节配置。
 
 容器网络中配置 `BLOG_INTERNAL_API_BASE=http://backend:3000/api/public` 供服务器请求，`BLOG_API_BASE=https://blog.example.com/api/public` 仍决定公开导航。已有原生部署不填写内部覆盖值时维持原行为。只读根文件系统、运行凭据和卷由宿主编排负责，不在镜像启动时执行全量升级或覆盖配置。
 
@@ -67,7 +67,7 @@ DEPLOY_USER="$(id -un)"
 AGENT_REV="$(git -C "$AGENT_SOURCE" rev-parse HEAD)"
 ```
 
-`APP_DIR` 是博客发布目录，包含 `target/release/saudade_blog_bin` 和 `logs`，不是任意源码父目录。博客服务生成器是集成部署的唯一模板入口。先阅读其[账号与沙箱说明](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/service-isolation.md)，由管理员创建账号和状态目录：
+`APP_DIR` 是博客发布目录，包含 `target/release/saudade_blog_bin` 和 `logs`，不是任意源码父目录。博客服务生成器是集成部署的唯一模板入口。先阅读其[账号与沙箱说明](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/deploy/service-isolation.md)，由管理员创建账号和状态目录：
 
 ```sh
 sudo systemd-sysusers "$BLOG_SOURCE/deploy/systemd/saudade.sysusers"
@@ -236,7 +236,7 @@ Agent API 始终验证宿主断言。升级时删除退役的 `AGENT_REQUIRE_ASS
 
 主动回滚时将 `AGENT_REV` 换成受当前数据库和配置支持的旧提交，再执行相同发布命令。不修改已发布目录或对正在服务的 venv 执行 `uv sync`，不删除未完成计划和执行账。发布脚本不执行业务数据库迁移；不兼容变更须另备迁移与回退步骤。
 
-已有安装调整账号/配置来源时，按博客[账号隔离](https://github.com/BigLeopardCat/Saudade-Blog/blob/cn_sora_blog/deploy/service-isolation.md#已有安装更新)审阅旧覆盖文件，保留站点资源限制及 BGE 依赖，不叠加排序更靠后的环境覆盖。更换模型 key 只改 runtime 文件，重启 HTTP 与已启用的 scheduler，再做小批量验证。
+已有安装调整账号/配置来源时，按博客[账号隔离](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/deploy/service-isolation.md#已有安装更新)审阅旧覆盖文件，保留站点资源限制及 BGE 依赖，不叠加排序更靠后的环境覆盖。更换模型 key 只改 runtime 文件，重启 HTTP 与已启用的 scheduler，再做小批量验证。
 
 ## 日志、容量与故障处理
 
