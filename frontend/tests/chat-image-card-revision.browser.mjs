@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export async function assertImageCardRevision({browser,origin,requests,setMode,resetState,appendReply}) {
-  resetState();const context=await browser.newContext({viewport:{width:1280,height:900}});
+  resetState();const context=await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900}});
   const page=await context.newPage();
   try {
     await page.goto(origin);await page.waitForFunction(()=>!!window.__chatTest?.ctx.state.conv);
@@ -15,6 +15,14 @@ export async function assertImageCardRevision({browser,origin,requests,setMode,r
     await page.locator('#chat-ask textarea').fill('Human edited exact prompt');
     await page.locator('#chat-ask select[aria-label="模型"]').selectOption('two');
     assert.equal(await page.locator('#chat-ask [data-ask-value="yes"]').isDisabled(),true);
+    const approval = await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk.token);
+    await page.getByRole('button', {name:'Switch to English', exact:true}).click();
+    assert.equal(await page.locator('#chat-ask textarea').inputValue(), 'Human edited exact prompt');
+    assert.equal(await page.locator('#chat-ask select[aria-label="Model"]').inputValue(), 'two');
+    assert.equal(await page.locator('#chat-ask [data-ask-value="yes"]').isDisabled(),true);
+    assert.equal(await page.evaluate(() => window.__chatTest.ctx.state.pendingAsk.token), approval);
+    assert.equal(requests.filter(row=>row.path==='/api/chat/stream').length, streams);
+    await page.getByRole('button', {name:'切换为中文', exact:true}).click();
     await page.getByRole('button',{name:'更新预览',exact:true}).click();
     await page.waitForFunction(()=>window.__chatTest.ctx.state.pendingAsk?.token==='offline-revised-signature');
     assert.equal(await page.locator('#chat-ask.active textarea').inputValue(),'Human edited exact prompt');

@@ -15,7 +15,7 @@ const renderer=await build({
   define:{'import.meta.env':'{}','process.env.NODE_ENV':'"production"'},
 });
 const browser=await chromium.launch({headless:true,args:['--no-sandbox']});
-const context=await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
+const context=await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900},reducedMotion:'reduce'});
 await context.addInitScript(renderer.outputFiles[0].text);
 context.setDefaultTimeout(30000);
 const requests=[],errors=[];

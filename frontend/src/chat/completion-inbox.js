@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 // Completion metadata is polled while visible; read receipts bind displayed report versions.
 export const completionTurnId = async (kind, id, version) => {
     const bytes = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${id}:${version}`));
@@ -26,8 +27,7 @@ export function createCompletionInbox(ctx, send, engine) {
         const launcher = ctx.dom.waifu?.querySelector('#waifu-tool-hitokoto');
         if (launcher) {
             launcher.toggleAttribute('data-unread', snapshot.unread > 0);
-            launcher.setAttribute('aria-label', snapshot.unread > 0
-                ? `对话，${snapshot.unread} 条未读任务结果` : '对话');
+            ui.attr(launcher, 'aria-label', (snapshot.unread > 0 ? "对话，{0} 条未读任务结果" : "对话"), (snapshot.unread > 0 ? {"0": snapshot.unread} : {}));
         }
         const counts = new Map(snapshot.conversations.map(row => [String(row.id), row.unread]));
         const count = counts.get(String(ctx.state.conv)) || 0;
@@ -35,8 +35,8 @@ export function createCompletionInbox(ctx, send, engine) {
             badge.hidden = !count;
             const readable = reportedHere().length;
             badge.disabled = !readable;
-            badge.title = readable ? `将 ${readable} 条已汇报结果标为已读` : '等待任务结果汇报';
-            badge.setAttribute('aria-label', `${count} 条当前会话未读任务结果，${badge.title}`);
+            ui.attr(badge, "title", (readable ? "将 {0} 条已汇报结果标为已读" : "等待任务结果汇报"), (readable ? {"0": readable} : {}));
+            ui.attr(badge, 'aria-label', "{0} 条当前会话未读任务结果，{1}", {"0": count, "1": badge.title});
         }
         for (const row of panel.querySelectorAll('.conv-row')) {
             row.classList.toggle('has-unread-result', !!counts.get(row.dataset.id));

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 
 export async function assertImageJobReports({browser, origin}) {
-  const context = await browser.newContext({viewport:{width:1280,height:900}});
+  const context = await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900}});
   const page = await context.newPage();
   const id='6b9e2bf1-56af-428c-8177-e3ad0641e036', version='a'.repeat(64);
   let status='generating', reported=false;

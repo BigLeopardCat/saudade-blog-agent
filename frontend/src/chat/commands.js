@@ -43,7 +43,7 @@ export function createCommandDispatcher({ browserActions, roundConvId, msg, proc
                 if (!navOk || !hostOk) {
                     console.warn('[agent] 已取消跳转到非博客页面: ' + navUrl);
                     if (contentSpan)
-                        contentSpan.insertAdjacentHTML('beforeend', '<div class="nav-skip-note">（系统：该地址不是博客页面，已取消自动跳转）</div>');
+                        contentSpan.insertAdjacentHTML('beforeend', "<div class=\"nav-skip-note\"><span data-ui-text=\"（系统：该地址不是博客页面，已取消自动跳转）\">（系统：该地址不是博客页面，已取消自动跳转）</span></div>");
                     c.__done = true;
                     return true;
                 }

@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 export function createAppearance(ctx) {
     const chatPanel = ctx.dom.chatPanel;
     const callEffect = name => {
@@ -48,7 +49,7 @@ export function createAppearance(ctx) {
         const starImg = document.createElement('img');
         starImg.src = '/icons/星星.png';
         starImg.style.cssText = 'width:25px;height:25px;cursor:pointer;display:block;';
-        starLi.title = '特效';
+        ui.attr(starLi, "title", "特效", {});
         starLi.appendChild(starImg);
         starBox.appendChild(starLi);
         const effects = [

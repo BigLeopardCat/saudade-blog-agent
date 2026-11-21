@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 // The receipt records server acceptance of the input.
 export function createUserDelivery(ctx, engine) {
     const messages = ctx.dom.messages;
@@ -17,7 +18,7 @@ export function createUserDelivery(ctx, engine) {
             }
             const text = state === 'read' ? '已读' : state === 'pending' ? '发送中…' : '未确认送达';
             if (receipt.textContent !== text) receipt.textContent = text;
-            receipt.title = state === 'read' ? '服务器已接收这条消息' : '';
+            ui.attr(receipt, "title", (state === 'read' ? "服务器已接收这条消息" : ""), (state === 'read' ? {} : {}));
         }
     };
     const set = (turn, delivery) => {

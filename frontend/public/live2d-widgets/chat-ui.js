@@ -1,6 +1,11 @@
 /* Presentation and input feedback; business requests remain in stream/session. */
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, nodeText: (el, key, values) => {el.textContent = t(key, values); return el;}, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   const shouldSubmit = e => e.key === 'Enter' && !e.shiftKey && !e.ctrlKey
     && !e.metaKey && !e.altKey && !e.isComposing && e.keyCode !== 229 && !e.repeat;
   const deriveState = ({ isSending, remoteBusy, approvalBusy, hasContent, pausedTask, pausing, resuming,
@@ -47,6 +52,7 @@
     const enhancedMessages = new WeakSet();
     let replyFromComposer = false, focusMoved = false;
     const setAttr = (el, name, value) => {
+      if (el && ['aria-label', 'title'].includes(name)) { ui.attr(el, name, value); return; }
       if (el && el.getAttribute(name) !== String(value)) el.setAttribute(name, value);
     };
     const resize = () => {
@@ -86,8 +92,8 @@
     const pauseButton = document.createElement('button');
     pauseButton.type = 'button'; pauseButton.className = 'chat-pause-btn';
     pauseButton.hidden = true; pauseButton.innerHTML = stopIcon;
-    pauseButton.setAttribute('aria-label', '暂停当前任务');
-    pauseButton.title = '暂停当前任务';
+    ui.attr(pauseButton, 'aria-label', "暂停当前任务", {});
+    ui.attr(pauseButton, "title", "暂停当前任务", {});
     pauseButton.addEventListener('click', () => ctx.ui.pauseTask?.());
     sendBtn.parentNode.insertBefore(pauseButton, sendBtn);
     const addCopyButtons = () => {
@@ -99,7 +105,7 @@
         button.type = 'button'; button.className = 'chat-copy-reply';
         const resetCopy = () => {
           button.innerHTML = copyIcon;
-          button.setAttribute('aria-label', '复制这条回复'); button.title = '复制回复';
+          ui.attr(button, 'aria-label', "复制这条回复", {}); ui.attr(button, "title", "复制回复", {});
           delete button.dataset.copied;
         };
         resetCopy();
@@ -108,7 +114,7 @@
           try {
             await navigator.clipboard.writeText(copyText(content));
             button.innerHTML = copiedIcon;
-            button.setAttribute('aria-label', '已复制回复'); button.title = '已复制';
+            ui.attr(button, 'aria-label', "已复制回复", {}); ui.attr(button, "title", "已复制", {});
             button.dataset.copied = 'true';
           } catch (_) {
             notify('复制失败，请选中文本复制', 'error');
@@ -147,7 +153,7 @@
       imageButton.disabled = !['ready', 'paused'].includes(state.phase);
       const showNotice = Date.now() < noticeUntil;
       const statusText = showNotice ? notice : state.status;
-      if (status.textContent !== statusText) status.textContent = statusText;
+      ui.text(status, statusText);
       setAttr(status, 'data-phase', showNotice ? noticeTone : state.phase);
       setAttr(status, 'data-visible', !!statusText && (showNotice || ['remote', 'approval', 'steering_sync'].includes(state.phase)));
       setAttr(listButton, 'aria-expanded', panel.classList.contains('conv-open'));
@@ -164,9 +170,10 @@
           amend: '已修改要求', cancelling: '正在撤销', used: '确认卡已使用', dismiss: '卡片已收起' };
         const title = titles[askBox.dataset.result]
           || (askBox.dataset.askState === 'pending' ? '正在确认' : '需要你的确认');
-        if (heading.textContent !== title) heading.textContent = title;
+        ui.text(heading, title);
       }
       ctx.ui.refreshTaskStatus?.();
+      ui.localize(panel);
       addCopyButtons();
     }
     const schedule = () => {
@@ -189,8 +196,8 @@
       input.value = starter.dataset.chatPrompt;
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.focus({ preventScroll: true });
-      const slot = input.value.indexOf('……');
-      if (slot >= 0) input.setSelectionRange(slot, slot + 2);
+      const slot = input.value.match(/…{1,2}/);
+      if (slot) input.setSelectionRange(slot.index, slot.index + slot[0].length);
     });
     // Returning focus is optional; closing the panel or using the page wins.
     ctx.ui.beginReply = () => {
@@ -213,6 +220,23 @@
     };
     ctx.ui.resizeInput = () => { resize(); refresh(); };
     ctx.ui.refreshComposer = refresh;
+    const languageButton = panel.querySelector('#chat-language-btn');
+    const syncLanguage = () => {
+      if (languageButton && g.SaudadeI18n) {
+        const english = g.SaudadeI18n.locale() === 'en';
+        ui.text(languageButton, (english ? "中文" : "EN"), (english ? {} : {}));
+        languageButton.lang = english ? 'zh-CN' : 'en';
+        ui.attr(languageButton, 'aria-label', (english ? "切换为中文" : "Switch to English"), (english ? {} : {}));
+      }
+      resize(); refresh();
+    };
+    languageButton?.addEventListener('click', () => {
+      if (g.SaudadeI18n) g.SaudadeI18n.setLocale(g.SaudadeI18n.locale() === 'en' ? 'zh-CN' : 'en');
+    });
+    g.addEventListener('saudade:locale-change', syncLanguage);
+    g.addEventListener('storage', event => {
+      if (event.key === 'saudade.locale' || event.key === null) syncLanguage();
+    });
     ctx.ui.notify = notify;
     const observer = new MutationObserver(schedule);
     observer.observe(messages, { childList: true, subtree: true, attributes: true,
@@ -220,7 +244,7 @@
     observer.observe(sendBtn, { attributes: true, attributeFilter: ['disabled', 'class'] });
     observer.observe(panel, { attributes: true, attributeFilter: ['class'] });
     observer.observe(panel.querySelector('#chat-img-preview'), { childList: true });
-    resize(); refresh();
+    syncLanguage();
   };
   function initReaderLayout(panel, windowUI) {
     if (!windowUI) return;
@@ -322,12 +346,12 @@
         if (child !== header && !child.classList.contains('chat-drag-bar-t')) child.inert = collapsed;
       });
       restore.hidden = false;
-      restore.setAttribute('aria-label', collapsed ? '展开对话' : '收起为顶部栏');
+      ui.attr(restore, 'aria-label', (collapsed ? "展开对话" : "收起为顶部栏"), (collapsed ? {} : {}));
       restore.setAttribute('aria-expanded', String(!collapsed));
-      restore.title = collapsed ? '单击展开，拖动移动' : '单击收起为顶部栏，拖动移动';
-      restore.textContent = collapsed ? '展开对话' : '收起对话';
+      ui.attr(restore, "title", (collapsed ? "单击展开，拖动移动" : "单击收起为顶部栏，拖动移动"), (collapsed ? {} : {}));
+      ui.text(restore, (collapsed ? "展开对话" : "收起对话"), (collapsed ? {} : {}));
       minimize.hidden = next === 'docked';
-      header.title = collapsed ? '单击展开，拖动移动' : '';
+      ui.attr(header, "title", (collapsed ? "单击展开，拖动移动" : ""), (collapsed ? {} : {}));
       panel.style.height = collapsed ? '36px' : expandedSize + 'px';
       if ((next === 'docked' || previous === 'docked')
           && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {

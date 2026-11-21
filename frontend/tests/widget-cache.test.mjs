@@ -33,7 +33,7 @@ test('child resources inherit the pinned host revision and change with a new rel
   const urls = await Promise.all(versions.map(version => firstResource(
     `https://example.invalid/live2d-widgets/boot.js?v=${version}`)));
   for (let index = 0; index < versions.length; index++) {
-    assert.equal(urls[index].pathname, '/live2d-widgets/chat-core.js');
+    assert.equal(urls[index].pathname, '/live2d-widgets/locale-messages.js');
     assert.equal(urls[index].searchParams.get('v'), versions[index]);
   }
   assert.notEqual(urls[0].href, urls[1].href);

@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 /** @param {Record<string, any> & {replaceAsk(previous: object, data: object, note: string): boolean}} approval */
 export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput) {
     const { input, askBox, askBtns, askOtherInput, askOtherSend } = ctx.dom;
@@ -115,7 +116,7 @@ export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput
         ctx.state.approvalBusy = request;
         controls.forEach(control => {control.disabled = true;});
         askBtns.querySelectorAll('button').forEach(button => {button.disabled = true;});
-        status.textContent = '正在更新预览，尚未调用生图 API…';
+        ui.text(status, "正在更新预览，尚未调用生图 API…", {});
         try {
             const response = await fetch('/api/chat/confirmation/image-revision', {
                 method:'POST', headers:{'Content-Type':'application/json', Authorization:'Bearer ' + login},
@@ -131,7 +132,7 @@ export function bindConfirmationControls(ctx, approval, sendMessage, resizeInput
                 throw new Error('修改结果已保存，请刷新卡片后核对。');
         } catch (error) {
             if (ctx.state.conv === conv && ctx.state.pendingAsk?.token === ask.token) {
-                status.textContent = error.message || '未能核对修改结果，请重试或刷新卡片。';
+                ui.text(status, "{0}", {"0": error.message || '未能核对修改结果，请重试或刷新卡片。'});
                 controls.forEach(control => {control.disabled = false;});
             }
         } finally {

@@ -1,3 +1,4 @@
+import {assertChatLocale} from './chat-locale.browser.mjs';
 import {assertCompletionInbox} from './completion-inbox.browser.mjs';
 import {assertUserDelivery} from './user-delivery.browser.mjs';
 import {assertReaderLayout} from './reader-layout.browser.mjs';
@@ -319,7 +320,7 @@ try {
     args: ['--no-sandbox'],
   });
   await assertWidgetTools(browser);
-  const context = await browser.newContext({ viewport: { width: 1440, height: 1000 },
+  const context = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1440, height: 1000 },
     permissions: ['clipboard-read', 'clipboard-write'], reducedMotion: 'reduce' });
   await context.addInitScript(() => {
     localStorage.clear(); sessionStorage.clear();
@@ -412,6 +413,7 @@ try {
   await assertChatScroll({page,reset,passed});
   if (!process.argv.includes('--scroll-only')) {
   await reset();
+  await assertChatLocale(page, output); passed('language switch preserves draft, source text and conversation; restores preference');
   assert.equal(await page.locator('#chat-send').isDisabled(), true);
   assert.equal(await page.locator('#chat-empty').isVisible(), true);
   assert.equal(await page.locator('[data-chat-prompt]').count(), 3);
@@ -635,7 +637,7 @@ try {
   assert.equal(await page.evaluate(() => window.__darkMode), true);
   passed('appearance applies actual local state before resuming the same task');
 
-  const fullContext = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
+  const fullContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 900 }, reducedMotion: 'reduce' });
   const fullPage = await fullContext.newPage();
   await fullPage.goto(origin);
   await fullPage.waitForFunction(() => !!window.__chatTest?.ctx.state.conv);
@@ -654,7 +656,7 @@ try {
   assert.deepEqual(fullProgress, ['正在调用工具：navigate_page', '从已保存的进度继续']);
   await fullContext.close();
   passed('full-page navigation restores the pending task and narrates from the new page');
-  const reloadContext = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  const reloadContext = await browser.newContext({ locale: 'zh-CN', viewport: { width: 1280, height: 900 } });
   const reloadPage = await reloadContext.newPage();
   reloadPage.on('pageerror', error => { errors.push(String(error)); console.error('Reload page error:',String(error)); });
   await reloadPage.goto(origin);
@@ -686,7 +688,7 @@ try {
   await reloadContext.close();
   passed('reload after browser acknowledgement resumes the checkpoint and completes the reply');
   for (const kind of ['own','different','peer','expired']) {
-    const leaseContext = await browser.newContext({viewport:{width:1280,height:900}});
+    const leaseContext = await browser.newContext({ locale: 'zh-CN',viewport:{width:1280,height:900}});
     await leaseContext.addInitScript(kind => {
       const token='fixture.'+btoa(JSON.stringify({sub:7}))+'.signature';
       localStorage.setItem('tokenKey',token);

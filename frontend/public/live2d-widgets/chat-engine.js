@@ -1,6 +1,11 @@
 /* Conversation state, history rendering and synchronization across tabs. */
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   g.__waifuEngine = function (ctx) {
     if (!ctx || !ctx.core || !ctx.render) {
       console.error('[chat-engine] 缺少 ctx.core/ctx.render——chat-core/chat-render 未加载或加载顺序错误');
@@ -128,7 +133,7 @@
         summary.className = 'agent-process-head';
         const label = document.createElement('span');
         label.className = 'agent-process-label';
-        label.textContent = '任务进展';
+        ui.text(label, "任务进展", {});
         const count = document.createElement('span');
         count.className = 'agent-process-count';
         summary.appendChild(label);
@@ -136,7 +141,7 @@
         const body = document.createElement('div');
         body.className = 'agent-process-body';
         body.tabIndex = 0;
-        body.setAttribute('aria-label', '任务执行记录');
+        ui.attr(body, 'aria-label', "任务执行记录", {});
         box.appendChild(summary);
         box.appendChild(body);
         return box;
@@ -413,7 +418,7 @@
         div.className = 'chat-msg agent';
         const label = document.createElement('span');
         label.className = 'msg-label';
-        label.textContent = '泠月喵: ';
+        ui.text(label, "泠月喵: ", {});
         const content = document.createElement('span');
         content.className = 'msg-text';
         if (streaming) content.classList.add('msg-streaming'); // 流式纯文本阶段用 pre-line 换行
@@ -609,9 +614,9 @@
       };
       const userLabel = () => {
         const uid = getUserId();
-        if (!uid) return '你: ';
+        if (!uid) return ui.t('你: ');
         // 昵称与 UID 都给出：昵称是给人认的，UID 是给人核对的（同名账号靠它分得开）
-        return (rememberedName() || '用户' + uid) + '（UID:' + uid + '）: ';
+        return (rememberedName() || ui.t('用户') + uid) + '（UID:' + uid + '）: ';
       };
       const loadLocalHistory = () => {
         try { sessionStorage.removeItem('chat_history_backup'); sessionStorage.removeItem('chat_history_backup_key'); } catch(e) {/* ignore */}
@@ -915,16 +920,13 @@
                 if (entry.kind === 'stopped') {
                   const heading = document.createElement('div');
                   heading.className = 'chat-task-heading';
-                  heading.textContent = '任务已暂停';
+                  ui.text(heading, "任务已暂停", {});
                   failedNoteEl.appendChild(heading);
                 }
                 const line = document.createElement('div');
                 line.className = 'chat-msg-failed-text';
                 if (entry.kind === 'stopped') line.className = 'chat-msg-failed-text chat-task-description';
-                line.textContent = entry.kind === 'stopped'
-                  ? (entry.task_id ? '可以继续任务，也可以输入新的要求。' : '可以重新发送或编辑这条消息。')
-                  : '⏳ 该条消息未收到回复'
-                    + (entry.reason ? '：' + entry.reason : '（可能已超时或网络中断）');
+                ui.text(line, (entry.kind === 'stopped' ? "{0}" : "⏳ 该条消息未收到回复{0}"), (entry.kind === 'stopped' ? {"0": (entry.task_id ? '可以继续任务，也可以输入新的要求。' : '可以重新发送或编辑这条消息。')} : {"0": (entry.reason ? '：' + entry.reason : '（可能已超时或网络中断）')}));
                 failedNoteEl.appendChild(line);
                 // The stream layer mounts actions and verifies the original user message.
                 const slot = document.createElement('div');
@@ -963,7 +965,7 @@
         div.dataset.mtext = item.text;
         const label = document.createElement('span');
         label.className = 'msg-label';
-        label.textContent = item.type === 'user' ? userLabel() : '泠月喵: ';
+        ui.text(label, (item.type === 'user' ? "{0}" : "泠月喵: "), (item.type === 'user' ? {"0": userLabel()} : {}));
         const content = document.createElement('span');
         content.className = 'msg-text';
         let box = null;
@@ -978,14 +980,14 @@
               const im = document.createElement('img');
               im.className = 'msg-img';
               im.src = src;
-              im.alt = '图片';
+              ui.attr(im, "alt", "图片", {});
               grid.appendChild(im);
             }
             bubble.appendChild(grid);
           } else if (item.hasImg) {
             const ph = document.createElement('div');
             ph.className = 'msg-img-placeholder';
-            ph.innerHTML = '<svg class="msg-img-expired-icon" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg"><path d="M821.6 120.93333333H195.4c-74.1 0-134.2 60.1-134.2 134.2v492c0 74.1 60.1 134.2 134.2 134.2h626.2c74.1 0 134.2-60.1 134.2-134.2v-492c0-74.1-60.1-134.2-134.2-134.2zM251.3 255.13333333c30.9 0 55.9 25 55.9 55.9s-25 55.9-55.9 55.9-55.9-25-55.9-55.9 25-55.9 55.9-55.9z m614.6 559.1H153.3c-37.3 0-58.2-43.1-35.1-72.4L302.1 508.33333333c17.9-22.7 52.4-22.7 70.3 0l76.5 97.2 148.6-260c17.2-30.1 60.5-30.1 77.7 0L904.8 747.33333333c17 29.8-4.5 66.9-38.9 66.9z" fill="#A1A0A5"></path></svg><span class="msg-img-expired-text">ⓘ图片已过期</span>';
+            ph.innerHTML = "<svg class=\"msg-img-expired-icon\" viewBox=\"0 0 1024 1024\" xmlns=\"http://www.w3.org/2000/svg\"><path d=\"M821.6 120.93333333H195.4c-74.1 0-134.2 60.1-134.2 134.2v492c0 74.1 60.1 134.2 134.2 134.2h626.2c74.1 0 134.2-60.1 134.2-134.2v-492c0-74.1-60.1-134.2-134.2-134.2zM251.3 255.13333333c30.9 0 55.9 25 55.9 55.9s-25 55.9-55.9 55.9-55.9-25-55.9-55.9 25-55.9 55.9-55.9z m614.6 559.1H153.3c-37.3 0-58.2-43.1-35.1-72.4L302.1 508.33333333c17.9-22.7 52.4-22.7 70.3 0l76.5 97.2 148.6-260c17.2-30.1 60.5-30.1 77.7 0L904.8 747.33333333c17 29.8-4.5 66.9-38.9 66.9z\" fill=\"#A1A0A5\"></path></svg><span class=\"msg-img-expired-text\"><span data-ui-text=\"ⓘ图片已过期\">ⓘ图片已过期</span></span>";
             bubble.appendChild(ph);
           }
           content.appendChild(bubble);

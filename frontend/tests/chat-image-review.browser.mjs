@@ -80,7 +80,7 @@ export async function assertImageReview({page, origin, output}) {
 }
 
 export async function assertWorkRecovery({browser, origin, resetState, setMode}) {
-  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  const context=await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900}});
   const page=await context.newPage();
   // The main layout fixture clears storage on every navigation; recovery needs real persistence.
   await page.goto(origin);

@@ -1,6 +1,11 @@
 /* Supplemental text belongs to the active task, never a second chat stream. */
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   g.__waifuSteering = (ctx, engine) => {
     const { input, messages, chatPanel } = ctx.dom;
     const actor = () => {
@@ -35,7 +40,7 @@
         line.appendChild(label);
         if (entry.status === 'not_applied') {
           const restore = document.createElement('button');
-          restore.type = 'button'; restore.textContent = '放回输入框';
+          restore.type = 'button'; ui.text(restore, "放回输入框", {});
           restore.addEventListener('click', () => {
             if (input.value.trim() && input.value.trim() !== entry.text) {
               ctx.ui.notify?.('请先处理输入框里的草稿'); return;

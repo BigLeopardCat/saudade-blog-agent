@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 
 export async function assertWidgetTools(browser) {
-  const page = await browser.newPage({reducedMotion: 'reduce', viewport: {width: 1440, height: 900}});
+  const page = await browser.newPage({locale: 'zh-CN',reducedMotion: 'reduce', viewport: {width: 1440, height: 900}});
   const renderer = await readFile(new URL('../public/live2d-widgets/renderer.js', import.meta.url), 'utf8');
   const css = await readFile(new URL('../public/live2d-widgets/widget.css', import.meta.url), 'utf8');
   const errors = [];
