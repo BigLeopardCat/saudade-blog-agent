@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 
 export async function assertBootstrapRecovery({browser,origin,requests,completedNavigations}) {
-  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  const context=await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900}});
   const task='bootstrap-resume';
   completedNavigations.add(task);
   await context.addInitScript(task=>{

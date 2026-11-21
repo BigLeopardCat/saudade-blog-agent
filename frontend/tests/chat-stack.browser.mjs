@@ -9,7 +9,7 @@ const provider = process.env.CHAT_STACK_PROVIDER;
 const output = process.env.CHAT_STACK_ARTIFACT_DIR;
 assert.ok(origin && provider && output && process.env.CHAT_STACK_TOKEN);
 const browser = await chromium.launch({headless:true,args:['--no-sandbox']});
-const context = await browser.newContext({viewport:{width:1280,height:900},reducedMotion:'reduce'});
+const context = await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900},reducedMotion:'reduce'});
 const requests = [], failures = [];
 await context.addInitScript(({token,uid,origin}) => {
   if(location.origin!==origin)return;

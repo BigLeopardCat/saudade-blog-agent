@@ -35,8 +35,9 @@
       ['model', '模型', editor.models], ['size', '尺寸', ['1024x1024', '1536x1024', '1024x1536']],
       ['quality', '质量', ['low', 'medium', 'high', 'auto']],
     ]) {
-      const holder = document.createElement('label'); holder.textContent = label;
-      const select = document.createElement('select'); select.setAttribute('aria-label', label);
+      const holder = document.createElement('label');
+      const caption = document.createElement('span'); ui.text(caption, label); holder.append(caption);
+      const select = document.createElement('select'); ui.attr(select, 'aria-label', label);
       for (const choice of choices) {const option = document.createElement('option'); option.value = choice; option.textContent = choice; select.append(option);}
       select.value = editor[key]; fields[key] = select; holder.append(select); controls.append(holder);
     }
@@ -106,9 +107,9 @@
       const figure = document.createElement('figure');
       const frame = document.createElement('div'); frame.className = 'chat-cover-frame';
       frame.style.aspectRatio = String(aspect);
-      const img = document.createElement('img'); img.src = source.href; img.alt = label;
+      const img = document.createElement('img'); img.src = source.href; ui.attr(img, 'alt', label);
       img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.style.objectFit = value.fit;
-      const caption = document.createElement('figcaption'); caption.textContent = label;
+      const caption = document.createElement('figcaption'); ui.text(caption, label);
       img.addEventListener('error', () => {
         img.hidden = true; ui.text(caption, "{0}：预览加载失败，请核对原图后再确认。", {"0": label});
       });

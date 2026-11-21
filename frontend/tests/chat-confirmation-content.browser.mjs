@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 
 export async function assertConfirmationContent({browser,origin,output,requests,setMode,resetState,appendReply}) {
   resetState();
-  const context=await browser.newContext({viewport:{width:1280,height:900}});
+  const context=await browser.newContext({locale: 'zh-CN',viewport:{width:1280,height:900}});
   const page=await context.newPage();
   try {
     await page.goto(origin);

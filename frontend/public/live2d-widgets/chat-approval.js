@@ -292,7 +292,8 @@
         allLabel.className = 'chat-ask-choice chat-ask-select-all';
         const all = document.createElement('input');
         all.type = 'checkbox'; all.disabled = busy;
-        allLabel.append(all, document.createTextNode('全选'));
+        const selectAllText = document.createElement('span'); ui.text(selectAllText, '全选');
+        allLabel.append(all, selectAllText);
         list.appendChild(allLabel);
         const inputs = [];
         const update = () => {
@@ -328,7 +329,7 @@
         b.disabled = busy;
         b.className = 'chat-nav-btn '
                       + (op.value === 'no' ? 'no' : (op.value === 'other' ? 'other' : 'yes'));
-        ui.text(b, "{0}", {"0": op.label || '确定'});
+        ui.text(b, op.label || '确定');
         b.setAttribute('data-ask-value', op.value || 'yes');
         if (choices.length && op.value === 'yes') {submit = b; b.setAttribute('data-ask-submit', '');}
         askBtns.appendChild(b);
