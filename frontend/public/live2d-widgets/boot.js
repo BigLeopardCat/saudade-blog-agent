@@ -119,6 +119,8 @@
 
   // Load chat modules in dependency order.
   const MODS = [
+    ['locale-messages', '__waifuEnglishLabels'],
+    ['locale', 'SaudadeI18n'],
     ['chat-core', '__waifuChatCore'],
     ['chat-render', '__waifuRender'],
     ['chat-work', '__waifuWorkProgress'],

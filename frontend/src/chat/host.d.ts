@@ -11,6 +11,11 @@ export interface ProgressStep {
 
 declare global {
   interface Window {
+    SaudadeI18n?: {
+      t: (key: string, values?: Record<string, unknown>) => string;
+      text: (element: Element, key: string, values?: Record<string, unknown>) => string;
+      attr: (element: Element, name: string, key: string, values?: Record<string, unknown>) => string;
+    };
     __darkMode?: boolean;
     __effectState: Record<string, boolean>;
     __effectStateList?: string;

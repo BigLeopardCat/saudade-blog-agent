@@ -1,6 +1,11 @@
 /* Unfinished work belongs here; completed results stay in their conversation. */
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, nodeText: (el, key, values) => {el.textContent = t(key, values); return el;}, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   const signal = ({ ready, busy, paused }) => ready === false ? 'offline'
     : busy ? 'busy' : paused ? 'paused' : ready === true ? 'ready' : 'checking';
   const countdown = (value, now = Date.now()) => {
@@ -44,11 +49,11 @@
     const dock = panel.querySelector('#chat-dock-countdown');
     const viewer = document.createElement('section');
     viewer.id = 'chat-task-panel'; viewer.className = 'chat-task-panel'; viewer.hidden = true;
-    viewer.setAttribute('role', 'region'); viewer.setAttribute('aria-label', '任务');
+    viewer.setAttribute('role', 'region'); ui.attr(viewer, 'aria-label', "任务", {});
     const heading = document.createElement('header');
-    const title = document.createElement('strong'); title.textContent = '任务';
+    const title = document.createElement('strong'); ui.text(title, "任务", {});
     const close = document.createElement('button'); close.type = 'button'; close.textContent = '×';
-    close.setAttribute('aria-label', '关闭任务列表'); heading.append(title, close);
+    ui.attr(close, 'aria-label', "关闭任务列表", {}); heading.append(title, close);
     const body = document.createElement('div'); body.className = 'chat-task-list';
     viewer.append(heading, body); panel.append(viewer);
     const token = () => { try { return localStorage.getItem('tokenKey') || ''; } catch (_) { return ''; } };
@@ -83,10 +88,10 @@
       const group = document.createElement('div'); group.className = 'chat-task-delete';
       const removeLabel = '删除任务';
       const yes = appendText(group, 'button', removeLabel); yes.type = 'button';
-      const no = appendText(group, 'button', '保留', 'chat-task-keep'); no.type = 'button';
+      const no = ui.nodeText(appendText(group, 'button', '保留', 'chat-task-keep'), "保留", {}); no.type = 'button';
       let armed = false;
       const arm = value => {
-        armed = value; yes.textContent = value ? '确认删除' : removeLabel;
+        armed = value; ui.text(yes, value ? '确认删除' : removeLabel);
         no.setAttribute('aria-hidden', String(!value)); no.tabIndex = value ? 0 : -1;
       };
       arm(false); no.addEventListener('click', () => { arm(false); yes.focus(); });
@@ -122,21 +127,21 @@
       rendered = fingerprint;
       const opened = new Set([...body.querySelectorAll('details[open]')].map(item => item.dataset.taskKey));
       body.replaceChildren();
-      if (!token()) { appendText(body, 'p', '登录后可以查看任务。'); return; }
+      if (!token()) { ui.nodeText(appendText(body, 'p', '登录后可以查看任务。'), "登录后可以查看任务。", {}); return; }
       if (failed) {
-        appendText(body, 'p', '任务列表暂时无法读取，未将它视作空列表。', 'chat-task-error');
-        const retry = appendText(body, 'button', '重新加载'); retry.onclick = () => refresh(true); return;
+        ui.nodeText(appendText(body, 'p', '任务列表暂时无法读取，未将它视作空列表。', 'chat-task-error'), "任务列表暂时无法读取，未将它视作空列表。", {});
+        const retry = ui.nodeText(appendText(body, 'button', '重新加载'), "重新加载", {}); retry.onclick = () => refresh(true); return;
       }
-      if (refreshing && !running.length && !paused.length && !schedules.length && !images.length) { appendText(body, 'p', '正在读取任务…'); return; }
-      if (scheduleFailed) appendText(body, 'p', '定时任务服务暂不可用，挂起任务仍可查看。', 'chat-task-error');
-      if (pausedFailed) appendText(body, 'p', '挂起任务暂时无法读取。', 'chat-task-error');
-      if (imageFailed) appendText(body, 'p', '生图任务暂时无法读取。', 'chat-task-error');
+      if (refreshing && !running.length && !paused.length && !schedules.length && !images.length) { ui.nodeText(appendText(body, 'p', '正在读取任务…'), "正在读取任务…", {}); return; }
+      if (scheduleFailed) ui.nodeText(appendText(body, 'p', '定时任务服务暂不可用，挂起任务仍可查看。', 'chat-task-error'), "定时任务服务暂不可用，挂起任务仍可查看。", {});
+      if (pausedFailed) ui.nodeText(appendText(body, 'p', '挂起任务暂时无法读取。', 'chat-task-error'), "挂起任务暂时无法读取。", {});
+      if (imageFailed) ui.nodeText(appendText(body, 'p', '生图任务暂时无法读取。', 'chat-task-error'), "生图任务暂时无法读取。", {});
       if (imageMore) {
-        const more = appendText(body, 'a', '当前展示 20 条执行中的生图任务，其他任务可到图库查看。');
+        const more = ui.nodeText(appendText(body, 'a', '当前展示 20 条执行中的生图任务，其他任务可到图库查看。'), "当前展示 20 条执行中的生图任务，其他任务可到图库查看。", {});
         more.href = '/dashboard/albums';
       }
       if (!waiting.length && !running.length && !schedules.length && !images.length && !pausedFailed && !imageFailed)
-        appendText(body, 'p', '目前没有待执行或挂起的任务。');
+        ui.nodeText(appendText(body, 'p', '目前没有待执行或挂起的任务。'), "目前没有待执行或挂起的任务。", {});
       running.forEach(row => {
         const details = document.createElement('details'); details.className = 'chat-task-item';
         details.dataset.taskKey = 'running:' + row.task_id;
@@ -145,7 +150,7 @@
         appendText(summary, 'span', '◷', 'chat-task-kind');
         appendText(summary, 'span', row.title);
         details.append(summary);
-        appendText(details, 'p', '正在执行，完成后自动移出任务列表。', 'chat-task-meta');
+        ui.nodeText(appendText(details, 'p', '正在执行，完成后自动移出任务列表。', 'chat-task-meta'), "正在执行，完成后自动移出任务列表。", {});
         body.append(details);
       });
       const add = (row, scheduled) => {
@@ -154,18 +159,18 @@
         details.open = opened.has(details.dataset.taskKey);
         const summary = document.createElement('summary');
         appendText(summary, 'span', scheduled ? (row.status === 'paused' ? 'Ⅱ' : '◷') : 'Ⅱ', 'chat-task-kind');
-        appendText(summary, 'span', row.title || '未命名任务');
+        ui.nodeText(appendText(summary, 'span', row.title || '未命名任务'), (row.title ? "{0}" : "未命名任务"), (row.title ? {"0": row.title} : {}));
         details.append(summary);
         const text = scheduled ? row.instruction : row.title;
         if (text) appendText(details, 'p', text);
-        appendText(details, 'p', scheduled
+        ui.nodeText(appendText(details, 'p', scheduled
           ? `${scheduleLabel(row)} · ${row.cron ? row.cron + ' · ' + row.timezone : new Date(row.next_run_at || row.run_at).toLocaleString()}`
-          : '任务已挂起，继续时沿用保存的进度。已完成的操作不会因删除任务而撤销。', 'chat-task-meta');
+          : '任务已挂起，继续时沿用保存的进度。已完成的操作不会因删除任务而撤销。', 'chat-task-meta'), (scheduled ? "{0} · {1}" : "任务已挂起，继续时沿用保存的进度。已完成的操作不会因删除任务而撤销。"), (scheduled ? {"0": scheduleLabel(row), "1": row.cron ? row.cron + ' · ' + row.timezone : new Date(row.next_run_at || row.run_at).toLocaleString()} : {}));
         if (scheduled && row.result?.preview) appendText(details, 'p', row.result.preview);
-        if (row.condition) appendText(details, 'p', `触发后等待文章 ${row.condition.article_id} 公开，满足条件再执行。`, 'chat-task-meta');
+        if (row.condition) ui.nodeText(appendText(details, 'p', `触发后等待文章 ${row.condition.article_id} 公开，满足条件再执行。`, 'chat-task-meta'), "触发后等待文章 {0} 公开，满足条件再执行。", {"0": row.condition.article_id});
         const actions = document.createElement('div'); actions.className = 'chat-task-actions';
         if (!scheduled) {
-          const resume = appendText(actions, 'button', '继续任务'); resume.type = 'button';
+          const resume = ui.nodeText(appendText(actions, 'button', '继续任务'), "继续任务", {}); resume.type = 'button';
           resume.addEventListener('click', async () => {
             resume.disabled = true;
             try { hide(); await ctx.ui.resumeManagedTask?.(row); await refresh(true); }
@@ -184,12 +189,12 @@
         details.dataset.taskKey = 'image:' + row.id; details.open = opened.has(details.dataset.taskKey);
         const summary = document.createElement('summary');
         appendText(summary, 'span', '▧', 'chat-task-kind');
-        appendText(summary, 'span', 'AI 生图 · ' + (row.title || '生成图片'));
+        ui.nodeText(appendText(summary, 'span', 'AI 生图 · ' + (row.title || '生成图片')), "AI 生图 · {0}", {"0": (row.title || '生成图片')});
         details.append(summary);
         appendText(details, 'p', shown.text, 'chat-task-meta');
         const actions = document.createElement('div'); actions.className = 'chat-task-actions';
         if (row.conversationId != null) {
-          const view = appendText(actions, 'button', '查看会话'); view.type = 'button';
+          const view = ui.nodeText(appendText(actions, 'button', '查看会话'), "查看会话", {}); view.type = 'button';
           view.disabled = !!ctx.state.isSending || !!Object.keys(ctx.state.remoteRounds || {}).length;
           view.addEventListener('click', () => {
             if (ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length) return;
@@ -197,9 +202,9 @@
             if (row.conversationId !== ctx.state.conv) engine.adoptConversation(row.conversationId);
           });
         } else {
-          const view = appendText(actions, 'a', '查看图库'); view.href = '/dashboard/albums';
+          const view = ui.nodeText(appendText(actions, 'a', '查看图库'), "查看图库", {}); view.href = '/dashboard/albums';
         }
-        appendText(details, 'p', '在后台继续执行，可以正常聊天；完成后自动移出列表。', 'chat-task-meta');
+        ui.nodeText(appendText(details, 'p', '在后台继续执行，可以正常聊天；完成后自动移出列表。', 'chat-task-meta'), "在后台继续执行，可以正常聊天；完成后自动移出列表。", {});
         details.append(actions);
         body.append(details);
       });
@@ -217,13 +222,13 @@
       const state = signal({ ready, busy, paused: pausedCount || ctx.ui.currentPausedTask?.() });
       const labels = { checking: '正在检查对话服务', ready: '对话服务正常', busy: '正在处理任务',
         paused: '有挂起的任务', offline: '对话服务不可用' };
-      lamp.dataset.state = state; lamp.title = labels[state]; lamp.setAttribute('aria-label', labels[state]);
+      lamp.dataset.state = state; ui.attr(lamp, 'title', labels[state]); ui.attr(lamp, 'aria-label', labels[state]);
       const next = schedules.filter(hasCountdown)
         .sort((a, b) => Date.parse(a.next_run_at || a.run_at) - Date.parse(b.next_run_at || b.run_at))[0];
       const time = next ? countdown(next.next_run_at || next.run_at, Date.now() + clockOffset) : '';
       scheduledChip.hidden = !next; pausedChip.hidden = !pausedCount;
       if (time) scheduledChip.querySelector('span').textContent = time;
-      pausedChip.querySelector('span').textContent = `待继续 ${pausedCount}`;
+      ui.text(pausedChip.querySelector('span'), '待继续 {0}', {0: pausedCount});
       dock.querySelector('span').textContent = time; dock.hidden = !time;
       panel.dataset.hasCountdown = String(!!time);
       render();

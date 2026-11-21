@@ -41,52 +41,52 @@
 
     // Existing IDs connect presentation to session, streaming and confirmation handlers.
     const chatHTML = `
-    <section id="waifu-chat" role="region" aria-label="与泠月喵对话">
+    <section id="waifu-chat" role="region" aria-label="与泠月喵对话" data-ui-aria-label="与泠月喵对话">
       <div class="chat-drag-bar-t"></div><div class="chat-drag-bar-l"></div><div class="chat-inner-border"></div>
       <header class="chat-header">
-        <span id="chat-service-indicator" class="chat-service-indicator" role="status" aria-label="正在检查对话服务" data-state="checking"></span>
+        <span id="chat-service-indicator" class="chat-service-indicator" role="status" aria-label="正在检查对话服务" data-ui-aria-label="正在检查对话服务" data-state="checking"></span>
         <div class="chat-heading">
-          <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span><button type="button" class="chat-unread-dot" aria-label="未读任务结果" hidden disabled></button></div>
+          <div id="chat-conv-title" class="chat-conv-title"><span class="chat-conv-title-tag" id="chat-conv-title-tag"></span><button type="button" class="chat-unread-dot" aria-label="未读任务结果" data-ui-aria-label="未读任务结果" hidden disabled></button></div>
         </div>
         <div class="chat-header-tasks">
-          <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></button>
-          <button type="button" id="chat-paused-chip" class="chat-task-chip" aria-label="查看挂起任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg><span></span></button>
+          <button type="button" id="chat-schedule-chip" class="chat-task-chip" aria-label="查看定时任务" data-ui-aria-label="查看定时任务" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></button>
+          <button type="button" id="chat-paused-chip" class="chat-task-chip" aria-label="查看挂起任务" data-ui-aria-label="查看挂起任务" hidden><svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg><span></span></button>
         </div>
         <span id="chat-dock-countdown" hidden><i class="chat-timer-icon" aria-hidden="true">◷</i><span></span></span>
-        <button type="button" class="chat-restore" id="chat-restore" aria-label="收起为顶部栏" title="单击收起为顶部栏，拖动移动" aria-expanded="true">收起对话</button>
-        <button type="button" class="chat-minimize" id="chat-minimize" aria-label="收纳到页面顶部" title="收纳到页面顶部">−</button>
-        <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" title="关闭对话">×</button>
+        <button type="button" class="chat-restore" id="chat-restore" aria-label="收起为顶部栏" data-ui-aria-label="收起为顶部栏" title="单击收起为顶部栏，拖动移动" data-ui-title="单击收起为顶部栏，拖动移动" aria-expanded="true"><span data-ui-text="收起对话">收起对话</span></button>
+        <button type="button" class="chat-minimize" id="chat-minimize" aria-label="收纳到页面顶部" data-ui-aria-label="收纳到页面顶部" title="收纳到页面顶部" data-ui-title="收纳到页面顶部">−</button>
+        <button type="button" class="chat-close" id="chat-close" aria-label="关闭对话" data-ui-aria-label="关闭对话" title="关闭对话" data-ui-title="关闭对话">×</button>
       </header>
-      <div class="chat-messages" id="chat-messages" role="region" aria-label="聊天记录" tabindex="0">
+      <div class="chat-messages" id="chat-messages" role="region" aria-label="聊天记录" data-ui-aria-label="聊天记录" tabindex="0">
         <div id="chat-empty" class="chat-empty-state chat-keep">
-          <h2>今天想聊点什么？</h2><p>找文章、聊技术，也可以一起读懂当前页面。</p>
+          <h2><span data-ui-text="今天想聊点什么？">今天想聊点什么？</span></h2><p><span data-ui-text="找文章、聊技术，也可以一起读懂当前页面。">找文章、聊技术，也可以一起读懂当前页面。</span></p>
           <div class="chat-starters">
-            <button type="button" class="chat-starter" data-chat-prompt="介绍一下这个博客">认识这个博客</button>
-            <button type="button" class="chat-starter" data-chat-prompt="帮我找一篇关于……的文章">查找文章</button>
-            <button type="button" class="chat-starter" data-chat-prompt="这篇文章主要讲了什么？">一起读文章</button>
+            <button type="button" class="chat-starter" data-chat-prompt="介绍一下这个博客" data-ui-data-chat-prompt="介绍一下这个博客"><span data-ui-text="认识这个博客">认识这个博客</span></button>
+            <button type="button" class="chat-starter" data-chat-prompt="帮我找一篇关于……的文章" data-ui-data-chat-prompt="帮我找一篇关于……的文章"><span data-ui-text="查找文章">查找文章</span></button>
+            <button type="button" class="chat-starter" data-chat-prompt="这篇文章主要讲了什么？" data-ui-data-chat-prompt="这篇文章主要讲了什么？"><span data-ui-text="一起读文章">一起读文章</span></button>
           </div>
         </div>
         <!-- chat-keep preserves the confirmation shell during history reconciliation. -->
         <div class="chat-nav-confirm chat-ask chat-keep" id="chat-ask" role="group" aria-labelledby="chat-ask-text">
-          <div class="chat-card-heading">需要你的确认</div>
+          <div class="chat-card-heading"><span data-ui-text="需要你的确认">需要你的确认</span></div>
           <div class="nav-question" id="chat-ask-text"></div><div class="chat-nav-btns" id="chat-ask-btns"></div>
           <div class="chat-ask-other" id="chat-ask-other">
-            <input class="chat-ask-other-input" id="chat-ask-other-input" type="text" aria-label="修改操作要求" placeholder="改成什么？直接说就行" autocomplete="off">
-            <button class="chat-nav-btn yes" id="chat-ask-other-send" type="button">就这样说</button>
+            <input class="chat-ask-other-input" id="chat-ask-other-input" type="text" aria-label="修改操作要求" data-ui-aria-label="修改操作要求" placeholder="改成什么？直接说就行" data-ui-placeholder="改成什么？直接说就行" autocomplete="off">
+            <button class="chat-nav-btn yes" id="chat-ask-other-send" type="button"><span data-ui-text="就这样说">就这样说</span></button>
           </div>
         </div>
       </div>
-      <button type="button" class="chat-new-msg-note" id="chat-new-msg-note" aria-label="滚动到最新消息">↓ 有新消息</button>
+      <button type="button" class="chat-new-msg-note" id="chat-new-msg-note" aria-label="滚动到最新消息" data-ui-aria-label="滚动到最新消息"><span data-ui-text="↓ 有新消息">↓ 有新消息</span></button>
       <div class="chat-input-area">
-        <p class="chat-disclaimer">本回答由AI生成，内容仅供参考，请仔细甄别</p>
+        <p class="chat-disclaimer"><span data-ui-text="本回答由AI生成，内容仅供参考，请仔细甄别">本回答由AI生成，内容仅供参考，请仔细甄别</span></p>
         <div class="chat-input-row">
-          <div class="chat-img-preview" id="chat-img-preview" aria-label="待发送图片"></div>
-          <textarea class="chat-input" id="chat-input" aria-label="消息" aria-describedby="chat-status" title="Enter 发送，Shift + Enter 换行" placeholder="发消息…" rows="1"></textarea>
+          <div class="chat-img-preview" id="chat-img-preview" aria-label="待发送图片" data-ui-aria-label="待发送图片"></div>
+          <textarea class="chat-input" id="chat-input" aria-label="消息" data-ui-aria-label="消息" aria-describedby="chat-status" title="Enter 发送，Shift + Enter 换行" data-ui-title="Enter 发送，Shift + Enter 换行" placeholder="发消息…" data-ui-placeholder="发消息…" rows="1"></textarea>
           <div class="chat-composer-tools">
-            <button type="button" id="chat-img-btn" class="chat-img-btn" title="添加图片（最多 6 张）" aria-label="添加图片">
+            <button type="button" id="chat-img-btn" class="chat-img-btn" title="添加图片（最多 6 张）" data-ui-title="添加图片（最多 6 张）" aria-label="添加图片" data-ui-aria-label="添加图片">
               <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
             </button>
-            <button type="button" class="chat-send" id="chat-send" aria-label="发送消息">发送</button>
+            <button type="button" class="chat-send" id="chat-send" aria-label="发送消息" data-ui-aria-label="发送消息"><span data-ui-text="发送">发送</span></button>
           </div>
         </div>
         <span id="chat-status" class="chat-status" role="status" aria-live="polite" aria-atomic="true"></span>
@@ -94,21 +94,22 @@
       </div>
       <div class="chat-nav-confirm" id="chat-nav-confirm" role="group" aria-labelledby="nav-question-text">
         <div class="nav-question" id="nav-question-text"></div><div class="chat-nav-btns">
-          <button type="button" class="chat-nav-btn yes" id="nav-yes">确定</button>
-          <button type="button" class="chat-nav-btn no" id="nav-no">取消</button>
+          <button type="button" class="chat-nav-btn yes" id="nav-yes"><span data-ui-text="确定">确定</span></button>
+          <button type="button" class="chat-nav-btn no" id="nav-no"><span data-ui-text="取消">取消</span></button>
         </div>
       </div>
-      <nav class="chat-rail" id="chat-rail" aria-label="会话管理">
-        <button type="button" class="chat-rail-btn" id="conv-toggle-btn" title="会话列表" aria-label="会话列表" aria-controls="waifu-conv-panel" aria-expanded="false">☰</button>
+      <nav class="chat-rail" id="chat-rail" aria-label="会话管理" data-ui-aria-label="会话管理">
+        <button type="button" class="chat-rail-btn" id="conv-toggle-btn" title="会话列表" data-ui-title="会话列表" aria-label="会话列表" data-ui-aria-label="会话列表" aria-controls="waifu-conv-panel" aria-expanded="false">☰</button>
         <div class="chat-rail-bot">
-          <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话" aria-label="新对话">＋</button>
-          <button type="button" class="chat-rail-btn" id="conv-tasks-btn" title="查看任务" aria-label="查看任务"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="4" width="15" height="17" rx="2"/><path d="M9 3h7v3H9zM9 11h7m-7 5h7"/></svg></button>
+          <button type="button" class="chat-rail-btn" id="chat-language-btn" aria-label="Switch to English">EN</button>
+          <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话" data-ui-title="新对话" aria-label="新对话" data-ui-aria-label="新对话">＋</button>
+          <button type="button" class="chat-rail-btn" id="conv-tasks-btn" title="查看任务" data-ui-title="查看任务" aria-label="查看任务" data-ui-aria-label="查看任务"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="4" width="15" height="17" rx="2"/><path d="M9 3h7v3H9zM9 11h7m-7 5h7"/></svg></button>
         </div>
       </nav>
-      <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史">
-        <div class="conv-list-head"><span class="conv-list-title">会话历史</span>
+      <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史" data-ui-aria-label="会话历史">
+        <div class="conv-list-head"><span class="conv-list-title"><span data-ui-text="会话历史">会话历史</span></span>
           <form class="conv-search-form" role="search" autocomplete="off">
-            <input type="search" name="conversation-query" class="conv-search" id="conv-search" aria-label="搜索会话" placeholder="搜索会话" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
+            <input type="search" name="conversation-query" class="conv-search" id="conv-search" aria-label="搜索会话" data-ui-aria-label="搜索会话" placeholder="搜索会话" data-ui-placeholder="搜索会话" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-form-type="other">
           </form>
         </div><div class="conv-list-body" id="conv-list"></div>
       </div>

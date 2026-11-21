@@ -1,6 +1,11 @@
 /* Approval presentation; signed execution and durable state stay on the server. */
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, nodeText: (el, key, values) => {el.textContent = t(key, values); return el;}, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   g.__waifuApproval = (ctx, engine) => {
     const { messages, askBox, askQuestion, askBtns, askOther, askOtherInput } = ctx.dom;
     const { applyMsg } = ctx.render;
@@ -96,7 +101,7 @@
       const section = document.createElement('aside');
       section.className = 'chat-approval-notices';
       section.setAttribute('role', 'note');
-      section.setAttribute('aria-label', '系统提示');
+      ui.attr(section, 'aria-label', "系统提示", {});
       for (const notice of notices) {
         if (!notice || !['info', 'warning'].includes(notice.kind)
             || typeof notice.text !== 'string' || !notice.text || notice.text.length > 1000) continue;
@@ -282,7 +287,7 @@
         const list = document.createElement('div');
         list.className = 'chat-ask-selection';
         list.setAttribute('role', 'group');
-        list.setAttribute('aria-label', '选择要执行的项目');
+        ui.attr(list, 'aria-label', "选择要执行的项目", {});
         const allLabel = document.createElement('label');
         allLabel.className = 'chat-ask-choice chat-ask-select-all';
         const all = document.createElement('input');
@@ -296,7 +301,7 @@
           all.indeterminate = ask.selected.length > 0 && !all.checked;
           inputs.forEach(({input, value}) => {input.checked = selected.has(value);});
           if (submit) {
-            submit.textContent = `确认执行 ${ask.selected.length} 项`;
+            ui.text(submit, "确认执行 {0} 项", {"0": ask.selected.length});
             submit.disabled = ctx.state.isSending || Object.keys(ctx.state.remoteRounds || {}).length > 0
               || !ask.selected.length;
             submit.setAttribute('data-ask-value', 'pick:' + ask.selected.join(','));
@@ -310,7 +315,7 @@
           const value = Number(op.value.slice(5));
           const label = document.createElement('label'); label.className = 'chat-ask-choice';
           const input = document.createElement('input'); input.type = 'checkbox'; input.disabled = busy;
-          const text = document.createElement('span'); text.textContent = op.label || `项目 ${value + 1}`;
+          const text = document.createElement('span'); ui.text(text, (op.label ? "{0}" : "项目 {0}"), (op.label ? {"0": op.label} : {"0": value + 1}));
           label.append(input, text); list.appendChild(label); inputs.push({input, value});
           input.addEventListener('change', () => {input.checked ? selected.add(value) : selected.delete(value); update();});
         });
@@ -323,7 +328,7 @@
         b.disabled = busy;
         b.className = 'chat-nav-btn '
                       + (op.value === 'no' ? 'no' : (op.value === 'other' ? 'other' : 'yes'));
-        b.textContent = op.label || '确定';
+        ui.text(b, "{0}", {"0": op.label || '确定'});
         b.setAttribute('data-ask-value', op.value || 'yes');
         if (choices.length && op.value === 'yes') {submit = b; b.setAttribute('data-ask-submit', '');}
         askBtns.appendChild(b);

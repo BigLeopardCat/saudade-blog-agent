@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMouth, renderPreviews, resizeInput, restoreAsk }) {
     const { messages, input, sendBtn } = ctx.dom;
     const { saveHistory, broadcast } = engine;
@@ -92,11 +93,11 @@ export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMo
         const retryBtn = document.createElement('button');
         retryBtn.type = 'button';
         retryBtn.className = 'chat-retry-btn';
-        retryBtn.textContent = '↻ 重发';
+        ui.text(retryBtn, "↻ 重发", {});
         const editBtn = document.createElement('button');
         editBtn.type = 'button';
         editBtn.className = 'chat-retry-btn';
-        editBtn.textContent = '✎ 编辑';
+        ui.text(editBtn, "✎ 编辑", {});
         wrap.appendChild(retryBtn);
         wrap.appendChild(editBtn);
         contentSpan.appendChild(wrap);
@@ -105,7 +106,7 @@ export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMo
             const resumeBtn = document.createElement('button');
             resumeBtn.type = 'button';
             resumeBtn.className = 'chat-retry-btn chat-resume-btn';
-            resumeBtn.textContent = '继续任务';
+            ui.text(resumeBtn, "继续任务", {});
             wrap.prepend(resumeBtn);
             resumeBtn.addEventListener('click', async () => {
                 resumeBtn.disabled = true;
@@ -154,7 +155,7 @@ export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMo
                 return;
             }
             retryBtn.disabled = true;
-            retryBtn.textContent = '重发中…';
+            ui.text(retryBtn, "重发中…", {});
             const res = await discardFailedRound();
             if (!isCurrent()) {
                 showHint(STALE_HINT);
@@ -162,7 +163,7 @@ export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMo
             }
             if (!res.ok) {
                 retryBtn.disabled = false;
-                retryBtn.textContent = '↻ 重发';
+                ui.text(retryBtn, "↻ 重发", {});
                 showHint(res.why);
                 return;
             }
@@ -352,7 +353,7 @@ export function createRecovery(ctx, engine, { sendMessage, renderFailed, resetMo
                 ctx.state.isSending = false;
                 ctx.state.streamCtrl = null;
                 sendBtn.disabled = Object.keys(ctx.state.remoteRounds || {}).length > 0;
-                sendBtn.title = '发送';
+                ui.attr(sendBtn, "title", "发送", {});
                 sendBtn.innerHTML = '发送';
                 sendBtn.classList.remove('stop-mode');
                 input.disabled = false;

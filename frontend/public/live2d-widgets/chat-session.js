@@ -2,6 +2,11 @@
 // The list occupies a column inside the existing panel; opening never moves or widens it.
 (function (g) {
   'use strict';
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   g.__waifuSession = function (ctx, engine) {
     if (!ctx || !engine) {
       console.error('[chat-session] 缺少 ctx/engine——chat-engine 未加载或加载顺序错误');
@@ -31,7 +36,7 @@
       return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
     };
     // 行标题：title NULL（未派生/纯图轮）显示"新对话"（产品拍板）
-    const rowTitle = (c) => (c && c.title && String(c.title).trim()) ? String(c.title).trim() : '新对话';
+    const rowTitle = (c) => (c && c.title && String(c.title).trim()) ? String(c.title).trim() : ui.t('新对话');
     const rowSince = (c) => {
       const t = c && c.created_at, u = c && c.updated_at;
       if (!(t > 0) || typeof t !== 'number' || !(u > 0) || typeof u !== 'number') return '';
@@ -70,13 +75,13 @@
         const c = _byId.get(ctx.state.conv);
         return c ? rowTitle(c) : '';
       }
-      if (ctx.state.convNeedCreate) return '新对话';
+      if (ctx.state.convNeedCreate) return ui.t('新对话');
       return '';
     };
     const renderHeader = () => {
       if (!titleEl) return;
       const tk = getToken();
-      titleEl.textContent = (tk && (ctx.state.conv !== null || ctx.state.convNeedCreate)) ? currentTitle() : '';
+      ui.computedText(titleEl, () => (getToken() && (ctx.state.conv !== null || ctx.state.convNeedCreate)) ? currentTitle() : '');
     };
     const highlight = () => {
       if (!convList) return;
@@ -96,7 +101,7 @@
           if (row.classList) {
             row.classList.remove('menu-open', 'del-confirm', 'renaming');
             const label = row.querySelector('.conv-delete-label');
-            if (label) label.textContent = '删除';
+            if (label) ui.text(label, "删除", {});
           }
         }
       }
@@ -169,7 +174,7 @@
     // Confirm at the original menu button; preserve its position and keyboard focus.
     const armDelete = (row) => {
       row.classList.add('del-confirm');
-      row.querySelector('.conv-delete-label').textContent = '确认删除';
+      ui.text(row.querySelector('.conv-delete-label'), "确认删除", {});
       if (delTimer) clearTimeout(delTimer);
       delTimer = setTimeout(clearMenuAll, 8000);
     };
@@ -230,7 +235,7 @@
       inp.className = 'conv-rename-input';
       inp.maxLength = 64;
       inp.value = orig;
-      inp.title = '回车保存 · Esc 取消';
+      ui.attr(inp, "title", "回车保存 · Esc 取消", {});
       titleSpan.parentNode.insertBefore(inp, titleSpan);
       inp.focus();
       inp.select();
@@ -257,7 +262,7 @@
       if (!hits.length) {
         const empty = document.createElement('div');
         empty.className = 'conv-list-empty';
-        empty.textContent = '没有匹配的对话轮次';
+        ui.text(empty, "没有匹配的对话轮次", {});
         convList.appendChild(empty);
         return;
       }
@@ -269,7 +274,7 @@
         const meta = document.createElement('div');
         meta.className = 'conv-hit-meta';
         // 行上时间 = 会话最后活动时间（hitActTime 有兜底），与服务端排序同源
-        meta.textContent = (h.conv_title || '新对话') + ' · ' + relTime(hitActTime(h));
+        ui.text(meta, "{0} · {1}", {"0": (h.conv_title || '新对话'), "1": relTime(hitActTime(h))});
         meta.title = meta.textContent;
         const text = document.createElement('div');
         text.className = 'conv-hit-text';
@@ -295,7 +300,7 @@
       if (!rows.length) {
         const empty = document.createElement('div');
         empty.className = 'conv-list-empty';
-        empty.textContent = getToken() ? '还没有会话，点左侧 ＋ 开始新对话' : '登录后可管理会话历史';
+        ui.text(empty, (getToken() ? "还没有会话，点左侧 ＋ 开始新对话" : "登录后可管理会话历史"), (getToken() ? {} : {}));
         convList.appendChild(empty);
         return;
       }
@@ -308,7 +313,7 @@
         main.className = 'conv-row-main';
         const t = document.createElement('span');
         t.className = 'conv-row-title';
-        t.textContent = rowTitle(c);
+        ui.computedText(t, () => rowTitle(c));
         t.title = t.textContent;
         if (c.pinned) {
           const pin = document.createElement('span');
@@ -318,7 +323,7 @@
         }
         const time = document.createElement('span');
         time.className = 'conv-row-time';
-        time.textContent = relTime(c.updated_at);
+        ui.text(time, relTime(c.updated_at));
         const since = rowSince(c); // A 方案：跨天会话补"9-5 起"（同日为空，零变化）
         if (since) {
           const s = document.createElement('span');
@@ -330,7 +335,7 @@
         more.type = 'button';
         more.className = 'conv-more';
         more.textContent = '⋯';
-        more.title = '更多操作';
+        ui.attr(more, "title", "更多操作", {});
         // 纵向菜单：删除（危险）/ 加入书签|删除书签（置顶切换）/ 重命名（图标+文字）
         const menu = document.createElement('div');
         menu.className = 'conv-row-menu';
@@ -338,7 +343,8 @@
           const b = document.createElement('button');
           b.type = 'button';
           b.className = 'conv-menu-item' + (cls ? ' ' + cls : '');
-          b.innerHTML = icon + '<span>' + label + '</span>';
+          b.innerHTML = icon;
+          const caption = document.createElement('span'); ui.text(caption, label); b.appendChild(caption);
           b.addEventListener('click', (e) => { e.stopPropagation(); fn(); });
           return b;
         };

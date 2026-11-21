@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 export function createAttachments(ctx) {
     const input = ctx.dom.input;
     const imgBtn = document.getElementById('chat-img-btn');
@@ -12,11 +13,11 @@ export function createAttachments(ctx) {
             wrap.className = 'chat-img-preview-item';
             const im = document.createElement('img');
             im.src = src;
-            im.alt = '已选择图片 ' + (i + 1);
+            ui.attr(im, "alt", "已选择图片 {0}", {"0": (i + 1)});
             const rm = document.createElement('button');
             rm.className = 'chat-img-preview-remove';
             rm.type = 'button';
-            rm.title = '移除第 ' + (i + 1) + ' 张图片';
+            ui.attr(rm, "title", "移除第 {0} 张图片", {"0": (i + 1)});
             rm.setAttribute('aria-label', rm.title);
             rm.textContent = '×';
             rm.addEventListener('click', () => {

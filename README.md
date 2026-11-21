@@ -8,7 +8,7 @@ The project connects a Python agent service and a chat widget to a separate Rust
 
 [Live blog](https://saudade.site/) · [Technical guide](docs/en/README.md) · [Engineering cases](docs/en/engineering-cases.md) · [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)
 
-The live site reflects the version currently deployed. Account permissions apply; content administration and collaborative editing require an authorized account. Most of the current UI and content is in Chinese.
+The widget supports English and Chinese interface controls, sharing the blog's language preference without resetting a conversation. Articles and messages retain their original language. The live site reflects its deployed version; content administration and collaborative editing require an authorized account.
 
 ## What you can inspect
 

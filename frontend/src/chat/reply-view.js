@@ -1,3 +1,4 @@
+import {ui} from './locale.js';
 /** @returns {{text: string, steps: import('./host').ProgressStep[], typingEl: HTMLDivElement | null, typingTimer: number | null}} */
 export function createReplyState() { return { text: '', steps: [], typingEl: null, typingTimer: null }; }
 export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ownsRound, staleRound, armIdle, onBubble, handleControl, onAccepted = undefined }) {
@@ -47,7 +48,7 @@ export async function receiveReply(resp, { state, ctx, engine, opts, roundId, ow
         div.insertBefore(processBox, state.typingEl);
         const note = document.createElement('div');
         note.className = 'agent-process-line continuation';
-        note.textContent = '从已保存的进度继续';
+        ui.text(note, "从已保存的进度继续", {});
         processBox.querySelector('.agent-process-body').appendChild(note);
         state.steps.push({ cls: 'continuation', text: note.textContent });
     }

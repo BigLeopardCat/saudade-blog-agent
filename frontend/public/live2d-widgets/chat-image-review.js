@@ -1,5 +1,10 @@
 /* Exact frozen prompts use plain text; preview credentials never become executable markup. */
 (function (g) {
+  const ui = g.SaudadeI18n || (() => {
+    const t = (key, values = {}) => String(key).replace(/\{(\w+)\}/g, (match, name) => Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : match);
+    return {t, computedText: (el, getter) => el.textContent = getter(), text: (el, key, values) => el.textContent = t(key, values), attr: (el, name, key, values) => el.setAttribute(name, t(key, values)), localize: () => {}};
+  })();
+
   const preview = (url, job) => {
     if (typeof url !== 'string' || url.length > 4096) return false;
     try {
@@ -24,7 +29,7 @@
       || !editor.models.includes(editor.model)) return false;
     const controls = document.createElement('div'); controls.className = 'chat-image-editor';
     const prompt = document.createElement('textarea'); prompt.value = value.prompt;
-    prompt.maxLength = 32000; prompt.rows = 5; prompt.setAttribute('aria-label', '生图提示词');
+    prompt.maxLength = 32000; prompt.rows = 5; ui.attr(prompt, 'aria-label', "生图提示词", {});
     const fields = {};
     for (const [key, label, choices] of [
       ['model', '模型', editor.models], ['size', '尺寸', ['1024x1024', '1536x1024', '1024x1536']],
@@ -35,14 +40,14 @@
       for (const choice of choices) {const option = document.createElement('option'); option.value = choice; option.textContent = choice; select.append(option);}
       select.value = editor[key]; fields[key] = select; holder.append(select); controls.append(holder);
     }
-    const update = document.createElement('button'); update.type = 'button'; update.textContent = '更新预览'; update.disabled = true;
+    const update = document.createElement('button'); update.type = 'button'; ui.text(update, "更新预览", {}); update.disabled = true;
     const status = document.createElement('p'); status.className = 'chat-image-editor-status'; status.setAttribute('role', 'status');
     const draft = () => ({prompt: prompt.value, model: fields.model.value, size: fields.size.value, quality: fields.quality.value});
     const changed = () => {
       const valueNow = draft();
       const dirty = valueNow.prompt !== value.prompt || Object.keys(fields).some(key => valueNow[key] !== editor[key]);
       update.disabled = !dirty || !valueNow.prompt.trim();
-      status.textContent = dirty ? '修改尚未确认，请先更新预览。' : '';
+      ui.text(status, (dirty ? "修改尚未确认，请先更新预览。" : ""), (dirty ? {} : {}));
       root.dispatchEvent(new CustomEvent('image-review-dirty', {bubbles:true, detail:{dirty}}));
     };
     prompt.addEventListener('input', changed); Object.values(fields).forEach(select => select.addEventListener('change', changed));
@@ -61,18 +66,18 @@
       const img = document.createElement('img');
       img.src = url; img.alt = label; img.loading = 'lazy'; img.referrerPolicy = 'no-referrer';
       const caption = document.createElement('figcaption'); caption.textContent = label;
-      img.addEventListener('error', () => {img.hidden = true; caption.textContent = '预览暂不可用，请重新查看任务。';});
+      img.addEventListener('error', () => {img.hidden = true; ui.text(caption, "预览暂不可用，请重新查看任务。", {});});
       const frame = document.createElement('div'); frame.className = 'chat-image-preview';
       frame.append(img); figure.append(frame, caption); return figure;
     };
     if (value.result_url) root.append(image(value.result_url, '实际生成结果，尚未保留到图库'));
     const header = document.createElement('div'); header.className = 'chat-image-review-header';
-    const title = document.createElement('strong'); title.textContent = '完整提示词';
+    const title = document.createElement('strong'); ui.text(title, "完整提示词", {});
     const copy = document.createElement('button'); copy.type = 'button';
-    copy.className = 'chat-image-prompt-copy'; copy.textContent = '复制提示词';
+    copy.className = 'chat-image-prompt-copy'; ui.text(copy, "复制提示词", {});
     copy.addEventListener('click', async () => {
-      try {await navigator.clipboard.writeText(root.querySelector('textarea')?.value ?? value.prompt); copy.textContent = '已复制提示词';}
-      catch (_) {copy.textContent = '复制失败，可选择下方文字';}
+      try {await navigator.clipboard.writeText(root.querySelector('textarea')?.value ?? value.prompt); ui.text(copy, "已复制提示词", {});}
+      catch (_) {ui.text(copy, "复制失败，可选择下方文字", {});}
     });
     header.append(title, copy);
     const prompt = document.createElement('div'); prompt.className = 'chat-image-prompt';
@@ -95,7 +100,7 @@
         return false;
     } catch (_) { return false; }
     const root = document.createElement('div'); root.className = 'chat-cover-review';
-    root.setAttribute('role', 'group'); root.setAttribute('aria-label', '封面展示预览');
+    root.setAttribute('role', 'group'); ui.attr(root, 'aria-label', "封面展示预览", {});
     const views = [['文章卡片', 16 / 9], ['首页置顶轮播', 1], ['详情横幅', 3.5]];
     for (const [label, aspect] of views) {
       const figure = document.createElement('figure');
@@ -105,7 +110,7 @@
       img.loading = 'lazy'; img.referrerPolicy = 'no-referrer'; img.style.objectFit = value.fit;
       const caption = document.createElement('figcaption'); caption.textContent = label;
       img.addEventListener('error', () => {
-        img.hidden = true; caption.textContent = label + '：预览加载失败，请核对原图后再确认。';
+        img.hidden = true; ui.text(caption, "{0}：预览加载失败，请核对原图后再确认。", {"0": label});
       });
       frame.append(img); figure.append(frame, caption); root.append(figure);
     }
