@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 
-export async function assertChatLocale(page) {
+export async function assertChatLocale(page, output) {
   const input = page.locator('#chat-input');
   await input.fill('保留这份草稿 — keep this draft');
   await input.focus();
@@ -21,6 +21,12 @@ export async function assertChatLocale(page) {
   assert.equal(await page.evaluate(() => document.querySelector('#chat-input') === window.__localeTestInput), true);
   assert.deepEqual(await page.evaluate(() => ({conversation: window.__chatTest.ctx.state.conv,
     messages: window.__chatTest.ctx.state.items.length})), before);
+  const fits = await page.locator('#waifu-chat').evaluate(element => {
+    const box = element.getBoundingClientRect();
+    return box.left >= 0 && box.right <= innerWidth + 1 && element.scrollWidth <= element.clientWidth + 1;
+  });
+  assert.equal(fits, true, 'English controls fit the existing panel');
+  await page.screenshot({path: output + '/chat-english.png'});
   assert.equal(await page.evaluate(() => localStorage.getItem('saudade.locale')), 'en');
   const restored = await page.context().browser().newContext({locale: 'zh-CN',
     storageState: await page.context().storageState()});
@@ -37,4 +43,5 @@ export async function assertChatLocale(page) {
   await page.waitForFunction(() => document.querySelector('#chat-input')?.placeholder === '发消息…');
   assert.equal(await page.locator('#chat-close').getAttribute('aria-label'), '关闭对话');
   await input.fill('');
+  await page.locator('#locale-source-content').evaluate(element => element.remove());
 }

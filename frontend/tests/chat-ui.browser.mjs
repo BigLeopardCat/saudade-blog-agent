@@ -413,7 +413,7 @@ try {
   await assertChatScroll({page,reset,passed});
   if (!process.argv.includes('--scroll-only')) {
   await reset();
-  await assertChatLocale(page); passed('language switch preserves draft, source text and conversation; restores preference');
+  await assertChatLocale(page, output); passed('language switch preserves draft, source text and conversation; restores preference');
   assert.equal(await page.locator('#chat-send').isDisabled(), true);
   assert.equal(await page.locator('#chat-empty').isVisible(), true);
   assert.equal(await page.locator('[data-chat-prompt]').count(), 3);
