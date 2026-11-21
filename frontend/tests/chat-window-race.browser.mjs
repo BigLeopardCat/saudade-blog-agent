@@ -33,18 +33,20 @@ export async function assertWindowRaces({page, reset, streamCount, passed}) {
     const interrupt = async (reader = false) => page.evaluate(reader => {
       const panel = document.querySelector('#waifu-chat');
       document.querySelector('#chat-minimize').click();
+      for (const animation of panel.getAnimations()) {
+        if (animation.effect.target === panel && animation.playState !== 'idle') animation.finish();
+      }
       document.querySelector('#chat-restore').click();
-      const motion = panel.getAnimations().find(animation => animation.effect.target === panel
-        && animation.effect.getKeyframes().some(frame => String(frame.transform || '').includes('scale')));
+      const motion = panel.getAnimations().filter(animation => animation.effect.target === panel
+        && animation.effect.getKeyframes().some(frame => String(frame.transform || '').includes('scale'))).at(-1);
       if (!motion) throw new Error('Expected a real docking animation to interrupt');
       motion.pause(); motion.currentTime = 60;
+      document.querySelector('#chat-restore').click();
+      document.querySelector('#chat-restore').click();
       if (reader) {
         document.documentElement.style.setProperty('--reader-chat-width', '320px');
         document.documentElement.dataset.readerArticle = '/article/window-race';
         window.dispatchEvent(new Event('reader-layout-change'));
-      } else {
-        document.querySelector('#chat-restore').click();
-        document.querySelector('#chat-restore').click();
       }
       for (const animation of panel.getAnimations()) {
         if (animation.effect.target === panel && animation.playState !== 'idle') animation.finish();
