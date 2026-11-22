@@ -21,6 +21,22 @@ The project connects a Python agent service and a chat widget to a separate Rust
 
 The widget supports English and Chinese interface controls, sharing the blog's language preference without resetting a conversation. Articles and messages retain their original language. The live site reflects its deployed version; content administration and collaborative editing require an authorized account.
 
+## Interface preview
+
+### Lingyue chat
+
+![Lingyue chat with conversation controls, suggested prompts and the message composer](docs/assets/readme/lingyue-chat-en.jpg)
+
+Use suggested prompts to explore the blog, find articles or read together, or enter your own question. Authorized users can also collaborate on writing and prepare content management operations; writes requiring approval show a review step first.
+
+### Blog homepage
+
+![Saudade Blog homepage with navigation, article browsing and the Lingyue mascot](docs/assets/readme/blog-home-en.jpg)
+
+Browse articles, categories and tags, search the site, and open Lingyue from the mascot toolbar in the lower left.
+
+Actual screenshots of the public interface at [saudade.site](https://saudade.site/). Interface controls support English and Chinese; article content retains its original language. See the [tutorials (中文)](docs/wiki/Home.md) for more workflows.
+
 ## What you can inspect
 
 | Capability | Implementation and evidence |
