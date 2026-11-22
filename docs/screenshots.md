@@ -3,6 +3,19 @@
 教程源稿与图片同放 `docs/wiki/`，图片使用 `docs/wiki/assets/` 的稳定语义文件名。
 Wiki 是镜像，改图先改源稿，再同步；不要只在网页改图片而让仓库继续引用旧版本。
 
+## README 实际界面预览
+
+两个语言版本的 README 使用 `docs/assets/readme/` 下的实际公开界面截图：
+
+| 文件 | 内容 |
+| --- | --- |
+| `blog-home-zh-CN.jpg`、`blog-home-en.jpg` | 博客首页、文章入口与看板娘 |
+| `lingyue-chat-zh-CN.jpg`、`lingyue-chat-en.jpg` | 展开的看板娘对话框与快捷提问 |
+
+图片来自 `https://saudade.site/` 的全新匿名浏览器上下文，未登录、未发送消息，也不代表模型回答或管理操作的执行结果。中英文分别截图，文章内容保留原文；截图中的角色及美术沿用其原有资源许可。
+
+通过博客仓库的 [README 截图入口](https://github.com/BigLeopardCat/Saudade-Blog/blob/main/docs/screenshots.md#readme-实际界面预览) 重新拍摄，实际检查后同步这里的四张图。两仓使用本地图，避免默认分支变化导致图片漂移；文档改图无需更新组件锁。
+
 ## 图片来源与用途
 
 | 图片 | 对应教程与要看清的操作 |
