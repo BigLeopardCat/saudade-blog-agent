@@ -1,12 +1,23 @@
+<div align="center">
+
 # Saudade Blog Agent
 
-English · [简体中文](README.zh-CN.md)
+**English** · [简体中文](README.zh-CN.md)
+
+[![Build and checks](https://github.com/BigLeopardCat/saudade-blog-agent/actions/workflows/eval.yml/badge.svg?branch=main)](https://github.com/BigLeopardCat/saudade-blog-agent/actions/workflows/eval.yml)
+[![Latest release](https://img.shields.io/github/v/release/BigLeopardCat/saudade-blog-agent?label=release&color=2563EB)](https://github.com/BigLeopardCat/saudade-blog-agent/releases/latest)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat&logo=python&logoColor=white)](pyproject.toml)
+[![Code license: MIT](https://img.shields.io/badge/code-MIT-64748B?style=flat)](LICENSE)
+
+[![Live demo](https://img.shields.io/badge/-Live_demo-7C3AED?style=for-the-badge)](https://saudade.site/)
+[![Documentation](https://img.shields.io/badge/-Documentation-4F46E5?style=for-the-badge)](docs/en/README.md)
+[![Engineering cases](https://img.shields.io/badge/-Engineering_cases-475569?style=for-the-badge)](docs/en/engineering-cases.md)
+
+</div>
 
 An agent application running inside a live blog. **泠月喵 (Lingyue)** helps readers find and understand articles, assists authors in the editor, and prepares permission-controlled content management operations and scheduled tasks.
 
 The project connects a Python agent service and a chat widget to a separate Rust blog host. LangChain and LangGraph provide the model/tool loop and durable execution primitives; application code implements trusted identity, context and task budgets, source evidence, approval handling, and product integration.
-
-[Live blog](https://saudade.site/) · [Technical guide](docs/en/README.md) · [Engineering cases](docs/en/engineering-cases.md) · [Releases](https://github.com/BigLeopardCat/saudade-blog-agent/releases)
 
 The widget supports English and Chinese interface controls, sharing the blog's language preference without resetting a conversation. Articles and messages retain their original language. The live site reflects its deployed version; content administration and collaborative editing require an authorized account.
 
@@ -56,7 +67,9 @@ The application does not claim arbitrary writes execute exactly once, that a che
 
 ## Documentation and contribution
 
-[English documentation](docs/en/README.md) · [中文文档](docs/README.md) · [Code reading (中文)](docs/code-reading.md) · [Wiki tutorials (中文)](https://github.com/BigLeopardCat/saudade-blog-agent/wiki) · [Contribution rules](CONTRIBUTING.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
+- **Guides:** [English](docs/en/README.md) · [中文](docs/README.md) · [Wiki tutorials (中文)](https://github.com/BigLeopardCat/saudade-blog-agent/wiki)
+- **Engineering:** [Cases](docs/en/engineering-cases.md) · [Code reading (中文)](docs/code-reading.md)
+- **Contribute:** [Contribution guide](CONTRIBUTING.md) · [Roadmap](ROADMAP.md) · [Security](SECURITY.md)
 
 English guides explain the core paths; the Chinese reference documents retain detailed operational and protocol contracts. Follow the documentation for the source revision or release you use. English contributions are welcome; the contribution guide describes the shared checks and commit format.
 
