@@ -5,9 +5,9 @@ read directly. Private reads require verified identity and a runtime scope
 check. Writes use separate domain confirmation tools; browser commands have their own scope checks.
 """
 
-from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE
+from agent.authz import SCOPE_ADMIN_CONSOLE, SCOPE_READ_OWN, SCOPE_READ_PUBLIC, TOOL_SCOPE, check
+from agent.runtime.access import configured_reads_enabled, scoped_reads_enabled
 from agent.runtime.access import own_reads_enabled as own_reads_enabled
-from agent.runtime.access import scoped_reads_enabled
 from tools.base import get_all_tools
 
 ARTICLE_READ_TOOLS = frozenset({"rag_search", "search_notes", "get_article_detail"})
@@ -95,10 +95,12 @@ def own_tools() -> dict:
                           own_activity.get_chat_history), SCOPE_READ_OWN)
 
 
-def own_domains(tools: dict) -> dict:
-    names = {"inbox": "get_inbox_overview", "favorites": "list_my_favorites",
+def own_domains(tools: dict, config) -> dict:
+    names = {"favorites": "list_my_favorites",
              "notifications": "list_notifications",
              "messages": "list_my_messages"}
+    if configured_reads_enabled(config, SCOPE_READ_OWN):
+        names["inbox"] = "get_inbox_overview"
     domains = {domain: {name: tools[name]} for domain, name in names.items() if name in tools}
     activity = {name: tools[name] for name in ("list_my_board", "get_chat_history")
                 if name in tools}
@@ -107,7 +109,7 @@ def own_domains(tools: dict) -> dict:
     return domains
 
 
-def public_domains() -> dict:
+def public_domains(principal=None) -> dict:
     from agent.domains import activity_search, public_activity, public_catalog
     from tools.notes import get_article_stats
     from tools.site import get_current_time
@@ -119,8 +121,9 @@ def public_domains() -> dict:
                                    public_activity.read_public_page,
                                    public_activity.get_announcements,
                                    public_activity.list_guestbook,
-                                   public_activity.list_talks),
-              "utilities": (get_current_time,)}
+                                   public_activity.list_talks)}
+    if principal is None or check(principal, get_current_time.name).allowed:
+        groups["utilities"] = (get_current_time,)
     domains = {}
     for domain, tools in groups.items():
         names = frozenset(tool.name for tool in tools)

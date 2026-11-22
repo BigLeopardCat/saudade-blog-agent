@@ -3,8 +3,16 @@
 from langchain_core.tools import StructuredTool
 
 
+def discovery_domains(initial, domains):
+    """List the domains whose tools still need a model-visible loader."""
+    return {name: tools for name, tools in domains.items()
+            if not tools or tools.keys() - initial}
+
+
 def capability_overview(initial, domains):
     """Project the application's current menu without loading execution schemas."""
+    discoverable = discovery_domains(initial.keys(), domains)
+
     def get_agent_capabilities() -> dict:
         """Describe available features when asked what this assistant can do.
 
@@ -16,7 +24,7 @@ def capability_overview(initial, domains):
             "grants_authorization": False,
             "initial_tools": list(initial),
             "domains": [{"name": name, "tools": list(tools)}
-                        for name, tools in domains.items() if tools],
+                        for name, tools in discoverable.items() if tools],
         }
 
     return StructuredTool.from_function(get_agent_capabilities)

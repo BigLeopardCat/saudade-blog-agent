@@ -16,7 +16,7 @@ from agent.runtime.budget import (
     TaskBudget,
     current_budget,
 )
-from agent.runtime.catalog import execution_tools, loader
+from agent.runtime.catalog import discovery_domains, execution_tools, loader
 from agent.runtime.execution_state import initial_state
 from agent.runtime.message_content import text_content
 from agent.runtime.middleware import StreamGuard
@@ -46,6 +46,9 @@ class ToolSession:
         self.initial_names = set(self.tools)
         self.domains = domains
         self.execution_tools = execution_tools(tools, domains)
+        discoverable = discovery_domains(self.initial_names, domains)
+        self.discovery_loaders = {f"load_{domain}_info_tools": domain for domain in discoverable}
+        # Keep accepting authorized legacy discovery calls recorded in older tasks.
         self.loaders = {f"load_{domain}_info_tools": domain for domain in domains}
         self.state = initial_state()
         self.calls_used = 0
@@ -103,7 +106,8 @@ class ToolSession:
         # Keep discovery schemas in place; domain tools extend the request prefix.
         initial = [tool for name, tool in self.tools.items() if name in self.initial_names]
         loaded = [tool for name, tool in self.tools.items() if name not in self.initial_names]
-        discovery = [loader(domain, self.descriptions.get(domain)) for domain in self.domains]
+        discovery = [loader(domain, self.descriptions.get(domain))
+                     for domain in self.discovery_loaders.values()]
         self.menu = [convert_to_openai_tool(tool) for tool in [*initial, *discovery, *loaded]]
 
     def _stop_turn(self, reason, **data):

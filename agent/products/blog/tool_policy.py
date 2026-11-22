@@ -33,7 +33,8 @@ class BlogToolMiddleware(AgentMiddleware):
             return handler(request)
         loaders = getattr(self.session, "loaders", {})
         if call["name"] not in TOOL_SCOPE and call["name"] not in loaders:
-            return unknown_tool_result(call, (name for name in loaders
+            discovery = getattr(self.session, "discovery_loaders", loaders)
+            return unknown_tool_result(call, (name for name in discovery
                                               if self._allowed(name)))
         if not self._allowed(call["name"]):
             record("native", "tool_denied", name=call["name"])

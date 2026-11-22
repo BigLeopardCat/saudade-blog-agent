@@ -50,8 +50,9 @@ class ToolCatalog:
 
     def domains(self, config, can_prepare):
         cfg = (config or {}).get("configurable") or {}
+        principal = cfg.get("principal")
         domains = {"site": {**self.site_read_tools, **browser.tools(config)},
-                   **public_domains(), **device_domain(config)}
+                   **public_domains(principal), **device_domain(config)}
         domains.update(admin_domains(config, can_prepare, {
             "admin_reports": self.admin_read_tools,
             "admin_moderation": self.moderation_read_tools,
@@ -59,8 +60,8 @@ class ToolCatalog:
             "admin_accounts": self.account_read_tools,
             "admin_work_queue": self.queue_read_tools,
         }))
-        if own_reads_enabled(cfg.get("principal")):
-            domains.update(own_domains(self.own_read_tools))
+        if own_reads_enabled(principal):
+            domains.update(own_domains(self.own_read_tools, config))
             domains["task_planning"] = task_planning.tools()
             domains["task_control"] = {pause_task.name: pause_task}
         if can_prepare and favorite_preparation.available(config):

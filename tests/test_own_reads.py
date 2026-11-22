@@ -4,10 +4,18 @@ import json
 
 import pytest
 from _own_support import config
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import ValidationError
+from test_confirmation_continuation import Model, call
 
+from agent import authz
 from agent.domains import own_reads
 from agent.principal import Principal
+from agent.products.blog.application import BlogApplication
+from agent.runtime import memory
+from agent.runtime.checkpoint_conversations import CheckpointConversationStore
+from agent.runtime.service import AgentRuntime
 from tools import base
 
 
@@ -122,17 +130,8 @@ def test_overview_rejects_unowned_or_incomplete_evidence(monkeypatch, fault):
     assert own_reads.get_inbox_overview.invoke({}, config=config()).kind == "unavailable"
 
 
-def test_inbox_discovery_loads_authorized_overview_before_one_read(mailbox):
-    from langchain_core.messages import AIMessage, HumanMessage
-    from langgraph.checkpoint.memory import InMemorySaver
-    from test_confirmation_continuation import Model, call
-
-    from agent.products.blog.application import BlogApplication
-    from agent.runtime.checkpoint_conversations import CheckpointConversationStore
-    from agent.runtime.service import AgentRuntime
-
+def test_authorized_inbox_reads_from_the_first_model_menu(mailbox):
     model = Model(
-        AIMessage(content="", tool_calls=[call("load_inbox_info_tools", "load")]),
         AIMessage(content="", tool_calls=[call("get_inbox_overview", "read", mode="counts_only")]),
         AIMessage(content="共有4条未读。"),
     )
@@ -141,11 +140,74 @@ def test_inbox_discovery_loads_authorized_overview_before_one_read(mailbox):
     result = list(runtime.stream_events({"messages": [HumanMessage(content="只查未读数量")]},
                                         config()))[-1]
     assert result.reply == "共有4条未读。"
-    assert all(t["function"]["name"] != "get_inbox_overview" for t in model.menus[0])
-    assert any(t["function"]["name"] == "get_inbox_overview" for t in model.menus[1])
-    assert model.menus[1] == model.menus[2]
+    names = {t["function"]["name"] for t in model.menus[0]}
+    assert {"get_inbox_overview", "load_notifications_info_tools",
+            "load_messages_info_tools"} <= names
+    assert "load_inbox_info_tools" not in names
+    assert len(model.menus) == 2 and model.menus[0] == model.menus[1]
+    read = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
+    assert read.status == "success" and json.loads(read.content)["total"] == 4
     assert len(mailbox["requests"]) == 1
     assert mailbox["requests"][0].url.path.endswith("/notifications/summary")
+    assert not runtime.store.load(config()).tool_domains["domains"]
+
+
+@pytest.mark.parametrize("denial", ["body_identity", "anonymous", "foreign_actor", "own_scope"])
+def test_inbox_stays_hidden_and_never_reads_without_current_authority(mailbox, monkeypatch, denial):
+    if denial == "body_identity":
+        cfg = config(principal=Principal(7, "user"))
+    elif denial == "foreign_actor":
+        cfg = config(user_id=8)
+    elif denial == "anonymous":
+        cfg = config(principal=None)
+    else:
+        cfg = config()
+        monkeypatch.setitem(authz._ROLE_SCOPES, "user",
+                            authz.scopes_for("user") - {authz.SCOPE_READ_OWN})
+    model = Model(
+        AIMessage(content="", tool_calls=[call("get_inbox_overview", "read", mode="counts_only")]),
+        AIMessage(content="无法查询未读收件。"),
+    )
+    runtime = AgentRuntime(CheckpointConversationStore(None),
+                           application=BlogApplication(), model_factory=lambda **_: model)
+    list(runtime.stream_events({"messages": [HumanMessage(content="只查未读数量")]}, cfg))
+    names = {t["function"]["name"] for t in model.menus[0]}
+    assert "get_inbox_overview" not in names and "load_inbox_info_tools" not in names
+    read = next(m for m in model.prompts[-1] if isinstance(m, ToolMessage))
+    assert read.status == "error" and not mailbox["requests"]
+
+
+def test_old_checkpoint_replays_discovery_and_uses_current_inbox_tools(mailbox):
+    cfg = config()
+    store = CheckpointConversationStore(InMemorySaver())
+    old_names = ["load_inbox_info_tools", "load_utilities_info_tools"]
+    messages = [AIMessage(content="", tool_calls=[call(name, name) for name in old_names]),
+                *(ToolMessage(content="工具已加载。", name=name, tool_call_id=name)
+                  for name in old_names)]
+    store.update_state(cfg, {"messages": memory.turn_messages(
+        [HumanMessage(content="看看时间和未读收件。")], messages, "已查看。",
+        cfg["configurable"]["principal"]), "tool_domains": {
+        "scope": {"uid": 7, "role": "user", "conversation_id": 42},
+        "domains": [{"domain": name, "turn_id": "old-turn"} for name in ("inbox", "utilities")],
+    }})
+    model = Model(
+        AIMessage(content="", tool_calls=[call(name, f"legacy-{name}") for name in old_names]),
+        AIMessage(content="", tool_calls=[call("get_inbox_overview", "read", mode="counts_only")]),
+        AIMessage(content="共有4条未读。"),
+    )
+    runtime = AgentRuntime(store, application=BlogApplication(), model_factory=lambda **_: model)
+    result = list(runtime.stream_events({"messages": [HumanMessage(content="再查一下数量。")]},
+                                        cfg))[-1]
+    assert result.reply == "共有4条未读。"
+    assert {m.name for m in model.prompts[0] if isinstance(m, ToolMessage)} == set(old_names)
+    legacy_receipts = [m for m in model.prompts[-1] if isinstance(m, ToolMessage)
+                       and m.tool_call_id.startswith("legacy-")]
+    assert len(legacy_receipts) == 2 and all(m.status == "success" for m in legacy_receipts)
+    assert model.menus[0] == model.menus[1] == model.menus[2]
+    names = [t["function"]["name"] for t in model.menus[0]]
+    assert not set(old_names).intersection(names)
+    assert names.count("get_inbox_overview") == names.count("get_current_time") == 1
+    assert len(mailbox["requests"]) == 1
 
 
 def test_empty_inbox_is_complete_only_within_the_requested_folder(mailbox):
