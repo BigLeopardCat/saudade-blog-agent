@@ -302,6 +302,7 @@
   border-radius: 17px 0 0 17px;
 }
 #waifu-chat .chat-rail-bot { gap: 6px; }
+#waifu-chat :is([data-chat-host-action], [data-chat-host-panel]):empty { display: none; }
 #waifu-chat .chat-rail-btn {
   width: 28px;
   height: 28px;
