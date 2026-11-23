@@ -74,6 +74,10 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                    reason="invalid_arguments", round=round_index)
             return None
         domain = session.loaders[name]
+        if name not in session.discovery_loaders:
+            prompt.append(ToolMessage(content=f"{domain} 工具已可用。", name=name,
+                                      tool_call_id=call["id"], artifact={"kind": "ok"}))
+            return None
         already = domain in tool_state.loaded(session)
         record("native", "tool_discovery", domain=domain, round=round_index,
                already_loaded=already)
@@ -90,7 +94,7 @@ def append_result(session, request, handler, prompt, round_index, attachments):
                                       name=name, tool_call_id=call["id"], artifact={"kind": "ok"}))
         return None
     if name not in session.execution_tools:
-        prompt.append(unknown_tool_result(call, session.loaders, round_index=round_index))
+        prompt.append(unknown_tool_result(call, session.discovery_loaders, round_index=round_index))
         return None
     session.calls_used += 1
     tool_state.use(session, name, prompt)

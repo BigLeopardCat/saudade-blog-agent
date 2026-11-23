@@ -9,6 +9,7 @@ from langchain_core.messages import HumanMessage, ToolMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.memory import InMemorySaver
 
+from agent.authz import SCOPE_READ_PUBLIC
 from agent.principal import SOURCE_ASSERTION, Principal
 from agent.products.blog.application import BlogApplication
 from agent.runtime.checkpoint_conversations import CheckpointConversationStore
@@ -29,8 +30,10 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
         return
     overview = initial["get_agent_capabilities"].invoke({})
     assert overview["grants_authorization"] is False
+    direct = {"get_current_time", "get_inbox_overview"}
+    assert direct <= set(overview["initial_tools"])
     assert {row["name"]: list(row["tools"]) for row in overview["domains"]} == {
-        name: list(tools) for name, tools in domains.items() if tools}
+        name: list(tools) for name, tools in domains.items() if tools and tools.keys() - direct}
     shown = {name for row in overview["domains"] for name in row["tools"]}
     assert ("prepare_user_notice" in shown) == (role == "admin" and available)
     assert ("get_moderation_status" in shown) == (role == "admin")
@@ -54,6 +57,20 @@ def test_overview_projects_only_current_catalog_and_does_not_claim_missing_write
                 for tools in domains.values()]
     assert len(text) < len(json.dumps(detailed, ensure_ascii=False)) / 2
 
+
+def test_clock_and_inbox_use_current_role_scopes_and_verified_principal(monkeypatch):
+    from agent import authz
+    from agent.runtime.conversation_store import ConversationSnapshot
+
+    application = BlogApplication()
+    cfg = config()
+    del cfg["configurable"]["user_id"]
+    initial, _ = application.tools(cfg, ConversationSnapshot(), None, None, False)
+    assert "get_inbox_overview" in initial
+    monkeypatch.setitem(authz._ROLE_SCOPES, "user", authz.scopes_for("user") - {SCOPE_READ_PUBLIC})
+    initial, domains = application.tools(cfg, ConversationSnapshot(), None, None, False)
+    assert "get_current_time" not in initial and "utilities" not in domains
+    assert "get_inbox_overview" in initial
 
 
 def test_real_sdk_answers_from_one_catalog_read_without_loading_or_executing_domains():

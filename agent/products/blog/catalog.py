@@ -71,6 +71,8 @@ DOMAIN_DESCRIPTIONS = {
 
 
 _COMMON_SITE_TOOLS = ("navigate_page", "set_page_appearance", "get_blog_info")
+_DIRECT_READS = {"public_activity": "read_public_page", "utilities": "get_current_time",
+                 "inbox": "get_inbox_overview"}
 
 
 def initial_tools(tools, domains):
@@ -79,8 +81,8 @@ def initial_tools(tools, domains):
     selected = {
         **tools,
         **{name: browser[name] for name in _COMMON_SITE_TOOLS if name in browser},
-        **{name: tool for name, tool in (domains.get("public_activity") or {}).items()
-           if name == "read_public_page"},
+        **{name: domains[domain][name] for domain, name in _DIRECT_READS.items()
+           if name in domains.get(domain, {})},
     }
     if selected or any(domains.values()):
         overview = capability_overview(selected, domains)

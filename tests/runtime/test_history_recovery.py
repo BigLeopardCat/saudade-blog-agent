@@ -35,12 +35,13 @@ class RecoverHistory:
         round_index = len(self.prompts)
         if round_index == 1:
             assert "TAIL_CANARY" not in str(messages), "fixture must actually require recovery"
+            tools = {schema["function"]["name"] for schema in self.schemas}
+            assert "get_current_time" in tools and "load_utilities_info_tools" not in tools
             calls = [self.call("load_own_activity_info_tools", {}, "own"),
-                     self.call("load_utilities_info_tools", {}, "utilities")]
+                     self.call("get_current_time", {}, "clock")]
         elif round_index == 2:
             calls = [self.call("get_chat_history", {"limit":1}, "history"),
-                     self.call("list_my_board", {"item_id":1}, "board"),
-                     self.call("get_current_time", {}, "clock")]
+                     self.call("list_my_board", {"item_id":1}, "board")]
         elif round_index == 3:
             first = next(json.loads(message.content) for message in messages
                          if isinstance(message, ToolMessage) and message.tool_call_id == "history")
@@ -109,7 +110,7 @@ def test_reconstructed_runtime_recovers_unseen_tail_and_preserves_mixed_read_out
     if not board_available:
         assert "尚未核实" in result.reply
     assert result.execution is None, "read-only recovery must not prepare business changes"
-    assert budget.reason is None and budget.model_calls == 4 and budget.tool_calls == 6
+    assert budget.reason is None and budget.model_calls == 4 and budget.tool_calls == 5
     assert budget.tokens <= budget.limits.task_tokens
     requests = backend_state["requests"]
     assert len(requests) == 3 and all(request.method == "GET" for request in requests)
