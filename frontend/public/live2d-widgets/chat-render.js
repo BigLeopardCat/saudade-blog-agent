@@ -92,6 +92,7 @@
         <span id="chat-status" class="chat-status" role="status" aria-live="polite" aria-atomic="true"></span>
         <input type="file" id="chat-img-file" accept="image/*" hidden>
       </div>
+      <div data-chat-host-panel></div>
       <div class="chat-nav-confirm" id="chat-nav-confirm" role="group" aria-labelledby="nav-question-text">
         <div class="nav-question" id="nav-question-text"></div><div class="chat-nav-btns">
           <button type="button" class="chat-nav-btn yes" id="nav-yes"><span data-ui-text="确定">确定</span></button>
@@ -104,6 +105,7 @@
           <button type="button" class="chat-rail-btn" id="chat-language-btn" aria-label="Switch to English">EN</button>
           <button type="button" class="chat-rail-btn" id="conv-new-btn" title="新对话" data-ui-title="新对话" aria-label="新对话" data-ui-aria-label="新对话">＋</button>
           <button type="button" class="chat-rail-btn" id="conv-tasks-btn" title="查看任务" data-ui-title="查看任务" aria-label="查看任务" data-ui-aria-label="查看任务"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="5" y="4" width="15" height="17" rx="2"/><path d="M9 3h7v3H9zM9 11h7m-7 5h7"/></svg></button>
+          <div data-chat-host-action></div>
         </div>
       </nav>
       <div id="waifu-conv-panel" class="waifu-conv-panel" role="region" aria-label="会话历史" data-ui-aria-label="会话历史">
